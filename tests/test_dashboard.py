@@ -50,7 +50,10 @@ class StubVenue:
 
 def render(eng, lang="en") -> str:
     dash = Dashboard(eng, BufferLogHandler(), "logs/engine.log", lang=lang)
-    console = Console(record=True, width=120, force_terminal=True)
+    # force_terminal=False: rich 15 queries the real size for forced terminals
+    # and ignores width (-> 80 cols), ellipsizing e.g. "sell_entropy". Text
+    # content is identical without the terminal emulation.
+    console = Console(record=True, width=120, force_terminal=False)
     console.print(dash._safe_render())
     return console.export_text()
 

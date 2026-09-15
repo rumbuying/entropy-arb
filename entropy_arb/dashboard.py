@@ -21,6 +21,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from .logbuf import BufferLogHandler  # re-exported for compatibility
+
 log = logging.getLogger("dashboard")
 
 EVENT_LINES = 8
@@ -102,24 +104,8 @@ _ZH = {
 }
 
 
-class BufferLogHandler(logging.Handler):
-    """Ring buffer of recent log lines for the events panel."""
-
-    def __init__(self, maxlen: int = 200) -> None:
-        super().__init__()
-        self.lines: deque = deque(maxlen=maxlen)
-        self.setFormatter(logging.Formatter(
-            "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-            datefmt="%H:%M:%S"))
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            msg = self.format(record)
-        except Exception:
-            return
-        if "[status]" in msg:
-            return  # the dashboard already shows everything the status line says
-        self.lines.append((record.levelno, msg))
+# BufferLogHandler moved to entropy_arb.logbuf (rich-free) and is
+# re-exported above for compatibility with existing imports.
 
 
 def _usd(x: Optional[float], signed: bool = True, decimals: int = 4) -> Text:

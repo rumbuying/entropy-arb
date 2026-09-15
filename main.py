@@ -30,9 +30,12 @@ import sys
 from entropy_arb.config import HEDGE_VENUES, ConfigError, load_config
 from entropy_arb.engine import Engine
 
+log = logging.getLogger("main")
+
 
 def setup_logging(level: str, log_file: str = None,
-                  extra_handler: logging.Handler = None) -> None:
+                  extra_handler: logging.Handler = None,
+                  stdout: bool = False) -> None:
     root = logging.getLogger()
     root.setLevel(getattr(logging, level, logging.INFO))
     fmt = logging.Formatter(
@@ -43,23 +46,42 @@ def setup_logging(level: str, log_file: str = None,
         if d:
             os.makedirs(d, exist_ok=True)
         h = logging.FileHandler(log_file)
-    else:
+        h.setFormatter(fmt)
+        root.addHandler(h)
+    if stdout or not log_file:
         h = logging.StreamHandler()
-    h.setFormatter(fmt)
-    root.addHandler(h)
+        h.setFormatter(fmt)
+        root.addHandler(h)
     if extra_handler is not None:
         root.addHandler(extra_handler)
     logging.getLogger("websockets").setLevel(logging.WARNING)
 
 
 async def amain(cfg, record_only: bool, use_dashboard: bool, force_tty: bool,
-                log_buffer, lang: str) -> None:
+                log_buffer, lang: str, web_on: bool = False,
+                web_port: int = 0) -> None:
     eng = Engine(cfg, record_only=record_only)
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, eng.request_stop)
+    web_srv = None
+    if web_on:
+        from entropy_arb.web import WebServer
+        web_srv = WebServer(eng, cfg.web_host, web_port,
+                            log_buffer=log_buffer)
+        try:
+            port = await web_srv.start()
+            log.info("web overview: http://%s:%d", cfg.web_host, port)
+        except OSError as e:
+            web_srv = None
+            log.error("web ui failed to start on %s:%d: %r — continuing "
+                      "without it", cfg.web_host, web_port, e)
     if not use_dashboard:
-        await eng.run()
+        try:
+            await eng.run()
+        finally:
+            if web_srv:
+                await web_srv.stop()
         return
     from entropy_arb.dashboard import Dashboard
     dash = Dashboard(eng, log_buffer, cfg.log_file, force_terminal=force_tty,
@@ -69,6 +91,8 @@ async def amain(cfg, record_only: bool, use_dashboard: bool, force_tty: bool,
         await eng.run()
     finally:
         eng.request_stop()
+        if web_srv:
+            await web_srv.stop()
         with contextlib.suppress(Exception):
             await asyncio.wait_for(dash_task, timeout=5)
         if not dash_task.done():
@@ -101,6 +125,15 @@ def main() -> None:
                       help="force the Rich dashboard even without a tty")
     disp.add_argument("--no-dashboard", action="store_true",
                       help="plain console logs instead of the dashboard")
+    web = p.add_mutually_exclusive_group()
+    web.add_argument("--web", nargs="?", const="", metavar="PORT",
+                     help="serve the read-only web overview "
+                          "(default port: web.port from config.yaml, 8787)")
+    web.add_argument("--no-web", action="store_true",
+                     help="disable the web overview even if web.enabled")
+    p.add_argument("--log-stdout", action="store_true",
+                   help="also write logs to stdout when a log file is set "
+                        "(used by the console supervisor)")
     args = p.parse_args()
 
     try:
@@ -115,26 +148,29 @@ def main() -> None:
     if use_dashboard and not (sys.stdout.isatty() or force_tty):
         use_dashboard = False
 
+    web_on = (args.web is not None or cfg.web_enabled) and not args.no_web
+    try:
+        web_port = int(args.web) if args.web else cfg.web_port
+    except ValueError:
+        print(f"invalid --web port: {args.web!r}", file=sys.stderr)
+        sys.exit(2)
+
     log_buffer = None
-    if use_dashboard:
-        try:
-            from entropy_arb.dashboard import BufferLogHandler
-        except ImportError:
-            print("`rich` is not installed — falling back to plain logs "
-                  "(pip install -r requirements.txt)", file=sys.stderr)
-            use_dashboard = False
-    if use_dashboard:
+    if use_dashboard or web_on:
+        from entropy_arb.logbuf import BufferLogHandler
         log_buffer = BufferLogHandler()
+    if log_buffer:
         setup_logging(cfg.log_level, log_file=cfg.log_file,
-                      extra_handler=log_buffer)
+                      extra_handler=log_buffer, stdout=args.log_stdout)
     else:
-        setup_logging(cfg.log_level)
+        setup_logging(cfg.log_level, stdout=args.log_stdout)
 
     try:
         asyncio.run(amain(cfg, record_only=args.record_only,
                           use_dashboard=use_dashboard, force_tty=force_tty,
                           log_buffer=log_buffer,
-                          lang="zh" if args.cn else "en"))
+                          lang="zh" if args.cn else "en",
+                          web_on=web_on, web_port=web_port))
     except RuntimeError as e:
         # startup failures (missing credentials, market not found, venue
         # unreachable) — a clean message, not a traceback

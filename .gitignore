@@ -13,3 +13,6 @@ __pycache__/
 venv/
 .pytest_cache/
 *.egg-info/
+
+# console auto-generated token / 控制台自动生成的令牌
+logs/console-token

@@ -114,6 +114,32 @@ python3 main.py --symbol SNDK --hedge lighter-rh
 可切换为纯日志输出（nohup/systemd 等非终端环境会自动退回纯日志），也可
 设置 `logging.dashboard: false`。
 
+**网页总览。** `--web [端口]`（或配置 `web.enabled: true`）由引擎进程自身
+提供一个只读网页：与终端仪表盘相同的状态，外加实时溢价对比入场带的图表，
+界面中英双语。严格只读——没有任何控制接口，不触碰下单路径。
+
+### 控制台（浏览器管理台）
+
+`python3 console.py` 在 `http://127.0.0.1:8788` 启动本地管理控制台，
+共六个页签：
+
+* **总览** —— 每个运行中的引擎一张实时卡片（盘口、信号、盈亏）。
+* **运行管理** —— 启动/停止/重启引擎进程；实盘启动需要输入品种名二次
+  确认；可直接查看引擎日志尾部。
+* **策略配置** —— 命名配置文件（`profiles/<名字>.yaml`）的可视化编辑器，
+  与 `config.yaml` 同一套 schema、同一套严格校验（通不过 `load_config`
+  的配置无法保存），带实测溢价分布叠加带宽预览。
+* **密钥管理** —— 一次性粘贴各所密钥写入 `.env`：格式校验、`0600` 权限、
+  保存后永不回显（只显示“已设置 ····尾号”）。
+* **分析工作台** —— `tools/analyze.py` 的分布与各档触发频率、
+  `tools/backtest.py` 的往返回测，支持一键把建议阈值填回配置编辑器。
+* **历史数据** —— 采集的溢价与可成交 edge 时间序列。
+
+说明：配置文件不含任何密钥（密钥始终在 `.env`）；引擎启动仍从命令行接收
+`--symbol/--hedge`——控制台把该选择存在配置旁的 sidecar JSON 里，所选
+交易所密钥不完整时拒绝实盘启动。绑定非回环地址时强制要求 token
+（`--token`，未提供则自动生成并打印）。
+
 ## 数据采集与分析
 
 采集器在所有模式下自动运行（`recorder.enabled: true`）：每秒采样一次两边
@@ -154,6 +180,7 @@ python3 main.py --symbol SNDK --hedge lighter-rh
 | `execution.*` | 滑点保护、超时、对账周期等 | 见配置文件 |
 | `recorder.*` | 分钟数据采集器 | 开启，`logs/minutes.csv` |
 | `logging.dashboard` / `logging.file` | 终端仪表盘；开启时日志写入文件 | 开启，`logs/engine.log` |
+| `web.enabled` / `host` / `port` | 引擎内嵌只读网页总览（也可 `--web`） | 关，`127.0.0.1:8787` |
 
 ## 密钥配置（`.env`，仅实盘需要）
 
@@ -197,6 +224,11 @@ entropy_arb/venue_lighter.py  zkLighter 适配器（主网、Robinhood 链）
 entropy_arb/engine.py    双交易所策略主循环
 entropy_arb/dashboard.py Rich 终端仪表盘
 entropy_arb/recorder.py  分钟级盘口数据采集
+entropy_arb/state.py     引擎状态快照（所有界面共用）
+entropy_arb/web.py       引擎内嵌只读网页总览
+entropy_arb/analysis.py  分析与回测引擎（tools/ 与控制台共用）
+entropy_arb/console/     控制台包：supervisor、profiles、secrets
+console.py               控制台入口：python3 console.py
 tools/analyze.py         minutes.csv -> 阈值建议
 tests/                   python3 -m pytest tests/
 ```

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>entropy-arb console</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">entropy-arb <span class="pair">console</span></span>
+  <span id="conn-badge" class="badge dim" style="display:none">API offline</span>
+  <span class="spacer"></span>
+  <button id="lang-btn" style="padding:3px 10px"></button>
+</div>
+<div class="tabs" id="tabs">
+  <button data-tab="overview" data-i18n="tab.overview"></button>
+  <button data-tab="runs" data-i18n="tab.runs"></button>
+  <button data-tab="profiles" data-i18n="tab.profiles"></button>
+  <button data-tab="secrets" data-i18n="tab.secrets"></button>
+  <button data-tab="analyze" data-i18n="tab.analyze"></button>
+  <button data-tab="history" data-i18n="tab.history"></button>
+</div>
+<div class="wrap">
+  <div class="tabpane" id="pane-overview"></div>
+  <div class="tabpane" id="pane-runs"></div>
+  <div class="tabpane" id="pane-profiles"></div>
+  <div class="tabpane" id="pane-secrets"></div>
+  <div class="tabpane" id="pane-analyze"></div>
+  <div class="tabpane" id="pane-history"></div>
+</div>
+<div id="modal-root"></div>
+<div id="toast" class="toast"></div>
+
+<script type="module">
+import { t, setLang, getLang, applyStatic } from "/static/i18n.js";
+import { initRuns } from "/static/runs.js";
+import { initProfiles } from "/static/profiles.js";
+import { initSecrets } from "/static/secrets.js";
+import { initAnalyze } from "/static/analyze.js";
+import { initHistory } from "/static/history.js";
+import { initOverview } from "/static/overview.js";
+
+/* ---- shared shell ------------------------------------------------------ */
+export const shell = {
+  toast(msg, bad = false, ms = 2600) {
+    const el = document.getElementById("toast");
+    el.textContent = msg;
+    el.className = "toast show" + (bad ? " bad" : "");
+    clearTimeout(el._t);
+    el._t = setTimeout(() => (el.className = "toast"), ms);
+  },
+  modal(node) {
+    const root = document.getElementById("modal-root");
+    const mask = document.createElement("div");
+    mask.className = "modal-mask";
+    const box = document.createElement("div");
+    box.className = "modal";
+    box.appendChild(node);
+    mask.appendChild(box);
+    mask.addEventListener("click", e => {
+      if (e.target === mask) close();
+    });
+    root.replaceChildren(mask);
+    function close() { root.replaceChildren(); }
+    return { close };
+  },
+};
+
+const langBtn = document.getElementById("lang-btn");
+function refreshLang() { langBtn.textContent = t("lang.switch"); }
+langBtn.addEventListener("click", () => {
+  setLang(getLang() === "zh" ? "en" : "zh");
+  location.reload();
+});
+
+let active = "overview";
+function showTab(name) {
+  active = name;
+  document.querySelectorAll("#tabs button").forEach(b =>
+    b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tabpane").forEach(p =>
+    p.classList.toggle("active", p.id === `pane-${name}`));
+}
+document.querySelectorAll("#tabs button").forEach(b =>
+  b.addEventListener("click", () => showTab(b.dataset.tab)));
+
+/* ---- init all tabs ------------------------------------------------------ */
+const tabs = {
+  overview: initOverview(document.getElementById("pane-overview"), shell),
+  runs: initRuns(document.getElementById("pane-runs"), shell),
+  profiles: initProfiles(document.getElementById("pane-profiles"), shell),
+  secrets: initSecrets(document.getElementById("pane-secrets"), shell),
+  analyze: initAnalyze(document.getElementById("pane-analyze"), shell),
+  history: initHistory(document.getElementById("pane-history"), shell),
+};
+
+// profiles editor exposes the thresholds the analyzer can fill
+shell.applyThresholds = (mid, up, low) => {
+  tabs.profiles.applyThresholds(mid, up, low);
+  showTab("profiles");
+};
+
+refreshLang();
+applyStatic();
+showTab("overview");
+
+// live profiles list shared between tabs (runs start dialog, analyzer selects)
+tabs.profiles.onChange(() => { tabs.runs.refreshProfiles(); tabs.analyze.refreshProfiles(); tabs.history.refreshProfiles(); });
+tabs.secrets.onChange(() => tabs.runs.refreshCreds());
+setInterval(() => tabs.overview.refresh(), 3000);
+</script>
+</body>
+</html>

@@ -133,6 +133,10 @@ class Config:
     trades_csv: str
     dashboard: bool
     log_file: str
+    # embedded web ui (read-only state server; opt-in)
+    web_enabled: bool
+    web_host: str
+    web_port: int
     # runtime
     hl_api_url: str = HL_API_URL
     hl_ws_url: str = HL_WS_URL
@@ -201,6 +205,11 @@ _SCHEMA: Dict[str, Any] = {
         "trades_csv": str,
         "dashboard": bool,
         "file": str,
+    },
+    "web": {
+        "enabled": bool,
+        "host": str,
+        "port": int,
     },
 }
 
@@ -366,4 +375,7 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
         trades_csv=_get(raw, "logging", "trades_csv", "logs/trades.csv"),
         dashboard=bool(_get(raw, "logging", "dashboard", True)),
         log_file=_get(raw, "logging", "file", "logs/engine.log"),
+        web_enabled=bool(_get(raw, "web", "enabled", False)),
+        web_host=str(_get(raw, "web", "host", "127.0.0.1")),
+        web_port=int(_get(raw, "web", "port", 8787)),
     )

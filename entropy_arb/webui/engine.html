@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>entropy-arb</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">entropy-arb <span class="pair">web</span></span>
+  <span class="spacer"></span>
+  <button id="lang-btn" style="padding:3px 10px"></button>
+</div>
+<div class="wrap" id="root">
+  <div class="note" id="boot">connecting…</div>
+</div>
+<script type="module">
+import { t, setLang, getLang, applyStatic } from "/static/i18n.js";
+import { connectWS, getJSON } from "/static/api.js";
+import { createEngineCard } from "/static/engine-view.js";
+
+const langBtn = document.getElementById("lang-btn");
+function refreshLangBtn() { langBtn.textContent = t("lang.switch"); }
+langBtn.addEventListener("click", () => {
+  setLang(getLang() === "zh" ? "en" : "zh");
+  refreshLangBtn();
+  location.reload();  // the card is rebuilt wholesale; simplest correct path
+});
+refreshLangBtn();
+
+const root = document.getElementById("root");
+const card = createEngineCard();
+root.replaceChildren(card.el);
+
+let firstSnap = true;
+function onSnap(snap) {
+  if (firstSnap) {
+    document.title = `entropy-arb ${snap.symbol ?? ""}`;
+    firstSnap = false;
+  }
+  card.update(snap);
+}
+
+// websocket with polling fallback (first snapshot via REST so the page is
+// populated even if the socket is blocked by a proxy)
+getJSON("/api/state").then(onSnap).catch(() => {});
+const ws = connectWS("/ws", onSnap, up => card.setConn(up));
+window.addEventListener("beforeunload", () => ws.close());
+applyStatic();
+</script>
+</body>
+</html>

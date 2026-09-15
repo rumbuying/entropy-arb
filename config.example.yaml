@@ -106,3 +106,16 @@ logging:
   trades_csv: logs/trades.csv
   dashboard: true
   file: logs/engine.log
+
+# ==================== WEB OVERVIEW / 网页总览 ==============================
+# Optional read-only web page served by the engine process itself: books,
+# signal vs hurdles with a live premium chart, positions, PnL, executions.
+# No control endpoints exist here — configuration/lifecycle live in the
+# console (python3 console.py). Also available ad hoc via `--web [PORT]`.
+# 可选的只读网页：由引擎进程自己提供（盘口、信号 vs 门槛 + 实时溢价图、
+# 持仓、盈亏、成交）。没有任何控制接口——配置与生命周期管理在控制台
+# （python3 console.py）。也可临时用 `--web [端口]` 开启。
+web:
+  enabled: false
+  host: 127.0.0.1   # keep loopback unless you know what you expose / 保持回环
+  port: 8787

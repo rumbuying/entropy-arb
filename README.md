@@ -124,6 +124,38 @@ display the dashboard in Chinese. Use `--no-dashboard` for plain console
 logs (nohup/systemd — off-terminal runs fall back automatically), or set
 `logging.dashboard: false`.
 
+**Web overview.** `--web [PORT]` (or `web.enabled: true` in config.yaml)
+serves a read-only browser page from the engine process itself: the same
+state as the terminal dashboard plus a live premium chart against the entry
+bands, and a bilingual UI. Strictly read-only — it has no control endpoints
+and never touches the order path.
+
+### Console (browser control room)
+
+`python3 console.py` starts a local management console on
+`http://127.0.0.1:8788` with six tabs:
+
+* **Overview** — one live card per running engine (books, signal, PnL).
+* **Runs** — start / stop / restart engine workers; a LIVE start requires
+  typing the symbol to confirm; worker logs are tailable in place.
+* **Strategy Config** — visual editor for named profiles
+  (`profiles/<name>.yaml`, same schema and the same strict validation as
+  `config.yaml`; a profile only saves if `main.py --config <profile>` would
+  start), with the recorded premium distribution drawn under the band
+  sliders.
+* **API Keys** — paste credentials into `.env` once: format-checked,
+  stored with `0600`, and never returned afterwards (only "set ····tail").
+* **Analyzer** — the `tools/analyze.py` distribution + band fire table and
+  the `tools/backtest.py` round-trip model, with one-click "apply suggested
+  thresholds" into the profile editor.
+* **History** — recorded premium & executable edges over time.
+
+Notes: profiles contain no secrets (keys stay in `.env`); the engine still
+takes `--symbol/--hedge` from its launch command — the console stores the
+choice in a sidecar JSON and refuses a LIVE start while credentials for the
+chosen venues are incomplete. Binding a non-loopback host requires a token
+(`--token`, or one is generated and printed).
+
 ## Data collection & analysis
 
 The recorder runs automatically in every mode (`recorder.enabled: true`).
@@ -167,6 +199,7 @@ errors), credentials in `.env`, and the markets on the command line
 | `execution.*` | slippage bounds, timeouts, reconcile cadence… | see file |
 | `recorder.*` | minute-data recorder | on, `logs/minutes.csv` |
 | `logging.dashboard` / `logging.file` | Rich dashboard on a tty; log file while it runs | on, `logs/engine.log` |
+| `web.enabled` / `host` / `port` | engine-served read-only web overview (or `--web`) | off, `127.0.0.1:8787` |
 
 ## Credentials (`.env`, live only)
 
@@ -213,6 +246,11 @@ entropy_arb/venue_lighter.py  zkLighter adapter (mainnet, Robinhood chain)
 entropy_arb/engine.py    the two-venue strategy loop
 entropy_arb/dashboard.py Rich terminal dashboard
 entropy_arb/recorder.py  1-minute orderbook bars
+entropy_arb/state.py     engine snapshot shared by every UI
+entropy_arb/web.py       read-only web overview served by the engine
+entropy_arb/analysis.py  analyze + backtest engine (tools/ and console)
+entropy_arb/console/     console package: supervisor, profiles, secrets
+console.py               console entry point: python3 console.py
 tools/analyze.py         minutes.csv -> suggested thresholds
 tests/                   python3 -m pytest tests/
 ```
