@@ -16,3 +16,9 @@ venv/
 
 # console auto-generated token / 控制台自动生成的令牌
 logs/console-token
+
+# macOS junk
+.DS_Store
+
+# local-only docs (machine-specific manual, not for the public repo)
+docs/

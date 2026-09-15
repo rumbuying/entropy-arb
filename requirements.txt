@@ -3,6 +3,7 @@
 # 基础依赖 —— 仅够 --record-only 数据采集；实盘另需 requirements-live.txt
 aiohttp>=3.9
 websockets>=12.0
+python-socks[asyncio]>=2.0  # websockets SOCKS proxy support (needed where the exchange ws is only reachable via a local/system proxy)
 python-dotenv>=1.0
 PyYAML>=6.0
 rich>=13.0
