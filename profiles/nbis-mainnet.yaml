@@ -1,0 +1,53 @@
+# NBIS (Nebius) vs Lighter mainnet — record-only first, calibrate later
+# 阈值等 24-48h 数据出来后用 Analyzer 校准；RECORD-ONLY 模式下不生效
+thresholds:
+  midline_bps: -2.01
+  upper_bps: 12.97
+  lower_bps: 12.97
+
+entropy:
+  dex: io
+  taker_fee_bps: 0.0
+  max_position_usd: 250
+  max_orders_per_min: 120
+
+hedge:
+  taker_fee_bps: 0.0
+  max_position_usd: 250
+  max_orders_per_min: 30
+
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 125
+  min_order_notional_usd: 10
+
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 15
+  hedge_slippage_bps: 20
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+
+recorder:
+  enabled: true
+  csv: logs/minutes-NBIS-lighter.csv
+
+logging:
+  file: logs/engine-NBIS-lighter.log
+  trades_csv: logs/trades-NBIS-lighter.csv
+  dashboard: false
+  level: INFO
+
+# 分时段 band 自动校准：midline=当前美东时段的7天滚动中位数，
+# 宽度=max(2.5×时段std, 2×实测滑点, 5bps)。由 entropy-autoband.timer 每5分钟执行
+auto_band:
+  enabled: true
+  window_days: 7
+  width_k: 2.5
+  min_width_bps: 5.0
