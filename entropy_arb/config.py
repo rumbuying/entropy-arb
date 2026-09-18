@@ -168,6 +168,9 @@ _SCHEMA: Dict[str, Any] = {
         "max_orders_per_min": int,
     },
     "hedge": {
+        # symbol: hedge-leg ticker when it differs from --symbol, e.g.
+        # entropy "ANTH" vs lighter-rh "ANTHROPIC". Defaults to --symbol.
+        "symbol": str,
         "taker_fee_bps": float,
         "max_position_usd": float,
         "max_orders_per_min": int,
@@ -205,6 +208,15 @@ _SCHEMA: Dict[str, Any] = {
         "trades_csv": str,
         "dashboard": bool,
         "file": str,
+    },
+    # session-aware band auto-calibration, driven by tools/auto_band.py:
+    # midline = trailing per-ET-session premium median, width = k * session
+    # stdev with a floor derived from measured trade slippage
+    "auto_band": {
+        "enabled": bool,
+        "window_days": float,
+        "width_k": float,
+        "min_width_bps": float,
     },
     "web": {
         "enabled": bool,
@@ -247,6 +259,24 @@ def _get(d: dict, section: str, key: str, default):
     return (d.get(section) or {}).get(key, default)
 
 
+def read_band(path: str) -> "tuple[float, float, float]":
+    """Fully-validated (midline_bps, upper_bps, lower_bps) from a config or
+    profile file. Used by the engine's hot-reload so a file edit (manual, or
+    written by tools/auto_band.py) reaches a running worker without a
+    restart. Raises ConfigError on invalid files — callers decide whether to
+    keep the current band."""
+    with open(path) as fh:
+        raw = yaml.safe_load(fh) or {}
+    _validate(raw, _SCHEMA)
+    thr = raw.get("thresholds") or {}
+    missing = [k for k in ("midline_bps", "upper_bps", "lower_bps")
+               if k not in thr]
+    if missing:
+        raise ConfigError(f"'thresholds' missing {', '.join(missing)}")
+    return (float(thr["midline_bps"]), float(thr["upper_bps"]),
+            float(thr["lower_bps"]))
+
+
 # ------------------------------------------------------------------ env layer
 
 def _env_s(name: str) -> Optional[str]:
@@ -263,7 +293,12 @@ def _env_i(name: str) -> Optional[int]:
 
 def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
                 symbol: str, hedge_venue: str) -> Config:
-    load_dotenv(env_file)
+    # override=True: .env is the single source of truth. The console spawns
+    # workers with an inherited environment that may hold STALE HL_*/LIGHTER_*
+    # values (an earlier load_config call mutated the console's os.environ);
+    # with the default override=False a stale env var would silently beat a
+    # freshly-saved .env. See HANDOVER "单一事实源" design rule.
+    load_dotenv(env_file, override=True)
     try:
         with open(config_file) as fh:
             raw = yaml.safe_load(fh) or {}
@@ -317,10 +352,14 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
         hl_creds=entropy_hl_creds,
     )
 
+    # hedge-leg ticker override: the two venues may name the same market
+    # differently (e.g. entropy "ANTH" vs lighter-rh "ANTHROPIC")
+    hedge_symbol = str(_get(raw, "hedge", "symbol", symbol) or symbol).strip().upper()
+
     if hedge_venue == "tradexyz":
         hedge = VenueConf(
             key="hedge", kind="hl", label="XYZ",
-            symbol=symbol,
+            symbol=hedge_symbol,
             fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 1.0)),
             cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
             orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 120)),
@@ -333,7 +372,7 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
         hedge = VenueConf(
             key="hedge", kind="lighter",
             label="LIGHTER" if hedge_venue == "lighter" else "RH",
-            symbol=symbol,
+            symbol=hedge_symbol,
             fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 0.0)),
             cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
             orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 30)),

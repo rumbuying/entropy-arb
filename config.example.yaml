@@ -51,6 +51,23 @@ hedge:
   taker_fee_bps: 0.0         # Lighter venues: 0; tradexyz: ~1.0
   max_position_usd: 1000
   max_orders_per_min: 30     # Lighter's ceiling is ~40/min / Lighter 上限约 40/分钟
+  # symbol: ANTHROPIC        # hedge-leg ticker when the two venues name the
+                             # same market differently (e.g. entropy "ANTH" on
+                             # the io dex vs "ANTHROPIC" on lighter-rh).
+                             # Defaults to --symbol. / 对冲腿标的别名，缺省同 --symbol
+
+# ============== SESSION-AWARE BAND AUTO-CALIBRATION / 分时段band自校准 ======
+# tools/auto_band.py (run by entropy-autoband.timer every 5 min) rewrites the
+# thresholds block above: midline = current ET session's trailing-median
+# premium, width = max(width_k * session stdev, 2 * measured slippage,
+# min_width_bps). The running engine hot-reloads the file within ~60s.
+# 启用后由调度器按美东时段自动改写上方 thresholds：midline=该时段滚动中位数，
+# 宽度=max(2.5×时段波动率, 2×实测滑点, min_width_bps)，引擎约60秒内热加载
+auto_band:
+  enabled: true
+  window_days: 7             # trailing calibration window / 回看窗口（天）
+  width_k: 2.5               # width = width_k * session stdev / 宽度系数
+  min_width_bps: 5.0         # hard floor / 宽度下限
 
 # ========================= SIZING / 下单规模 ===============================
 sizing:

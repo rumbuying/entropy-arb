@@ -116,7 +116,15 @@ export function initSecrets(pane, shell) {
       } else {
         shell.toast("✓ " + t("secrets.saved"));
       }
-    } catch (e) { shell.toast(e.message || String(e), true); }
+    } catch (e) {
+      const errs = e.payload && e.payload.errors;
+      if (errs) {
+        const first = Object.entries(errs)[0];
+        shell.toast(`${first?.[0]}: ${first?.[1]}`, true);
+      } else {
+        shell.toast(e.message || String(e), true);
+      }
+    }
     refresh();
     listeners.forEach(fn => fn());
   }

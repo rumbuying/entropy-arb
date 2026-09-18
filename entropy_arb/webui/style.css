@@ -191,3 +191,62 @@ textarea { min-height: 220px; resize: vertical; white-space: pre; }
         margin-right: 6px; vertical-align: baseline; }
 .flag.ok  { background: var(--green); }
 .flag.bad { background: #5b2630; border: 1px solid var(--red); }
+
+/* ==================== mobile / 手机适配 (≤720px) ====================
+   桌面端样式保持不变；此段只在小屏生效：放大字号到 15-17px、
+   表单标签换行、表格横向滑动、页签大触摸目标、输入框 16px 防 iOS 聚焦缩放 */
+@media (max-width: 720px) {
+  html { -webkit-text-size-adjust: 100%; }
+  body { font-size: 16px; line-height: 1.5; }
+
+  .topbar { padding: 10px 12px; gap: 8px; }
+  .topbar .brand { font-size: 17px; }
+
+  /* 页签：横向滑动 + 大触摸目标 */
+  .tabs {
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    padding: 0 8px; top: 45px; scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button { flex: 0 0 auto; padding: 12px 14px; font-size: 15px;
+                 white-space: nowrap; }
+
+  .wrap { padding: 12px; }
+  .card { padding: 12px; }
+  .card h3 { font-size: 15px; }
+
+  /* 表格：整块横向滑动，列不再被压缩 */
+  table.data {
+    display: block; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    font-size: 15px;
+  }
+  table.data th { font-size: 13.5px; }
+  .num { font-size: 14.5px; }
+
+  .kv { font-size: 15px; }
+  .kv .v { font-size: 14.5px; }
+  .evlog { font-size: 13px; max-height: 220px; overflow: auto; }
+
+  /* 表单：标签换到输入框上方；输入框 16px 防 iOS 聚焦自动放大 */
+  .form-row { flex-wrap: wrap; }
+  .form-row label { flex: 1 1 100%; font-size: 15px; margin-bottom: 2px; }
+  .form-row label .hint { font-size: 13px; }
+  .form-row input, .form-row select { flex: 1 1 100%; max-width: none;
+                                      font-size: 16px; }
+  .form-row .msg { flex: 1 1 100%; font-size: 13px; }
+
+  button, .btn { font-size: 15px; padding: 10px 16px; }
+
+  .note { font-size: 14px; }
+  .section-title { font-size: 14.5px; }
+  .badge { font-size: 13px; }
+
+  .stat { min-width: 45%; }
+  .stat .label { font-size: 13px; }
+  .stat .value { font-size: 17px; }
+
+  .modal { padding: 16px; }
+  .modal h2 { font-size: 17px; }
+  .modal .actions button { flex: 1; }
+  .toast { font-size: 14px; width: 92vw; text-align: center; }
+}

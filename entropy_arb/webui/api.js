@@ -35,7 +35,9 @@ export async function postJSON(url, body) {
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
-    throw new Error(data.error || `${r.status} ${r.statusText}`);
+    const err = new Error(data.error || `${r.status} ${r.statusText}`);
+    err.payload = data;   // field-level errors, e.g. {errors: {KEY: reason}}
+    throw err;
   }
   return data;
 }

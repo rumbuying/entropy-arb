@@ -54,7 +54,17 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                              status=401)
         return await handler(request)
 
+    @web.middleware
+    async def no_static_cache(request, handler):
+        """Static JS/CSS must always revalidate — a control panel that
+        silently runs yesterday's frontend is worse than a 404."""
+        resp = await handler(request)
+        if request.path.startswith("/static/"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
     app.middlewares.append(auth)
+    app.middlewares.append(no_static_cache)
 
     # ------------------------------------------------------------- helpers
 
@@ -148,6 +158,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         r = secrets.update(updates)
         log.info("secrets update by console: %s",
                  mask_updates_for_audit(updates))
+        if not r["ok"]:
+            # error strings describe the value's shape only, never its content
+            log.warning("secrets update rejected: %s", r.get("errors"))
         return web.json_response(r, status=200 if r["ok"] else 400)
 
     # ------------------------------------------------------------- workers

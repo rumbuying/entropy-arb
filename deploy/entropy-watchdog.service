@@ -1,0 +1,7 @@
+[Unit]
+Description=entropy-arb watchdog (health check + alerting)
+After=network-online.target entropy-console.service
+
+[Service]
+Type=oneshot
+ExecStart=/root/code/entropy/deploy/watchdog.sh

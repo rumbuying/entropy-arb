@@ -25,7 +25,7 @@ from typing import Dict, List, Optional
 import aiohttp
 
 from .book import ArbPlan, floor_step, plan_arb
-from .config import Config
+from .config import Config, read_band
 from .recorder import MinuteRecorder
 from .venue_hl import HLVenue
 from .venue_lighter import LighterVenue
@@ -41,9 +41,11 @@ BALANCE_POLL_SEC = 30.0
 
 
 class Engine:
-    def __init__(self, cfg: Config, record_only: bool = False) -> None:
+    def __init__(self, cfg: Config, record_only: bool = False,
+                 config_path: str = "") -> None:
         self.cfg = cfg
         self.record_only = record_only
+        self.config_path = config_path   # set → band hot-reload enabled
         self.session: Optional[aiohttp.ClientSession] = None
         self.entropy = None
         self.hedge = None
@@ -125,10 +127,55 @@ class Engine:
         # keepalive loop pings inside this window to hold them open.
         self.session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(
             keepalive_timeout=75.0, ttl_dns_cache=300))
+        reload_task = None
+        if self.config_path:
+            reload_task = asyncio.create_task(self._hot_reload_bands())
         try:
             await self._run_inner()
         finally:
+            if reload_task is not None:
+                reload_task.cancel()
+                try:
+                    await reload_task
+                except asyncio.CancelledError:
+                    pass
             await self.session.close()
+
+    async def _hot_reload_bands(self, poll_sec: float = 60.0) -> None:
+        """Adopt midline/upper/lower from the profile file whenever it
+        changes — manual edits in the console editor and files rewritten by
+        tools/auto_band.py both land here, with no restart and no
+        interruption to positions. Everything else in the file still
+        requires a restart; the three band fields are the only live values.
+        A rejected edit (invalid yaml/schema) keeps the current band."""
+        try:
+            last = os.stat(self.config_path).st_mtime
+        except OSError:
+            log.warning("band hot-reload: cannot stat %s — disabled",
+                        self.config_path)
+            return
+        while True:
+            await asyncio.sleep(poll_sec)
+            try:
+                mtime = os.stat(self.config_path).st_mtime
+            except OSError:
+                continue
+            if mtime == last:
+                continue
+            last = mtime
+            try:
+                mid, up, lo = read_band(self.config_path)
+            except Exception as e:
+                log.warning("band hot-reload: %s rejected — keeping current "
+                            "band (%s)", self.config_path, e)
+                continue
+            if (mid, up, lo) == (self.cfg.midline_bps, self.cfg.upper_bps,
+                                 self.cfg.lower_bps):
+                continue
+            self.cfg.midline_bps, self.cfg.upper_bps, self.cfg.lower_bps = \
+                mid, up, lo
+            log.info("band hot-reloaded from %s: midline=%+.2f "
+                     "band=[-%.2f, +%.2f]", self.config_path, mid, lo, up)
 
     def _make_venue(self, vc):
         if vc.kind == "lighter":

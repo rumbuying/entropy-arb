@@ -1,0 +1,6 @@
+[Unit]
+Description=entropy-arb weekly config backup (config.yaml + profiles + .env)
+
+[Service]
+Type=oneshot
+ExecStart=/root/code/entropy/deploy/entropy-backup.sh

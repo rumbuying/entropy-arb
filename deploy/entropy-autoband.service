@@ -1,0 +1,7 @@
+[Unit]
+Description=entropy-arb session band auto-calibration
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/code/entropy
+ExecStart=/usr/bin/python3.11 tools/auto_band.py

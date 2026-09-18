@@ -63,6 +63,21 @@ def test_tradexyz_hedge():
     assert cfg.hedge.label == "XYZ"
 
 
+def test_hedge_symbol_alias():
+    # the two venues may name the same market differently (ANTH vs ANTHROPIC)
+    cfg = load(MINIMAL + "\nhedge:\n  symbol: ANTHROPIC\n",
+               symbol="ANTH", hedge="lighter-rh")
+    assert cfg.symbol == "ANTH"              # canonical, entropy leg
+    assert cfg.entropy.symbol == "ANTH"
+    assert cfg.hedge.symbol == "ANTHROPIC"   # alias on the hedge leg only
+
+
+def test_hedge_symbol_defaults_to_cli_symbol():
+    cfg = load(MINIMAL, symbol="SNDK", hedge="lighter-rh")
+    assert cfg.entropy.symbol == "SNDK"
+    assert cfg.hedge.symbol == "SNDK"
+
+
 def expect_error(yaml_text: str, needle: str, **kw):
     try:
         load(yaml_text, **kw)

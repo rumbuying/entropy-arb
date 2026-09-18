@@ -1,0 +1,37 @@
+# entropy-arb console systemd unit
+#
+# 安装（root）:
+#   cp deploy/entropy-console.service /etc/systemd/system/
+#   cp deploy/console-token.env /root/code/entropy/deploy/   # gitignored, 含真实 token
+#   systemctl daemon-reload
+#   systemctl enable --now entropy-console
+#
+# 查看日志 / 状态:
+#   journalctl -u entropy-console -f
+#   systemctl status entropy-console
+#
+# 绑定 127.0.0.1 + 显式 token：由 nginx(443) 反代对外，token 即访问密码。
+# URL 形如 https://arb.coinfetcher.xyz/?token=<token>；无 token 的 API 请求一律 401。
+# token 不入库：存于 gitignored 的 deploy/console-token.env（ENTROPY_CONSOLE_TOKEN）。
+
+[Unit]
+Description=entropy-arb web console (engine supervisor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/code/entropy
+# token 从 gitignored 的 env 文件注入，绝不写进版本库
+EnvironmentFile=/root/code/entropy/deploy/console-token.env
+ExecStart=/usr/bin/python3.11 console.py --host 127.0.0.1 --token ${ENTROPY_CONSOLE_TOKEN}
+Environment=PYTHONUNBUFFERED=1
+# worker 优雅停止最长 25s（结算在途订单+对账），给足余量
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=3
+# 控制台退出时会先优雅停止所有它启动的 worker（supervisor.shutdown）
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

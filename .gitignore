@@ -22,3 +22,6 @@ logs/console-token
 
 # local-only docs (machine-specific manual, not for the public repo)
 docs/
+
+# console token env (real token lives here, never committed) / 控制台真实 token
+deploy/*.env
