@@ -195,10 +195,24 @@ export function createEngineCard({ compact = false } = {}) {
       span("num", fmtBps(g.mid_premium_bps) + " bps"), span("muted", t("signal.midline")),
       span("num", fmtBps(g.midline_bps)), span("muted", t("signal.band")),
       span("num", `[${fmtBps(g.band_low_bps)} … ${fmtBps(g.band_high_bps)}]`));
+    // Entry lines must match the engine's REAL trigger, converted into the
+    // mid-premium space the chart plots. directions[].hurdle_bps already
+    // includes taker fees + inventory ladder; adding half of both books'
+    // spread converts executable premium ↔ mid premium:
+    //   sell_edge ≈ prem + (s_e+s_h)/2 → sells when prem ≥ hurdle_sell − hs
+    //   buy_edge  ≈ −prem + (s_e+s_h)/2 → buys when prem ≤ −(hurdle_buy + hs)
+    // (drawing the raw band edges here read ~8bps too easy on the buy side
+    // and made in-band price action look like missed fires).
+    const dirSell = g.directions && g.directions.find(d => d.key === "sell_entropy");
+    const dirBuy = g.directions && g.directions.find(d => d.key === "buy_entropy");
+    const hs = ((snap.venues.entropy?.spread_bps ?? 0) +
+                (snap.venues.hedge?.spread_bps ?? 0)) / 2;
     chart.setLines([
       { v: g.midline_bps, color: "#7a8b9c", label: "midline" },
-      { v: g.band_high_bps, color: "#f1c40f", label: "sell entry" },
-      { v: g.band_low_bps, color: "#f1c40f", label: "buy entry" },
+      { v: (dirSell?.hurdle_bps ?? g.band_high_bps) - hs,
+        color: "#f1c40f", label: "sell entry" },
+      { v: -(dirBuy ? dirBuy.hurdle_bps + hs : -g.band_low_bps),
+        color: "#f1c40f", label: "buy entry" },
     ]);
     if (g.mid_premium_bps !== null && snap.ts) {
       chart.push({ t: snap.ts, values: { prem: g.mid_premium_bps } });
