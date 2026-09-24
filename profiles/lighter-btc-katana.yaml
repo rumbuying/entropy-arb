@@ -1,0 +1,85 @@
+# Lighter(mainnet) vs Katana Perps — 基差线的实盘 profile（base 腿解耦后新增）。
+#
+#   python3 main.py --config profiles/lighter-btc-katana.yaml \
+#       --symbol BTC --base lighter --hedge katana [--record-only]
+#
+# premium = Lighter/KAT − 1，与 tools/basis_probe.py 采集的
+# logs/minutes-<SYM>-lighter-vs-katana.csv 同一口径，可直接用
+# tools/analyze.py --fees-bps 0.95 校准（KAT maker 0.475×2 + Lighter taker 0）。
+#
+# 41.5h 实测（2026-09-22 16:36 → 09-24 10:00 CST）：中位 +3.1bps、σ≈1.2bps，
+# 35 分钟摆动 σ≈1.1bps ≈ 1.2× 往返成本。下面的 thresholds 只是冷启动兜底，
+# 运行期由 auto_band 按 ET 时段重算（当前 off 时段 midline ≈ +3.6）。
+thresholds:
+  midline_bps: 3.29
+  upper_bps: 2.32
+  lower_bps: 2.32
+
+entropy:
+  # base = Lighter mainnet：taker/maker 费率均为 0（/api/v1/orderBooks 实测）
+  symbol: BTC               # 两所对同一标的的不同命名时才需要（Katana 侧见 hedge.symbol）
+  taker_fee_bps: 0.0
+  max_position_usd: 1000
+  max_orders_per_min: 120
+
+hedge:
+  symbol: BTC-USD            # katana 带 -USD 后缀
+  taker_fee_bps: 1.9
+  max_position_usd: 1000
+  max_orders_per_min: 30
+
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 100
+  min_order_notional_usd: 10
+
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 10
+  hedge_slippage_bps: 20
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+
+recorder:
+  enabled: true
+  csv: logs/minutes-BTC-lighter-katana.csv
+  # 薄盘的单边远挂单会把 mid 撑到几百 bps（HYPE/ZEC 实测 400–4000bps），
+  # 顶档价差 >50bps 的采样直接丢弃（正常盘口 p99 < 2bps）
+  max_spread_bps: 50
+
+logging:
+  file: logs/engine-BTC-lighter-katana.log
+  trades_csv: logs/trades-BTC-lighter-katana.csv
+  dashboard: false
+  level: INFO
+
+# 分时段 band 自动校准（Lighter↔KAT 摆动有时段性，夜盘 sd 数倍于亚盘）
+auto_band:
+  enabled: true
+  window_days: 7
+  width_k: 2.5
+  # 原来 5.0 的宽度下限把 band 钉死在 ±5bps ≈ 4× σ，每边一天只开火 ~0.6 次；
+  # 降到 2.0 后由 width_k×σ 主导 → ±2bps 量级、每边 ~20–50 次/天
+  min_width_bps: 2.0
+  sigma_halflife_h: 24
+  slip_lookback_days: 2
+  slip_min_fills: 5
+  skip_engine_down_min: 15
+
+# maker 模式（目标结构：Katana 挂单 maker + Lighter 吃单对冲，往返 ~0.95bp）。
+# 先 record-only 验证数据与成交路径后再启用：
+#
+# maker:
+#   enabled: true
+#   edge_bps: 1.0           # 每笔锁定净边际
+#   costs_bps: 1.5          # KAT maker 0.475 + Lighter taker 0 + 对冲滑点
+#   requote_bps: 1.0
+#   requote_sec: 20
+#   size_base: 0.01
+#   sides: both

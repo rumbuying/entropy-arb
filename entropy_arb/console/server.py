@@ -20,6 +20,7 @@ from typing import Optional
 
 from aiohttp import WSMsgType, web
 
+from ..config import BASE_VENUES, MAKER_VENUES
 from .profiles import ProfilesManager
 from .secrets import SecretsManager, mask_updates_for_audit
 from .supervisor import Supervisor
@@ -117,7 +118,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         name = request.match_info["name"]
         b = await body(request)
         r = profiles.save(name, b.get("yaml", ""), b.get("symbol"),
-                          b.get("hedge"))
+                          b.get("hedge"), base=b.get("base"))
         return web.json_response(r, status=200 if r["ok"] else 400)
 
     async def profile_create(request):
@@ -125,13 +126,14 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         name = (b.get("name") or "").strip()
         r = profiles.save(name, b.get("yaml") or profiles.new_text(
             b.get("symbol"), b.get("hedge")), b.get("symbol"),
-            b.get("hedge"), create=True)
+            b.get("hedge"), create=True, base=b.get("base"))
         return web.json_response(r, status=200 if r["ok"] else 400)
 
     async def profile_validate(request):
         b = await body(request)
         return web.json_response(profiles.validate(
-            b.get("yaml", ""), b.get("symbol"), b.get("hedge")))
+            b.get("yaml", ""), b.get("symbol"), b.get("hedge"),
+            b.get("base")))
 
     async def profile_delete(request):
         name = request.match_info["name"]
@@ -173,6 +175,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         profile = b.get("profile") or ""
         symbol = (b.get("symbol") or "").strip().upper()
         hedge = b.get("hedge") or ""
+        base = (b.get("base") or "hl").strip().lower()
         mode = b.get("mode") or "record"
         if not profiles.exists(profile):
             return web.json_response({"error": "unknown profile"},
@@ -180,6 +183,12 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         if mode not in ("live", "record"):
             return web.json_response({"error": "mode must be live|record"},
                                      status=400)
+        if base not in BASE_VENUES:
+            return web.json_response({"error": f"base must be one of "
+                                      f"{list(BASE_VENUES)}"}, status=400)
+        if base == hedge:
+            return web.json_response({"error": "base and hedge must be "
+                                      "different venues"}, status=400)
         if not symbol:
             return web.json_response({"error": "symbol required"}, status=400)
         if mode == "live" and b.get("confirm") != symbol:
@@ -187,23 +196,40 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 {"error": "live start requires confirm=<symbol>"}, status=400)
         creds = secrets.status()["venues"]
         needed = {"lighter": "lighter", "lighter-rh": "lighter-rh",
-                  "tradexyz": "tradexyz"}
+                  "tradexyz": "tradexyz", "katana": "katana"}
         if mode == "live":
-            if not creds.get("entropy", False):
+            # the entropy leg's credential requirement follows --base; a
+            # Lighter leg uses its per-leg override when one is present
+            if base == "hl":
+                req_entropy = "entropy"
+            elif base in ("lighter", "lighter-rh"):
+                req_entropy = "lighter-base"
+            else:
+                req_entropy = needed.get(base)
+            if req_entropy and not creds.get(req_entropy, False):
                 return web.json_response(
-                    {"error": "entropy credentials incomplete — add keys "
-                              "first"}, status=400)
-            req_key = needed.get(hedge)
+                    {"error": f"{base} base-leg credentials incomplete — add "
+                              f"keys first"}, status=400)
+            if hedge in ("lighter", "lighter-rh"):
+                req_key = "lighter-hedge"
+            else:
+                req_key = needed.get(hedge)
             if req_key and not creds.get(req_key, False):
                 return web.json_response(
                     {"error": f"{hedge} credentials incomplete — add keys "
                               "first"}, status=400)
+        if mode == "live" and profiles.maker_enabled(profile) \
+                and hedge not in MAKER_VENUES:
+            return web.json_response(
+                {"error": f"profile enables maker mode but {hedge!r} does "
+                          f"not implement the maker contract (maker venues: "
+                          f"{list(MAKER_VENUES)})"}, status=400)
         for w in supervisor.workers.values():
             if w.profile == profile and w.running:
                 return web.json_response(
                     {"error": f"already running as {w.id}"}, status=409)
-        w = await supervisor.start(profile, symbol, hedge, mode)
-        audit(f"worker start: {w.id} profile={profile} {symbol}/{hedge} "
+        w = await supervisor.start(profile, symbol, hedge, mode, base=base)
+        audit(f"worker start: {w.id} profile={profile} {base}/{symbol}/{hedge} "
               f"mode={mode}")
         return web.json_response(supervisor.status(w.id))
 

@@ -12,6 +12,9 @@ const GROUPS = [
   { id: "lighter", title: "secrets.title.lighter",
     keys: ["LIGHTER_ACCOUNT_INDEX", "LIGHTER_API_KEY_INDEX",
            "LIGHTER_API_PRIVATE_KEY"] },
+  { id: "katana", title: "secrets.title.katana",
+    keys: ["KATANA_API_KEY", "KATANA_API_SECRET", "KATANA_PRIVATE_KEY",
+           "KATANA_WALLET"] },
 ];
 
 export function initSecrets(pane, shell) {
@@ -43,6 +46,7 @@ export function initSecrets(pane, shell) {
       chips.style.margin = "2px 0 10px";
       const relevant = g.id === "entropy" ? ["entropy"]
         : g.id === "xyz" ? ["tradexyz"]
+        : g.id === "katana" ? ["katana"]
         : ["lighter", "lighter-rh"];
       for (const v of relevant) {
         const c = document.createElement("span");

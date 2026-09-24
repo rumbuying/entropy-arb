@@ -12,6 +12,28 @@ export function initOverview(pane, shell) {
   pane.appendChild(empty);
   const stoppedBox = document.createElement("div");
   pane.appendChild(stoppedBox);
+  const headlessBox = document.createElement("div");
+  pane.appendChild(headlessBox);
+
+  function renderHeadless(headless) {
+    headlessBox.replaceChildren();
+    if (!headless.length) return;
+    const rows = headless.map(w => {
+      const b = document.createElement("div");
+      b.className = "stat";
+      const badge = document.createElement("span");
+      badge.className = "badge rec";
+      badge.textContent = t("mode.record");
+      b.appendChild(badge);
+      b.appendChild(document.createTextNode(
+        `  ${w.profile} · ${w.symbol}/${w.hedge}`));
+      return b;
+    });
+    const strip = document.createElement("div");
+    strip.className = "stat-strip";
+    strip.append(...rows);
+    headlessBox.appendChild(strip);
+  }
 
   function renderStopped(stopped) {
     stoppedBox.replaceChildren();
@@ -41,17 +63,22 @@ export function initOverview(pane, shell) {
     try { workers = await getJSON("/api/workers"); } catch { return; }
     const running = workers.filter(w => w.state === "running");
     const stopped = workers.filter(w => w.state !== "running");
+    // record-only workers run without a state server (web_port 0): they get
+    // a badge strip below, never an empty engine card
+    const headless = running.filter(w => !w.web_port);
+    const stateful = running.filter(w => w.web_port);
     empty.textContent = workers.length ? "" : t("overview.no_workers");
     renderStopped(stopped);
+    renderHeadless(headless);
 
     for (const [wid, c] of [...cards]) {
-      if (!running.some(w => w.id === wid)) {
+      if (!stateful.some(w => w.id === wid)) {
         try { c.ws && c.ws.close(); } catch (_) {}
         c.el.remove();
         cards.delete(wid);
       }
     }
-    for (const w of running) {
+    for (const w of stateful) {
       if (cards.has(w.id)) continue;
       const card = createEngineCard({ compact: true });
       const ws = connectWS(`/api/workers/${w.id}/ws`,

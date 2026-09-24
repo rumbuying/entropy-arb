@@ -1,0 +1,43 @@
+# entropy-arb cross-venue basis probe (systemd unit)
+#
+# 用途：采集引擎配置面**表达不了**的跨所基差（基准腿 = Lighter 时无法用
+# main.py/profile 描述），复用 MinuteRecorder 的同一 CSV schema，因此
+# tools/analyze.py、entropy_arb.analysis、tools/basis_matrix.py 都能直接用。
+#
+# 安装（root）:
+#   cp deploy/entropy-probe.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now entropy-probe
+#
+# 查看:
+#   systemctl status entropy-probe
+#   tail -f /root/code/entropy/logs/probe-lighter-vs-katana.log
+#
+# 产出: logs/minutes-<SYM>-lighter-vs-katana.csv
+#
+# 改采集标的 = 改下面 ExecStart 的 --symbols，然后
+#   systemctl daemon-reload && systemctl restart entropy-probe
+#
+# 注意：Katana 的 REST 快照有速率限制（并发 resync 会 429），feeds 内部按
+# 每个 feed 2s 最小间隔重试，启动瞬间可能出现 1 分钟的丢样，之后恢复 60/60。
+# 不要再起第二个写同样文件的进程——同一 CSV 会被两个写者交错追加。
+
+[Unit]
+Description=entropy-arb cross-venue basis probe (Lighter vs Katana)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/code/entropy
+ExecStart=/usr/bin/python3.11 tools/basis_probe.py \
+    --a lighter --b katana \
+    --symbols BTC,ETH,SOL,ZEC,HYPE,DOGE
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=append:/root/code/entropy/logs/probe-lighter-vs-katana.log
+StandardError=append:/root/code/entropy/logs/probe-lighter-vs-katana.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

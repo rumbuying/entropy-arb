@@ -48,22 +48,45 @@ def process_profile(path: str, dry_run: bool) -> None:
     if not csv_path or not os.path.exists(csv_path):
         print(f"[{name}] skip: no minute data yet ({csv_path or 'unset'})")
         return
-    trades_path = (raw.get("logging") or {}).get("trades_csv", "")
 
-    rows = load_rows(csv_path, hours=0)
-    minutes = [(r["ts"], r["prem"]) for r in rows]
+    trades_path = (raw.get("logging") or {}).get("trades_csv", "")
+    log_path = (raw.get("logging") or {}).get("file", "")
+
     now = time.time()
     session = session_of(now)
     window_days = float(ab.get("window_days", 7.0))
+    # slippage floor input: its own short lookback + a minimum fill count, so
+    # a burst of old trades can no longer pin the floor with no new trades
+    # coming in to displace them (sndk-rh deadlock, 2026-09-16 → 09-23)
+    slip_lookback_days = float(ab.get("slip_lookback_days",
+                                      min(window_days, 2.0)))
+    slip_min_fills = int(ab.get("slip_min_fills", 5))
+    halflife_h = float(ab.get("sigma_halflife_h", 24.0))
+    skip_down_min = float(ab.get("skip_engine_down_min", 15.0))
+
+    if skip_down_min > 0 and log_path:
+        try:
+            idle_min = (now - os.path.getmtime(log_path)) / 60.0
+        except OSError:
+            idle_min = 0.0            # no log yet: engine never ran, still calibrate
+        if idle_min > skip_down_min:
+            print(f"[{name}] skip: engine looks down "
+                  f"(log idle {idle_min:.0f} min > {skip_down_min:.0f})")
+            return
+
+    rows = load_rows(csv_path, hours=0)
+    minutes = [(r["ts"], r["prem"]) for r in rows]
     slippage = (slippage_bps_from_trades(
-        trades_path, max_age_sec=window_days * 86400.0, now_ts=now)
+        trades_path, max_age_sec=slip_lookback_days * 86400.0, now_ts=now,
+        min_fills=slip_min_fills, use_median=True)
         if trades_path else 0.0)
     band = band_for_session(
         minutes, session, now,
         window_days=window_days,
         width_k=float(ab.get("width_k", 2.5)),
         min_width_bps=float(ab.get("min_width_bps", 5.0)),
-        slippage_bps=slippage)
+        slippage_bps=slippage,
+        halflife_h=halflife_h)
 
     if band is None:
         print(f"[{name}] skip: not enough data for session '{session}' "
@@ -71,9 +94,16 @@ def process_profile(path: str, dry_run: bool) -> None:
         return
     mid, up, lo = band
 
+    # cold-start note: window thin but the band came from stale rows
+    lo_ts = now - window_days * 86400.0
+    n_win = sum(1 for ts, _ in minutes if ts >= lo_ts)
+    note = " (cold-start: window empty, using most recent stale rows)"
     if dry_run:
-        print(f"[{name}] session={session} slip={slippage:.1f}bps → "
-              f"midline={mid:+.2f} band=[-{lo:.2f}, +{up:.2f}] (dry-run)")
+        print(f"[{name}] session={session} slip={slippage:.1f}bps"
+              f"({slip_lookback_days:.0f}d, ≥{slip_min_fills} fills) "
+              f"σ_halflife={halflife_h:.0f}h → "
+              f"midline={mid:+.2f} band=[-{lo:.2f}, +{up:.2f}]{note if n_win < 240 else ''}"
+              f" (dry-run)")
         return
     try:
         changed = write_band(path, mid, up, lo)
@@ -82,11 +112,12 @@ def process_profile(path: str, dry_run: bool) -> None:
         return
     if changed:
         print(f"[{name}] session={session} slip={slippage:.1f}bps → band "
-              f"updated: midline={mid:+.2f} band=[-{lo:.2f}, +{up:.2f}] "
+              f"updated: midline={mid:+.2f} band=[-{lo:.2f}, +{up:.2f}]"
+              f"{note if n_win < 240 else ''} "
               f"(engine hot-reloads within ~60s)")
     else:
         print(f"[{name}] session={session} band unchanged "
-              f"(midline {mid:+.2f} within 0.25bps)")
+              f"(midline {mid:+.2f} within 0.25bps, width within 1bp)")
 
 
 def main() -> None:

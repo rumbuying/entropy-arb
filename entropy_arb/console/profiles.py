@@ -18,7 +18,7 @@ from typing import Dict, Optional
 
 import yaml
 
-from ..config import HEDGE_VENUES, ConfigError, load_config
+from ..config import BASE_VENUES, HEDGE_VENUES, ConfigError, load_config
 
 NEW_PROFILE_TEMPLATE = """\
 # entropy-arb strategy profile (edited via the web console)
@@ -69,6 +69,20 @@ logging:
   file: logs/engine-{symbol}-{hedge}.log
   trades_csv: logs/trades-{symbol}-{hedge}.csv
   status_interval_sec: 30
+
+# Maker mode (optional): post-only quotes on the hedge venue, taker hedging
+# on the base leg. Mutually exclusive with the taker band strategy above and
+# requires a maker_capable hedge venue (currently: katana) + maker params.
+# See MAKER-DESIGN.md. Uncomment and set enabled: true to switch modes.
+# maker:
+#   enabled: true
+#   edge_bps: 2.0          # target net locked edge per fill (bps)
+#   costs_bps: 5.5         # maker fee + hedge taker fee + hedge slippage
+#   requote_bps: 1.0       # anchor move that re-quotes
+#   requote_sec: 30        # max quote age
+#   size_base: 0.005       # per-side quote size (base units)
+#   sides: both            # both | bid | ask
+#   hedge_batch_ms: 250
 """
 
 
@@ -110,14 +124,17 @@ class ProfilesManager:
                     raw = yaml.safe_load(fh) or {}
                 thr = raw.get("thresholds") or {}
                 rec = (raw.get("recorder") or {}).get("csv")
+                mk = raw.get("maker") or {}
                 out.append({
                     "name": name,
                     "symbol": self._meta(name).get("symbol"),
                     "hedge": self._meta(name).get("hedge"),
+                    "base": self._meta(name).get("base", "hl"),
                     "midline_bps": thr.get("midline_bps"),
                     "upper_bps": thr.get("upper_bps"),
                     "lower_bps": thr.get("lower_bps"),
                     "recorder_csv": rec,
+                    "maker": bool(mk.get("enabled")),
                     "updated_ts": os.path.getmtime(self._yaml_path(name)),
                 })
             except Exception:
@@ -139,17 +156,21 @@ class ProfilesManager:
         meta = self._meta(name)
         return {"name": name, "yaml": text,
                 "symbol": meta.get("symbol"), "hedge": meta.get("hedge"),
+                "base": meta.get("base", "hl"),
                 "updated_ts": os.path.getmtime(self._yaml_path(name))}
 
     # -------------------------------------------------------------- validate
 
     def validate(self, yaml_text: str, symbol: Optional[str],
-                 hedge: Optional[str]) -> dict:
+                 hedge: Optional[str], base: Optional[str] = "hl") -> dict:
         """Run the candidate through the real load_config. Returns
         {ok, error} where error is the exact ConfigError message."""
         if hedge is not None and hedge not in HEDGE_VENUES:
             return {"ok": False,
                     "error": f"hedge must be one of {list(HEDGE_VENUES)}"}
+        if base is not None and base not in BASE_VENUES:
+            return {"ok": False,
+                    "error": f"base must be one of {list(BASE_VENUES)}"}
         if self.dir:
             os.makedirs(self.dir, exist_ok=True)
         fd, tmp = tempfile.mkstemp(suffix=".yaml", dir=self.dir or None)
@@ -158,7 +179,8 @@ class ProfilesManager:
                 fh.write(yaml_text or "")
             try:
                 load_config(tmp, self.env_file,
-                            symbol=symbol or "", hedge_venue=hedge or "")
+                            symbol=symbol or "", hedge_venue=hedge or "",
+                            base_venue=base or "hl")
                 return {"ok": True, "error": None}
             except ConfigError as e:
                 return {"ok": False, "error": str(e)}
@@ -171,10 +193,15 @@ class ProfilesManager:
     # ------------------------------------------------------------------ write
 
     def save(self, name: str, yaml_text: str, symbol: Optional[str],
-             hedge: Optional[str], create: bool = False) -> dict:
+             hedge: Optional[str], create: bool = False,
+             base: Optional[str] = None) -> dict:
         if not _safe_name(name):
             return {"ok": False, "error": f"invalid profile name {name!r}"}
-        v = self.validate(yaml_text, symbol, hedge)
+        # an omitted base preserves the stored one (editors that predate
+        # --base must not silently flip a lighter-base profile back to hl)
+        if base is None:
+            base = self._meta(name).get("base", "hl")
+        v = self.validate(yaml_text, symbol, hedge, base)
         if not v["ok"]:
             return v
         os.makedirs(self.dir, exist_ok=True)
@@ -185,11 +212,13 @@ class ProfilesManager:
         yaml_text = (yaml_text or "")
         if symbol and hedge:
             yaml_text = yaml_text.replace("{symbol}", symbol.upper()) \
-                                 .replace("{hedge}", hedge)
+                                 .replace("{hedge}", hedge) \
+                                 .replace("{base}", base or "hl")
         with open(self._yaml_path(name), "w") as fh:
             fh.write(yaml_text)
         meta = self._meta(name)
         meta.update({"symbol": symbol, "hedge": hedge,
+                     "base": base or "hl",
                      "updated_ts": time.time(),
                      "created_ts": meta.get("created_ts", time.time())})
         with open(self._meta_path(name), "w") as fh:
@@ -217,6 +246,15 @@ class ProfilesManager:
             self._audit(f"profile deleted: {name}")
 
     # ---------------------------------------------------------- recorder csv
+
+    def maker_enabled(self, name: str) -> bool:
+        """True when the profile switches the engine to maker mode."""
+        try:
+            with open(self._yaml_path(name)) as fh:
+                raw = yaml.safe_load(fh) or {}
+            return bool((raw.get("maker") or {}).get("enabled"))
+        except (FileNotFoundError, yaml.YAMLError):
+            return False
 
     def recorder_csv(self, name: str) -> Optional[str]:
         """Absolute-ish path of the profile's minute CSV (for Analyzer)."""

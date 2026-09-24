@@ -1,0 +1,80 @@
+# Lighter(mainnet) ↔ Katana Perps — HYPE 线（base 腿解耦后新增）
+#
+#   record-only:  python3 main.py --config profiles/lighter-hype-katana.yaml \
+#                     --symbol HYPE --base lighter --hedge katana --record-only
+#
+# 选 HYPE 的依据（44.5h 全量实测，见 logs/minutes-HYPE-lighter-vs-katana.csv）：
+#   溢价 median +1.25 / sd 7.15bp（全组最高），回归半衰期仅 ~5min（全组最快）
+#   maker 结构真实往返成本 ≈ 1.80bp（+KAT 点差 3.2 / Lighter 点差 0.85）
+#   → sd/成本 3.97、回测 151bp/天，是全组边际最好的标的
+#   但 KAT OI 仅 $20k → clip 卡在 $1-1.5k，$/天 上限 ~$11-23
+#   ⚠ 09-23 11:43 曾出现 −208bp 持续 6 分钟的真实偏离（已核对前后分钟）：
+#     这类大偏移多半是单边薄盘/陈旧价，靠 max_signal_edge_bps 挡住
+thresholds:
+  # 占位值，由 auto_band 校准（sd 7.15 → k=2.5 约 ±18bp）
+  midline_bps: 0.4
+  upper_bps: 51.69
+  lower_bps: 51.69
+
+entropy:
+  symbol: HYPE
+  taker_fee_bps: 0.0
+  max_position_usd: 1000     # 受 KAT OI $20k 限制的保守档
+  max_orders_per_min: 120
+
+hedge:
+  symbol: HYPE-USD
+  taker_fee_bps: 1.9
+  max_position_usd: 1000
+  max_orders_per_min: 30
+
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 100
+  min_order_notional_usd: 10
+
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 12
+  hedge_slippage_bps: 12
+  max_signal_edge_bps: 40    # 比 ETH 宽：HYPE 真实摆动大，但 >40bp 按幻影处理
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+
+recorder:
+  enabled: true
+  csv: logs/minutes-HYPE-lighter-katana.csv
+
+logging:
+  file: logs/engine-HYPE-lighter-katana.log
+  trades_csv: logs/trades-HYPE-lighter-katana.csv
+  dashboard: false
+  level: INFO
+
+auto_band:
+  enabled: true
+  window_days: 7
+  width_k: 2.5
+  min_width_bps: 5.0
+  sigma_halflife_h: 24
+  slip_lookback_days: 2
+  slip_min_fills: 5
+  skip_engine_down_min: 15
+
+# maker 模式（目标结构）— 参数按实测点差预置，确认凭证/保证金后再启用
+#
+# maker:
+#   enabled: true
+#   edge_bps: 1.5
+#   costs_bps: 1.5           # KAT maker 0.475 + Lighter taker 0 + 对冲滑点 ~1.0
+#   requote_bps: 1.0
+#   requote_sec: 20
+#   size_base: 5.0           # ~$475 @ $95（受 KAT OI 限制，勿超 $1.5k）
+#   sides: both
+#   hedge_batch_ms: 250

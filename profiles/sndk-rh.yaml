@@ -1,7 +1,7 @@
 thresholds:
-  midline_bps: -7
-  upper_bps: 22.95
-  lower_bps: 22.95
+  midline_bps: -3.04
+  upper_bps: 9.91
+  lower_bps: 9.91
 sizing:
   take_fraction: 0.5
   max_order_notional_usd: 40
@@ -14,6 +14,7 @@ execution:
   cooldown_sec: 0
   leg_slippage_bps: 7
   hedge_slippage_bps: 20
+  max_signal_edge_bps: 20    # 拒追 ±20bps 以外的信号：io 盘口薄，大偏移基本是幻影
   max_consecutive_errors: 3
   staleness_sec: 10
   reconcile_sec: 15
@@ -25,10 +26,15 @@ logging:
   trades_csv: logs/trades-SNDK-lighter-rh.csv
   dashboard: false
   level: INFO
-# 分时段 band 自动校准：midline=当前美东时段的7天滚动中位数，
-# 宽度=max(2.5×时段std, 2×实测滑点, 5bps)。由 entropy-autoband.timer 每5分钟执行
+# 分时段 band 自动校准：midline=当前美东时段的3天滚动中位数，
+# 宽度=max(2.0×时段std[半衰期24h], 2×实测滑点[2天内≥5笔完整成交], 5bps)。
+# 由 entropy-autoband.timer 每5分钟执行；引擎日志静默>15分钟则跳过
 auto_band:
   enabled: true
-  window_days: 7
-  width_k: 2.5
+  window_days: 3
+  width_k: 2.0
   min_width_bps: 5.0
+  sigma_halflife_h: 24
+  slip_lookback_days: 2
+  slip_min_fills: 5
+  skip_engine_down_min: 15

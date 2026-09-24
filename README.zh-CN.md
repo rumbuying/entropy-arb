@@ -3,13 +3,15 @@
 **[English documentation / 英文文档 → README.md](README.md)**
 
 开源双交易所永续合约套利机器人。其中一条腿永远是 **Entropy**（Hyperliquid 上的
-`io` builder dex）；另一条腿（对冲腿）三选一：
+`io` builder dex，或通过 `entropy.dex: ""` 指向 HL 主 dex 的大盘币种）；另一条腿
+（对冲腿）四选一：
 
 | `--hedge` | 交易所 | 计价货币 | 吃单费 | 协议 |
 |---|---|---|---|---|
 | `lighter` | Lighter 主网 | USDC | 0 bps | zkLighter ws（增量订单簿，异步结算） |
 | `lighter-rh` | Lighter Robinhood 链 | **USDG** | 0 bps | zkLighter ws |
 | `tradexyz` | Hyperliquid trade.xyz dex | USDC | ~1 bps | HL l2Book，IOC 同步结算 |
+| `katana` | Katana Perps（perps.katana.network） | USDC | ~1.9 bps | REST 快照 + l2orderbook ws 增量，IOC 同步结算。仅加密大盘（BTC/ETH/SOL/…），需配 `entropy.dex: ""` |
 
 > **推荐链接** —— 通过以下链接注册即可支持本项目：
 > - Entropy — Tier 4 推荐，100% 返佣：<https://entropy.io/?r=yourquantguy>
@@ -70,8 +72,8 @@ cp .env.example .env                     # 密钥——交易必填
 ```
 
 交易哪个市场**不在**配置文件中——每次启动时用命令行参数显式指定：
-`--symbol`（两个交易所共同交易的品种）和 `--hedge`（三选一：
-`lighter`、`lighter-rh`、`tradexyz`；Entropy 永远是
+`--symbol`（两个交易所共同交易的品种）和 `--hedge`（四选一：
+`lighter`、`lighter-rh`、`tradexyz`、`katana`；Entropy 永远是
 另一条腿）。
 
 本机器人**没有模拟盘**——要么采集数据（`--record-only`），要么实盘交易。
@@ -140,6 +142,16 @@ python3 main.py --symbol SNDK --hedge lighter-rh
 交易所密钥不完整时拒绝实盘启动。绑定非回环地址时强制要求 token
 （`--token`，未提供则自动生成并打印）。
 
+## 挂单模式（maker）
+
+`config.yaml` 里 `maker.enabled: true` 切换为挂单策略：在对冲腿（`--hedge katana`）
+以 **post-only 挂单**吸收流量，报价锚定基准腿（HL）的**可成交价**并叠加
+`costs_bps + edge_bps`；成交瞬间在基准腿吃单对冲（`hedge_batch_ms` 内聚合），
+每笔锁定"溢价 − 成本"的净边际。库存通过对称报价自然了结，超过仓位上限的
+`floor_frac` 后加仓侧自动加价。安全设计：对冲腿失明/断连 → 毫秒级撤光全部挂单；
+对冲连续失败 → 停止报价并告警（EXPOSED）。与 taker band 策略**互斥**。
+完整架构、参数与评测指标见 [MAKER-DESIGN.md](MAKER-DESIGN.md)。
+
 ## 数据采集与分析
 
 采集器在所有模式下自动运行（`recorder.enabled: true`）：每秒采样一次两边
@@ -178,7 +190,7 @@ python3 main.py --symbol SNDK --hedge lighter-rh
 | `inventory.scale_bps` / `floor_frac` | 库存阶梯（仓位超过上限的 `floor_frac` 后额外加价） | 10 / 0.5 |
 | `execution.premium_persist_sec` | 信号需持续多久才触发 | 0.3 |
 | `execution.*` | 滑点保护、超时、对账周期等 | 见配置文件 |
-| `recorder.*` | 分钟数据采集器 | 开启，`logs/minutes.csv` |
+| `recorder.*` | 分钟数据采集器（`max_spread_bps` 丢弃单边假盘口） | 开启，`logs/minutes.csv`，50 bps |
 | `logging.dashboard` / `logging.file` | 终端仪表盘；开启时日志写入文件 | 开启，`logs/engine.log` |
 | `web.enabled` / `host` / `port` | 引擎内嵌只读网页总览（也可 `--web`） | 关，`127.0.0.1:8787` |
 
@@ -194,12 +206,19 @@ python3 main.py --symbol SNDK --hedge lighter-rh
   `LIGHTER_API_PRIVATE_KEY`，必须注册在与启动参数 `--hedge` **相同的部署**上
   （主网与 Robinhood 链是两套独立的账户和密钥——参见
   [lighter-python](https://github.com/elliottech/lighter-python)）。
+- **Katana Perps** —— 在
+  <https://perps.katana.network/wallet/api-keys/login> 创建 API 密钥（需
+  Trade 权限）。`KATANA_API_KEY` / `KATANA_API_SECRET` 用于请求签名
+  （secret 仅在创建时显示一次），`KATANA_PRIVATE_KEY` 是充入 Katana Perps
+  合约的 EOA 钱包私钥，每笔订单用它做 EIP-712 签名；`KATANA_WALLET`
+  可选（默认从私钥推导）。注意：Katana 只有加密大盘永续，且当前盘口
+  很薄——先用 `--record-only` 采集数据、从最小仓位开始。
 
 ## 执行机制
 
 - 两条腿**同时发出吃单**：Lighter 用带均价保护的市价单，在鉴权 websocket
-  上异步确认成交；Hyperliquid 用 IOC 限价单同步结算（结果未知时轮询
-  orderStatus 兜底）。
+  上异步确认成交；Hyperliquid 与 Katana 用 IOC 限价单同步结算
+  （Hyperliquid 结果未知时轮询 orderStatus 兜底）。
 - **持续性闸门**（`premium_persist_sec`）：信号先"武装"，持续存在才触发，
   过滤单 tick 的假信号。
 - **库存阶梯**：仓位超过上限的 `floor_frac` 后，同方向加仓需要线性递增的
@@ -218,9 +237,10 @@ python3 main.py --symbol SNDK --hedge lighter-rh
 main.py                  入口（--record-only，默认即实盘）
 entropy_arb/config.py    YAML + .env 配置契约与校验
 entropy_arb/book.py      订单簿 + 含手续费的套利规模计算
-entropy_arb/feeds.py     官方 HL ws + zkLighter ws 行情
+entropy_arb/feeds.py     官方 HL ws + zkLighter ws + Katana ws 行情
 entropy_arb/venue_hl.py  Hyperliquid dex 适配器（Entropy、tradexyz）
 entropy_arb/venue_lighter.py  zkLighter 适配器（主网、Robinhood 链）
+entropy_arb/venue_katana.py   Katana Perps 适配器（HMAC + EIP-712）
 entropy_arb/engine.py    双交易所策略主循环
 entropy_arb/dashboard.py Rich 终端仪表盘
 entropy_arb/recorder.py  分钟级盘口数据采集

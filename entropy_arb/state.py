@@ -22,6 +22,9 @@ Snapshot shape (all values JSON-safe; None where unknown):
         directions[]: key, label, exec_prem_bps, hurdle_bps, gap_bps, armed
     recent_trades[]: ts, direction, qty, notional, prem_bps, exp, fill,
         status, ok
+    maker (when maker mode is on): maker_venue, hedge_venue, sides, edge_bps,
+        costs_bps, quotes{side: {order_id, px, qty, anchor, age_sec, resting}},
+        pending_hedge, fills, hedges, hedge_failures, exposed, blocked
     events[]: [level_no, line]        (only when a log buffer is supplied)
     config: thresholds/sizing/inventory/execution echo for display
 
@@ -164,6 +167,33 @@ def build_snapshot(eng, log_buffer=None) -> Dict[str, Any]:
         ],
     }
 
+    # ---- maker mode ----------------------------------------------------------
+    if getattr(eng, "maker", None) is not None:
+        mk = eng.maker
+        now_quotes = {}
+        for side, q in eng._mk_quotes.items():
+            now_quotes[side] = {
+                "order_id": q.order_id, "px": q.px, "qty": q.qty,
+                "anchor": q.anchor,
+                "age_sec": now - q.placed_ts,
+                "resting": q.order_id in mk.open_orders(),
+            }
+        snap["maker"] = {
+            "enabled": True,
+            "maker_venue": mk.name,
+            "hedge_venue": eng.taker_hedge.name if eng.taker_hedge else None,
+            "sides": cfg.maker.sides,
+            "edge_bps": cfg.maker.edge_bps,
+            "costs_bps": cfg.maker.costs_bps,
+            "quotes": now_quotes,
+            "pending_hedge": eng._mk_pending,
+            "fills": eng._mk_fills,
+            "hedges": eng._mk_hedges,
+            "hedge_failures": eng._mk_hedge_failures,
+            "exposed": eng._mk_exposed,
+            "blocked": eng._mk_blocked_reason,
+        }
+
     # ---- recent executions (newest last, as stored) --------------------------
     snap["recent_trades"] = [dict(r) for r in eng.recent_trades]
 
@@ -188,6 +218,10 @@ def build_snapshot(eng, log_buffer=None) -> Dict[str, Any]:
         "entropy_cap_usd": eng.entropy.cap_usd,
         "hedge_cap_usd": eng.hedge.cap_usd,
     }
+    if getattr(eng, "maker", None) is not None:
+        snap["config"]["maker_edge_bps"] = cfg.maker.edge_bps
+        snap["config"]["maker_costs_bps"] = cfg.maker.costs_bps
+        snap["config"]["maker_sides"] = cfg.maker.sides
 
     if log_buffer is not None:
         snap["events"] = [list(e) for e in log_buffer.lines][-30:]

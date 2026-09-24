@@ -27,6 +27,11 @@ RE_PRIVATE_KEY = re.compile(r"^0x[0-9a-fA-F]{64}$")
 RE_HEX_KEY = re.compile(r"^(?:0x)?(?:[0-9a-fA-F]{64}|[0-9a-fA-F]{80})$")
 RE_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 RE_INT = re.compile(r"^\d+$")
+# Katana API keys are UUIDs; the secret is an opaque token (uuid v4 at the
+# time of writing — validate shape loosely: any non-empty printable token)
+RE_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+RE_TOKEN = re.compile(r"^[A-Za-z0-9_\-]{16,}$")
 
 # key -> (kind, description)
 KEY_KINDS: Dict[str, str] = {
@@ -37,6 +42,19 @@ KEY_KINDS: Dict[str, str] = {
     "LIGHTER_ACCOUNT_INDEX": "int",
     "LIGHTER_API_KEY_INDEX": "int",
     "LIGHTER_API_PRIVATE_KEY": "hex_key",
+    # optional per-leg overrides: the two zkLighter deployments (mainnet vs
+    # Robinhood) are separate accounts, so a base leg on Lighter-mainnet can
+    # coexist with a lighter-rh hedge worker. Unset → shared LIGHTER_* wins.
+    "LIGHTER_BASE_ACCOUNT_INDEX": "int",
+    "LIGHTER_BASE_API_KEY_INDEX": "int",
+    "LIGHTER_BASE_API_PRIVATE_KEY": "hex_key",
+    "LIGHTER_HEDGE_ACCOUNT_INDEX": "int",
+    "LIGHTER_HEDGE_API_KEY_INDEX": "int",
+    "LIGHTER_HEDGE_API_PRIVATE_KEY": "hex_key",
+    "KATANA_API_KEY": "uuid",
+    "KATANA_API_SECRET": "token",
+    "KATANA_PRIVATE_KEY": "private_key",
+    "KATANA_WALLET": "address",
 }
 
 # what each hedge choice needs to be tradeable (creds_complete semantics)
@@ -47,6 +65,17 @@ VENUE_REQUIREMENTS: Dict[str, List[str]] = {
                 "LIGHTER_API_PRIVATE_KEY"],
     "lighter-rh": ["LIGHTER_ACCOUNT_INDEX", "LIGHTER_API_KEY_INDEX",
                    "LIGHTER_API_PRIVATE_KEY"],
+    "katana": ["KATANA_API_KEY", "KATANA_API_SECRET", "KATANA_PRIVATE_KEY"],
+}
+
+# the same requirements under a per-leg override name, tried first
+_LIGHTER_LEG_REQUIREMENTS: Dict[str, List[str]] = {
+    "lighter-base": ["LIGHTER_BASE_ACCOUNT_INDEX",
+                     "LIGHTER_BASE_API_KEY_INDEX",
+                     "LIGHTER_BASE_API_PRIVATE_KEY"],
+    "lighter-hedge": ["LIGHTER_HEDGE_ACCOUNT_INDEX",
+                      "LIGHTER_HEDGE_API_KEY_INDEX",
+                      "LIGHTER_HEDGE_API_PRIVATE_KEY"],
 }
 
 
@@ -86,6 +115,10 @@ def validate_value(key: str, value: str) -> Optional[str]:
         return "expect 0x + 40 hex chars (main account address)"
     if kind == "int" and not RE_INT.match(value):
         return "expect an integer"
+    if kind == "uuid" and not RE_UUID.match(value):
+        return "expect a UUID (API key from the Katana Perps API keys page)"
+    if kind == "token" and not RE_TOKEN.match(value):
+        return "expect the API secret token (shown once when the key was created)"
     return None
 
 
@@ -124,6 +157,14 @@ class SecretsManager:
         venues = {}
         for venue, reqs in VENUE_REQUIREMENTS.items():
             venues[venue] = all(values.get(k) for k in reqs)
+        # per-leg lighter view: the leg-specific triple when present,
+        # otherwise whatever the shared triple provides (mirrors
+        # config.lighter_creds, so the live pre-flight agrees with the
+        # engine's own startup check)
+        for leg, reqs in _LIGHTER_LEG_REQUIREMENTS.items():
+            venues[leg] = (all(values.get(k) for k in reqs)
+                           if any(values.get(k) for k in reqs)
+                           else venues["lighter"])
         return {"exists": raw is not None, "keys": keys, "venues": venues}
 
     def _parse(self, raw: str) -> Dict[str, str]:

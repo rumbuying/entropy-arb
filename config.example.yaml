@@ -15,9 +15,12 @@
 #   lighter      Lighter mainnet            (USDC, 0 bps taker)
 #   lighter-rh   Lighter Robinhood chain    (USDG, 0 bps taker)
 #   tradexyz     Hyperliquid trade.xyz dex  (USDC, ~1 bps taker)
+#   katana       Katana Perps               (USDC, ~1.9 bps taker; crypto
+#                                           majors only — pair with the main
+#                                           HL dex via entropy.dex: "")
 # 交易哪个市场不在本文件中配置——每次启动时用命令行参数显式指定：
 #     python3 main.py --symbol SNDK --hedge lighter-rh
-# Entropy 永远是其中一条腿；--hedge 选择对冲腿（三选一，见上表）。
+# Entropy 永远是其中一条腿；--hedge 选择对冲腿（四选一，见上表）。
 
 # ============================ THE SIGNAL / 信号 ============================
 # premium_bps = (Entropy price / hedge price - 1) * 10000
@@ -43,17 +46,21 @@ thresholds:
 # ======================== VENUES / 交易所参数 ==============================
 entropy:
   dex: io                    # Entropy's dex name on Hyperliquid / Entropy 的 dex 名
+                             # set "" for the MAIN Hyperliquid perp dex (BTC,
+                             # ETH, ... — deep crypto majors, e.g. to pair with
+                             # katana). 设为 "" 表示 HL 主 dex 的大盘币种
   taker_fee_bps: 0.0         # taker fee / 吃单手续费
   max_position_usd: 1000     # position cap / 持仓上限（美元）
   max_orders_per_min: 120    # order-send budget, sliding 60s / 每分钟下单预算
 
 hedge:
-  taker_fee_bps: 0.0         # Lighter venues: 0; tradexyz: ~1.0
+  taker_fee_bps: 0.0         # Lighter venues: 0; tradexyz: ~1.0; katana: ~1.9
   max_position_usd: 1000
   max_orders_per_min: 30     # Lighter's ceiling is ~40/min / Lighter 上限约 40/分钟
   # symbol: ANTHROPIC        # hedge-leg ticker when the two venues name the
                              # same market differently (e.g. entropy "ANTH" on
-                             # the io dex vs "ANTHROPIC" on lighter-rh).
+                             # the io dex vs "ANTHROPIC" on lighter-rh, or
+                             # "BTC" on HL main vs "BTC-USD" on katana).
                              # Defaults to --symbol. / 对冲腿标的别名，缺省同 --symbol
 
 # ============== SESSION-AWARE BAND AUTO-CALIBRATION / 分时段band自校准 ======
@@ -68,6 +75,37 @@ auto_band:
   window_days: 7             # trailing calibration window / 回看窗口（天）
   width_k: 2.5               # width = width_k * session stdev / 宽度系数
   min_width_bps: 5.0         # hard floor / 宽度下限
+  sigma_halflife_h: 24       # recency-weighted stdev half-life (0 = plain) / σ 半衰期（小时），0 为普通标准差
+  slip_lookback_days: 2      # slippage floor's own lookback / 实测滑点独立回看期（天）
+  slip_min_fills: 5          # floor needs this many complete fills / 完整成交少于该数则滑点下限不生效
+  skip_engine_down_min: 15   # skip profile when engine log idle this long / 引擎日志静默超时则跳过校准
+
+# ======================== MAKER MODE / 挂单模式 =============================
+# maker.enabled: true switches to the maker strategy: rest post-only quotes
+# on the hedge venue (e.g. --hedge katana), hedge every fill instantly on the
+# base leg with a taker order, and lock premium-minus-costs per fill.
+# Mutually exclusive with the taker band strategy (which it disables).
+# The hedge venue must implement the maker contract (maker_capable —
+# currently only katana). See MAKER-DESIGN.md for the full design.
+#
+# maker.enabled: true 切换为挂单策略：在对冲腿（如 --hedge katana）以 post-only
+# 挂单吸收流量，成交瞬间在基准腿吃单对冲，锁定"溢价−成本"的净边际。
+# 与 taker band 策略互斥（启用后 band 扫描停止）。对冲腿必须实现挂单契约
+# （maker_capable——目前仅 katana）。完整设计见 MAKER-DESIGN.md。
+maker:
+  enabled: false
+  edge_bps: 2.0              # target net locked edge per fill / 每笔目标净锁利
+  costs_bps: 5.5             # maker费+hedge吃单费+滑点估计（katana+HL主网≈5.5）
+  requote_bps: 1.0           # anchor move that requotes / 锚移动重挂阈值
+  requote_sec: 30            # heartbeat requote / 挂单最长存活时间
+  size_base: 0.005           # per-side quote size (base units) / 单边挂单量
+  sides: both                # both | bid | ask
+  hedge_batch_ms: 250        # fill→hedge aggregation window / 成交对冲合并窗口
+  max_hedge_failures: 3      # failures before EXPOSED halt / 对冲连续失败停机阈值
+  hedge_retry_sec: 0.5       # hedge retry backoff / 对冲重试间隔
+  interval_sec: 0.5          # quote-loop tick / 报价循环周期
+  trades_csv: logs/maker-trades.csv
+  selection_csv: logs/maker-selection.csv
 
 # ========================= SIZING / 下单规模 ===============================
 sizing:
@@ -95,6 +133,11 @@ execution:
   net_tolerance_base: 0.001    # max tolerated net delta (base units) / 允许的净敞口
   max_consecutive_errors: 3    # halt after N straight failures / 连续失败 N 次后停机
   rate_limit_pause_sec: 10.0   # pause a 429'd venue this long / 被限频后的暂停时长
+  # refuse signals whose executable edge exceeds this (bps; 0 = off). Edges
+  # far outside the band are almost always a phantom top-of-book: the entry
+  # leg never fills while the hedge leg does. / 超过此可成交边际的信号直接放弃
+  #（远超 band 的偏移基本是幻影盘口：入场腿不成交、对冲腿成交，来回亏损）
+  max_signal_edge_bps: 0
   staleness_sec: 10.0          # a feed older than this is stale / 行情超时判定
   reconcile_sec: 15.0          # on-chain position sync cadence / 链上持仓核对周期
   venue_probe_sec: 30.0        # probe cadence for a down venue / 故障交易所探测周期
@@ -108,6 +151,9 @@ execution:
 recorder:
   enabled: true
   csv: logs/minutes.csv
+  # 丢弃顶档价差超过该值（bps）的 1s 采样：薄盘偶尔会留一张远离的挂单，
+  # 它会把 mid 溢价撑到几百 bps，并造出无法成交的"假信号"。0 = 不过滤。
+  max_spread_bps: 50
 
 # ==================== LOGGING & DASHBOARD / 日志与仪表盘 ====================
 # On a terminal the bot shows a live Rich dashboard (books, signal, positions,

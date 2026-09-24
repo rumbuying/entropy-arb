@@ -145,6 +145,60 @@ def test_scan_respects_position_caps():
     assert run_scan(eng) is None
 
 
+def test_scan_skips_phantom_edge_beyond_cap():
+    # an edge far beyond the band is usually a phantom top-of-book on the
+    # thin entropy book (entry leg never fills, hedge leg does); the cap
+    # refuses to chase it, and 0 disables the check
+    eng = make_engine(midline=5.0, upper=4.0, lower=3.0)
+    eng.cfg.max_signal_edge_bps = 10.0
+    eng.entropy.set_book(100.14, 100.16)     # ~13bps edge, hurdle 9
+    eng.hedge.set_book(99.99, 100.01)
+    assert run_scan(eng) is None             # blocked by the phantom cap
+    eng.cfg.max_signal_edge_bps = 0.0
+    best = run_scan(eng)
+    assert best is not None
+
+
+def test_margin_backoff_escalates_and_resets():
+    # margin rejections pause a venue for 60s doubling to 15min — NOT the
+    # 10s rate-limit clock that produced 8 fill/reject round trips
+    eng = make_engine()
+    assert eng._margin_pause("hedge") == 60.0
+    eng._margin_pause("hedge")
+    eng._margin_pause("hedge")
+    assert eng._margin_pause("hedge") == 480.0    # 60→120→240→480
+    eng._margin_backoff["hedge"] = 800.0
+    assert eng._margin_pause("hedge") == 900.0    # capped
+    eng._margin_backoff.clear()                   # clean two-leg fill resets
+    assert eng._margin_pause("hedge") == 60.0
+
+
+def test_new_execution_and_auto_band_config_roundtrip():
+    import tempfile as tf
+    f = tf.NamedTemporaryFile("w", suffix=".yaml", delete=False)
+    f.write("""
+thresholds:
+  midline_bps: 0
+  upper_bps: 5
+  lower_bps: 5
+execution:
+  premium_persist_sec: 0.0
+  max_signal_edge_bps: 20.0
+auto_band:
+  enabled: true
+  window_days: 3
+  width_k: 2.0
+  min_width_bps: 5.0
+  sigma_halflife_h: 24
+  slip_lookback_days: 2
+  slip_min_fills: 5
+  skip_engine_down_min: 15
+""")
+    f.close()
+    cfg = load_config(f.name, NO_ENV, symbol="SNDK", hedge_venue="lighter-rh")
+    assert cfg.max_signal_edge_bps == 20.0
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

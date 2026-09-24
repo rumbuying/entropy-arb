@@ -27,7 +27,8 @@ import os
 import signal
 import sys
 
-from entropy_arb.config import HEDGE_VENUES, ConfigError, load_config
+from entropy_arb.config import (BASE_VENUES, HEDGE_VENUES, ConfigError,
+                                load_config)
 from entropy_arb.engine import Engine
 
 log = logging.getLogger("main")
@@ -110,7 +111,13 @@ def main() -> None:
     p.add_argument("--hedge", required=True, choices=HEDGE_VENUES,
                    metavar="VENUE",
                    help=f"hedge venue, one of: {', '.join(HEDGE_VENUES)} / "
-                        f"对冲腿，三选一")
+                        f"对冲腿，四选一")
+    p.add_argument("--base", default="hl", choices=BASE_VENUES,
+                   metavar="VENUE",
+                   help=f"base (entropy) leg venue, one of: "
+                        f"{', '.join(BASE_VENUES)} (default: hl) / 基准腿，"
+                        f"默认 Hyperliquid；--base lighter --hedge katana 即 "
+                        f"Lighter↔Katana 线")
     p.add_argument("--config", default="config.yaml",
                    help="strategy config (default: config.yaml)")
     p.add_argument("--env-file", default=".env",
@@ -138,7 +145,8 @@ def main() -> None:
 
     try:
         cfg = load_config(args.config, args.env_file,
-                          symbol=args.symbol, hedge_venue=args.hedge)
+                          symbol=args.symbol, hedge_venue=args.hedge,
+                          base_venue=args.base)
     except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         sys.exit(2)

@@ -51,25 +51,61 @@ def session_of(ts: float) -> str:
     return "off"                      # 20:00-04:00 wraps past midnight
 
 
+def _ewma_std(pairs: List[tuple], now_ts: float, halflife_h: float) -> float:
+    """Recency-weighted stdev: each row's weight halves every `halflife_h`
+    hours, so a volatility spike fades out of the width in days instead of
+    persisting for the whole trailing window."""
+    decay = 3600.0 * max(halflife_h, 1e-9)
+    wsum = xsum = 0.0
+    for ts, p in pairs:
+        w = 0.5 ** (max(now_ts - ts, 0.0) / decay)
+        wsum += w
+        xsum += w * p
+    if wsum <= 0:
+        return 0.0
+    mean = xsum / wsum
+    vsum = 0.0
+    for ts, p in pairs:
+        w = 0.5 ** (max(now_ts - ts, 0.0) / decay)
+        vsum += w * (p - mean) ** 2
+    return (vsum / wsum) ** 0.5
+
+
 def band_for_session(minutes: List[Tuple[float, float]],
                      session: str, now_ts: float, window_days: float = 7.0,
                      width_k: float = 2.5, min_width_bps: float = 5.0,
                      slippage_bps: float = 0.0,
                      min_session_rows: int = 120,
-                     min_total_rows: int = 240) -> Optional[Tuple[float, float, float]]:
-    """(midline, upper, lower) for `session`, or None when the window lacks
-    enough data. `minutes` is a list of (minute_ts, premium_close_bps)."""
+                     min_total_rows: int = 240,
+                     halflife_h: float = 0.0,
+                     cold_start: bool = True) -> Optional[Tuple[float, float, float]]:
+    """(midline, upper, lower) for `session`, or None when there is not
+    enough data at all. `minutes` is a list of (minute_ts, premium_close_bps).
+
+    halflife_h > 0 weights the width's stdev by recency (weight halves every
+    halflife_h hours); 0 keeps the plain stdev over the whole window.
+
+    cold_start: when the calibration window is empty (engine restarted after
+    downtime) fall back to the most recent min_total_rows rows on disk
+    regardless of age — stale data still beats a week-old hand-tuned band."""
     lo_ts = now_ts - window_days * 86400.0
-    in_win = [p for ts, p in minutes if ts >= lo_ts]
-    sess = [p for ts, p in minutes if ts >= lo_ts and session_of(ts) == session]
+    sess = [(ts, p) for ts, p in minutes
+            if ts >= lo_ts and session_of(ts) == session]
+    in_win = [(ts, p) for ts, p in minutes if ts >= lo_ts]
 
     sample = sess if len(sess) >= min_session_rows else (
         in_win if len(in_win) >= min_total_rows else [])
+    if not sample and cold_start and len(minutes) >= min_total_rows:
+        sample = sorted(minutes)[-min_total_rows:]
     if not sample:
         return None
 
-    midline = statistics.median(sample)
-    std = statistics.pstdev(sample) if len(sample) > 1 else 0.0
+    vals = [p for _, p in sample]
+    midline = statistics.median(vals)
+    if halflife_h > 0:
+        std = _ewma_std(sample, now_ts, halflife_h)
+    else:
+        std = statistics.pstdev(vals) if len(vals) > 1 else 0.0
     floor = max(2.0 * max(0.0, slippage_bps), min_width_bps)
     width = max(width_k * std, floor)
     return round(midline, 2), round(width, 2), round(width, 2)
@@ -100,16 +136,21 @@ def _row_is_complete_fill(r: dict) -> bool:
 
 def slippage_bps_from_trades(path: str, last_n: int = 20,
                              max_age_sec: float = 0.0,
-                             now_ts: Optional[float] = None) -> float:
-    """Mean realised slippage (bps of notional) over the last `last_n`
-    COMPLETE two-leg fills of a trades CSV. Positive = execution costs that
-    much per trade. Rows without status/fill columns (legacy schema) count
-    as complete.
+                             now_ts: Optional[float] = None,
+                             min_fills: int = 0,
+                             use_median: bool = False) -> float:
+    """Realised slippage (bps of notional) over the last `last_n`
+    COMPLETE two-leg fills of a trades CSV within `max_age_sec`. Positive =
+    execution costs that much per trade. Rows without status/fill columns
+    (legacy schema) count as complete.
 
-    With max_age_sec > 0, fills older than that are ignored — the floor then
-    forgets stale execution costs on the same trailing window the band
-    itself uses, instead of pinning the width until enough new trades
-    happen to displace them."""
+    min_fills > 0 distrusts thin samples: with fewer complete fills in the
+    window the function returns 0.0 (floor off) instead of letting a couple
+    of noisy rows pin the band wide. This is the other half of the sndk-rh
+    deadlock fix: no new trades -> old rows age out -> floor releases.
+
+    use_median swaps the mean for the median: single-edge trades are
+    dominated by tick rounding, and one outlier should not set the floor."""
     try:
         with open(path, newline="") as fh:
             rows = list(csv.DictReader(fh))
@@ -139,7 +180,12 @@ def slippage_bps_from_trades(path: str, last_n: int = 20,
             continue
         if len(slips) >= last_n:
             break
-    return statistics.mean(slips) if slips else 0.0
+    if len(slips) < min_fills:
+        return 0.0
+    if not slips:
+        return 0.0
+    return (statistics.median(slips) if use_median
+            else statistics.mean(slips))
 
 
 def patch_thresholds(text: str, midline: float, upper: float,
@@ -167,16 +213,29 @@ def patch_thresholds(text: str, midline: float, upper: float,
 
 
 def write_band(path: str, midline: float, upper: float, lower: float,
-               min_mid_delta: float = 0.25) -> bool:
+               min_mid_delta: float = 0.25,
+               min_width_delta: float = 1.0) -> bool:
     """Patch the profile's band in place (atomic). Returns True when the
-    file changed. Refuses to touch a profile without a thresholds block."""
+    file changed. Refuses to touch a profile without a thresholds block.
+
+    The anti-flap guard skips only when BOTH the midline moved less than
+    min_mid_delta AND the width moved less than min_width_delta: a width
+    correction must never be blocked by a quiet midline (sndk-rh 2026-09-22
+    regression — a stale 22.95 width was immune to recalibration because
+    the midline sat still)."""
     with open(path) as fh:
         text = fh.read()
     if not re.search(r"^thresholds:", text, re.M):
         raise ValueError(f"{path}: no thresholds block")
     m = re.search(r"^\s*midline_bps\s*:\s*([-+0-9.]+)", text, re.M)
     cur_mid = float(m.group(1)) if m else None
-    if cur_mid is not None and abs(cur_mid - midline) < min_mid_delta:
+    m_up = re.search(r"^\s*upper_bps\s*:\s*([-+0-9.]+)", text, re.M)
+    m_lo = re.search(r"^\s*lower_bps\s*:\s*([-+0-9.]+)", text, re.M)
+    quiet = (cur_mid is not None and abs(cur_mid - midline) < min_mid_delta)
+    if m_up is not None and m_lo is not None:
+        quiet = quiet and (abs(float(m_up.group(1)) - upper) < min_width_delta
+                           and abs(float(m_lo.group(1)) - lower) < min_width_delta)
+    if quiet:
         return False
     new_text = patch_thresholds(text, midline, upper, lower)
     tmp = path + ".tmp"

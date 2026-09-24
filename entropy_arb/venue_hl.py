@@ -97,6 +97,27 @@ class HLVenue:
             return await r.json()
 
     async def load_market(self) -> None:
+        if self.conf.hl_dex == "":
+            # main Hyperliquid perp dex (config entropy.dex: "") — the deep
+            # crypto majors (BTC, ETH, SOL, ...). Universe names are bare
+            # symbols and asset ids are plain universe indices.
+            meta = await self._info({"type": "meta"})
+            want = self.conf.symbol
+            for idx, a in enumerate(meta["universe"]):
+                if a["name"] != want:
+                    continue
+                if a.get("isDelisted"):
+                    raise RuntimeError(f"[{self.name}] {a['name']} is delisted")
+                self.coin = a["name"]
+                self.asset_id = idx
+                self.size_decimals = int(a["szDecimals"])
+                self.min_base = 10 ** -self.size_decimals
+                log.info("[%s] %s asset_id=%d szDecimals=%d maxLev=%sx "
+                         "(main dex)", self.name, self.coin, self.asset_id,
+                         self.size_decimals, a.get("maxLeverage"))
+                return
+            raise RuntimeError(f"[{self.name}] {want} not found on the main "
+                               f"Hyperliquid perp dex")
         dexs = await self._info({"type": "perpDexs"})
         names = [(d or {}).get("name", "") for d in dexs]
         if self.conf.hl_dex not in names:

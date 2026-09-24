@@ -21,6 +21,14 @@ Definitions (all in bps, fees NOT included — the engine adds fees on top):
 Bid/ask columns are the minute's last fresh sample (close). A row is only
 written for minutes with at least one sample where both books were fresh;
 `samples` says how many of the ~60 seconds qualified.
+
+`max_spread_bps` (default 0 = off, the engine/profile sets 50) drops samples
+whose top-of-book is absurdly wide. A thin venue occasionally leaves a single
+far-out quote at the top of one side (measured 79–4027 bps against a normal
+<20 bps): the mid then jumps hundreds of bps and the executable edge turns
+into a phantom signal that no engine could have traded. Skipping those samples
+keeps the minute bar honest; a minute where every sample was that wide is not
+written at all.
 """
 from __future__ import annotations
 
@@ -43,6 +51,12 @@ HEADER = ["minute_ts", "time_utc",
           "premium_close_bps", "premium_mean_bps", "premium_std_bps",
           "sell_edge_mean_bps", "sell_edge_max_bps",
           "buy_edge_mean_bps", "buy_edge_max_bps", "samples"]
+
+
+def _spread_ok(bid: float, ask: float, cap_bps: float) -> bool:
+    """False when the top-of-book spread exceeds `cap_bps` of the mid."""
+    mid = (bid + ask) / 2.0
+    return mid > 0.0 and (ask - bid) / mid * 1e4 <= cap_bps
 
 
 class _MinuteAgg:
@@ -100,13 +114,16 @@ class _MinuteAgg:
 
 class MinuteRecorder:
     def __init__(self, path: str, entropy_book: OrderBook, hedge_book: OrderBook,
-                 staleness_sec: float, interval_sec: float = 1.0) -> None:
+                 staleness_sec: float, interval_sec: float = 1.0,
+                 max_spread_bps: float = 0.0) -> None:
         self.path = path
         self.entropy_book = entropy_book
         self.hedge_book = hedge_book
         self.staleness_sec = staleness_sec
         self.interval_sec = interval_sec
+        self.max_spread_bps = max_spread_bps
         self.rows_written = 0
+        self.skipped_wide = 0
         self._agg: Optional[_MinuteAgg] = None
         self._fh = None
         self._writer = None
@@ -154,6 +171,13 @@ class MinuteRecorder:
         h_bid, h_ask = self.hedge_book.best_bid(), self.hedge_book.best_ask()
         if None in (e_bid, e_ask, h_bid, h_ask):
             return
+        if self.max_spread_bps > 0.0 and not (
+                _spread_ok(e_bid, e_ask, self.max_spread_bps)
+                and _spread_ok(h_bid, h_ask, self.max_spread_bps)):
+            # one-sided/phantom top-of-book: recording this sample would put a
+            # fake premium and a fake executable edge into the minute bar
+            self.skipped_wide += 1
+            return
         if self._agg is None:
             self._agg = _MinuteAgg(minute)
         self._agg.add(e_bid, e_ask, h_bid, h_ask)
@@ -178,5 +202,7 @@ class MinuteRecorder:
                     pass
         finally:
             self.close()
-            log.info("recorder stopped — %d minute row(s) written to %s",
-                     self.rows_written, self.path)
+            skipped = (f", {self.skipped_wide} wide-spread sample(s) skipped"
+                       if self.skipped_wide else "")
+            log.info("recorder stopped — %d minute row(s) written to %s%s",
+                     self.rows_written, self.path, skipped)

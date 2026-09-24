@@ -132,15 +132,34 @@ export function createEngineCard({ compact = false } = {}) {
   const eventsCard = h("div", { class: "card" },
     h("h3", { text: t("events.title") }), evlog);
 
+  // maker quotes (rendered only when the engine runs maker mode)
+  const mkQuotes = h("tbody", {});
+  const mkKv = h("div", { class: "kv" });
+  const mkNote = h("div", { class: "note", style: "margin-bottom:6px" });
+  const makerCard = h("div", { class: "card", style: "display:none" },
+    h("h3", { text: t("maker.title") }),
+    mkNote,
+    h("div", { class: "kv" }, mkKv),
+    h("table", { class: "data", style: "margin-top:8px" },
+      h("thead", {}, h("tr", {},
+        h("th", { text: t("maker.side") }),
+        h("th", { text: t("maker.px") }),
+        h("th", { text: t("maker.qty") }),
+        h("th", { text: t("maker.anchor") }),
+        h("th", { text: t("maker.age") }),
+        h("th", { text: "" }))), mkQuotes));
+
   const el = h("div", {},
     header,
     h("div", { class: "grid-2" }, venuesCard, sessionCard),
     signalCard,
+    makerCard,
     h("div", { class: "grid-2" }, tradesCard, eventsCard));
 
   let lastPremium = null;
 
   function update(snap) {
+    if (!snap) return;            // proxy failed (e.g. headless worker)
     // header
     el.querySelector("#pair").textContent =
       `${snap.symbol} × ENTROPY · ${snap.hedge_name ?? "—"}`;
@@ -156,6 +175,7 @@ export function createEngineCard({ compact = false } = {}) {
         "—")));
       kv.replaceChildren();
       dirsBody.replaceChildren();
+      makerCard.style.display = "none";
       return;
     }
 
@@ -258,6 +278,47 @@ export function createEngineCard({ compact = false } = {}) {
           h("td", { class: `num ${fills.length ? cls(sumFill) : "muted"}` },
             fills.length ? fmtUsd(sumFill) : "—"),
           h("td", {})));
+    }
+
+    // maker card (hidden unless the engine runs maker mode)
+    const mk = snap.maker;
+    if (!mk) {
+      makerCard.style.display = "none";
+    } else {
+      makerCard.style.display = "";
+      mkNote.replaceChildren(
+        span("muted", `${mk.maker_venue} → ${mk.hedge_venue} · `),
+        span("muted", `edge ${fmtBps(mk.edge_bps)} + costs ${fmtBps(mk.costs_bps)} · `),
+        span(mk.exposed ? "err" : "muted",
+          mk.exposed ? t("maker.exposed")
+            : (mk.blocked ? `${t("maker.blocked")}: ${mk.blocked}` : "")));
+      mkKv.replaceChildren(
+        h("span", { class: "k", text: t("maker.pending") }),
+        span(`num ${mk.pending_hedge ? "err" : "muted"}`,
+          (mk.pending_hedge > 0 ? "+" : "") + fmtQty(mk.pending_hedge)),
+        h("span", { class: "k", text: t("maker.fills") }),
+        span("num", `${mk.fills} / ${mk.hedges}`),
+        h("span", { class: "k", text: t("maker.fails") }),
+        span(`num ${mk.hedge_failures ? "err" : "muted"}`,
+          String(mk.hedge_failures)));
+      const sides = Object.keys(mk.quotes);
+      if (!sides.length) {
+        mkQuotes.replaceChildren(h("tr", {},
+          h("td", { colspan: "6", class: "muted", text: t("maker.none") })));
+      } else {
+        mkQuotes.replaceChildren(...sides.map(sd => {
+          const q = mk.quotes[sd];
+          const age = span("muted", fmtAge(q.age_sec));
+          return h("tr", {},
+            h("td", { text: sd.toUpperCase() }),
+            h("td", { class: "num", text: fmtPx(q.px) }),
+            h("td", { class: "num", text: fmtQty(q.qty) }),
+            h("td", { class: "num muted", text: fmtPx(q.anchor) }),
+            h("td", { class: "num" }, age),
+            h("td", {}, q.resting ? span("pos", t("maker.resting"))
+                                  : span("muted", t("maker.gone"))));
+        }));
+      }
     }
 
     // events

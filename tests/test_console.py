@@ -16,7 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from entropy_arb.config import load_config  # noqa: E402
 from entropy_arb.console.profiles import ProfilesManager  # noqa: E402
 from entropy_arb.console.secrets import SecretsManager  # noqa: E402
-from entropy_arb.console.supervisor import Supervisor  # noqa: E402
+from entropy_arb.console.supervisor import (Supervisor,  # noqa: E402
+                                            parse_worker_cmdline)
 
 NO_ENV = os.path.join(tempfile.gettempdir(), "entropy-arb-no-such.env")
 
@@ -66,6 +67,38 @@ def test_secrets_roundtrip_and_masking(tmp_path):
     sm.update({"LIGHTER_API_PRIVATE_KEY": ""})
     assert "LIGHTER_API_PRIVATE_KEY" not in env.read_text()
     assert sm.status()["venues"]["lighter"] is False
+
+
+def test_secrets_per_leg_lighter_venues(tmp_path):
+    """The console's live pre-flight must see the per-leg override the same
+    way config.lighter_creds resolves it."""
+    env = tmp_path / ".env"
+    shared = ("LIGHTER_ACCOUNT_INDEX=11111\n"
+              "LIGHTER_API_KEY_INDEX=7\n"
+              "LIGHTER_API_PRIVATE_KEY=0x" + "a" * 80 + "\n")
+    base = ("LIGHTER_BASE_ACCOUNT_INDEX=12345\n"
+            "LIGHTER_BASE_API_KEY_INDEX=3\n"
+            "LIGHTER_BASE_API_PRIVATE_KEY=0x" + "b" * 80 + "\n")
+
+    # only the shared triple: both legs fall back to it
+    env.write_text(shared)
+    sm = SecretsManager(str(env), audit_log=None)
+    st = sm.status()
+    assert st["venues"]["lighter"] is True
+    assert st["venues"]["lighter-base"] is True
+    assert st["venues"]["lighter-hedge"] is True
+
+    # leg-specific base set alongside the shared hedge triple
+    env.write_text(shared + base)
+    st = sm.status()
+    assert st["venues"]["lighter-base"] is True
+    assert st["venues"]["lighter-hedge"] is True
+    assert st["keys"]["LIGHTER_BASE_ACCOUNT_INDEX"]["set"] is True
+
+    # a partial leg-specific triple does not silently pass as complete
+    env.write_text(shared + "LIGHTER_BASE_ACCOUNT_INDEX=12345\n")
+    st = sm.status()
+    assert st["venues"]["lighter-base"] is False
 
 
 # ------------------------------------------------------------- profiles
@@ -128,6 +161,28 @@ def test_profiles_validation_and_crud(tmp_path):
 
 
 # ------------------------------------------------------------- supervisor
+
+def test_worker_cmdline_base_roundtrip(tmp_path):
+    # --base must survive build_argv → parse_worker_cmdline (adoption) so a
+    # lighter-base worker keeps its base across console restarts
+    sup = Supervisor(str(tmp_path), str(tmp_path))
+    from entropy_arb.console.supervisor import Worker as W
+    hl = W("w1", "katana-btc", "BTC", "katana", "record", 8801)
+    argv = sup.build_argv(hl)
+    assert "--base" not in argv                     # hl is the default: omit
+    info = parse_worker_cmdline(argv, str(tmp_path))
+    assert info["base"] == "hl"
+
+    lk = W("w2", "lighter-btc-katana", "BTC", "katana", "record", 8802,
+           base="lighter")
+    argv = sup.build_argv(lk)
+    assert "--base" in argv and argv[argv.index("--base") + 1] == "lighter"
+    info = parse_worker_cmdline(argv, str(tmp_path))
+    assert info["base"] == "lighter"
+    assert info["profile"] == "lighter-btc-katana"
+    assert info["symbol"] == "BTC" and info["hedge"] == "katana"
+    assert info["mode"] == "record"
+
 
 def test_supervisor_lifecycle_with_stub_command(tmp_path):
     async def run():

@@ -1,0 +1,49 @@
+# HL main-dex ZEC vs Katana Perps ZEC-USD — data collection profile.
+#
+# entropy.dex "" selects the MAIN Hyperliquid perp dex (deep BTC book);
+# --hedge katana trades BTC-USD on perps.katana.network (thin, ~1.9bps
+# taker). Thresholds below are placeholders until analyze.py has enough
+# recorded data — --record-only never trades, and band hot-reload picks up
+# new values without a restart.
+thresholds:
+  midline_bps: 0.0
+  upper_bps: 8.0
+  lower_bps: 8.0
+entropy:
+  dex: ""                    # main HL perp dex: bare BTC
+  taker_fee_bps: 4.5         # HL main-dex taker tier 1 / 主dex吃单费
+  max_position_usd: 1000
+  max_orders_per_min: 120
+hedge:
+  symbol: ZEC-USD            # katana names the market with the quote suffix
+  taker_fee_bps: 1.9         # katana market-level taker fee (live: ~1.9)
+  max_position_usd: 1000
+  max_orders_per_min: 30
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 100
+  min_order_notional_usd: 10
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 10
+  hedge_slippage_bps: 20
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+recorder:
+  enabled: true
+  csv: logs/minutes-ZEC-katana.csv
+logging:
+  file: logs/engine-ZEC-katana.log
+  trades_csv: logs/trades-ZEC-katana.csv
+  dashboard: false
+  level: INFO
+auto_band:
+  enabled: false             # enable after analyze.py gives a real midline
+  window_days: 7
+  width_k: 2.5
+  min_width_bps: 5.0

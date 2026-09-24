@@ -1,9 +1,9 @@
 # NBIS (Nebius) vs Lighter mainnet — record-only first, calibrate later
 # 阈值等 24-48h 数据出来后用 Analyzer 校准；RECORD-ONLY 模式下不生效
 thresholds:
-  midline_bps: -2.01
-  upper_bps: 12.97
-  lower_bps: 12.97
+  midline_bps: -4.25
+  upper_bps: 7.24
+  lower_bps: 7.24
 
 entropy:
   dex: io
@@ -44,10 +44,15 @@ logging:
   dashboard: false
   level: INFO
 
-# 分时段 band 自动校准：midline=当前美东时段的7天滚动中位数，
-# 宽度=max(2.5×时段std, 2×实测滑点, 5bps)。由 entropy-autoband.timer 每5分钟执行
+# 分时段 band 自动校准：midline=当前美东时段的3天滚动中位数，
+# 宽度=max(2.0×时段std[半衰期24h], 2×实测滑点[2天内≥5笔完整成交], 5bps)。
+# 由 entropy-autoband.timer 每5分钟执行；引擎日志静默>15分钟则跳过
 auto_band:
   enabled: true
-  window_days: 7
-  width_k: 2.5
+  window_days: 3
+  width_k: 2.0
   min_width_bps: 5.0
+  sigma_halflife_h: 24
+  slip_lookback_days: 2
+  slip_min_fills: 5
+  skip_engine_down_min: 15

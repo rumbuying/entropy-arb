@@ -60,9 +60,10 @@ export function initRuns(pane, shell) {
       acts.appendChild(mk(t("runs.logs_btn"), "", () => logsDialog(w)));
       acts.appendChild(mk(t("runs.restart_btn"), "", () => act(`/api/workers/${w.id}/restart`), w.state !== "running"));
       acts.appendChild(mk(t("runs.stop_btn"), "danger", () => act(`/api/workers/${w.id}/stop`), w.state !== "running"));
+      const isMaker = profiles.find(x => x.name === w.profile)?.maker;
       tr.innerHTML = `
         <td class="num">${w.id}</td>
-        <td>${w.profile}</td>
+        <td>${w.profile}${isMaker ? ' <span class="badge live">MAKER</span>' : ""}</td>
         <td class="num">${w.symbol} / ${w.hedge}</td>
         <td>${t("mode." + (w.mode === "live" ? "live" : "record"))}</td>
         <td><span class="${statusBadgeClass(w.state, w.mode === "record")}">${t("status." + w.state)}</span></td>
@@ -125,8 +126,13 @@ export function initRuns(pane, shell) {
     });
     const sym = document.createElement("input"); sym.type = "text";
     sym.placeholder = t("profiles.symbol_ph");
+    const base = document.createElement("select");
+    ["hl", "lighter", "lighter-rh", "katana"].forEach(v => {
+      const o = document.createElement("option"); o.value = v; o.textContent = v;
+      base.appendChild(o);
+    });
     const hedge = document.createElement("select");
-    ["lighter", "lighter-rh", "tradexyz"].forEach(v => {
+    ["lighter", "lighter-rh", "tradexyz", "katana"].forEach(v => {
       const o = document.createElement("option"); o.value = v; o.textContent = v;
       hedge.appendChild(o);
     });
@@ -148,6 +154,7 @@ export function initRuns(pane, shell) {
       if (p) {
         if (p.symbol) sym.value = p.symbol;
         if (p.hedge) hedge.value = p.hedge;
+        if (p.base) base.value = p.base;
       }
     };
     prof.addEventListener("change", syncMeta);
@@ -165,6 +172,7 @@ export function initRuns(pane, shell) {
     msg.className = "note";
     box.append(rowFor(t("runs.profile"), prof),
                rowFor(t("runs.symbol"), sym),
+               rowFor(t("runs.base") || "base", base),
                rowFor(t("runs.hedge"), hedge),
                rowFor(t("runs.mode"), mode),
                warn, confirm, msg);
@@ -182,7 +190,7 @@ export function initRuns(pane, shell) {
     cancel.addEventListener("click", dlg.close);
     go.addEventListener("click", async () => {
       const body = { profile: prof.value, symbol: sym.value.trim().toUpperCase(),
-                     hedge: hedge.value, mode: mode.value };
+                     base: base.value, hedge: hedge.value, mode: mode.value };
       if (body.mode === "live") {
         if (confirm.value.trim().toUpperCase() !== body.symbol) {
           msg.textContent = t("runs.confirm_symbol") + ": " + body.symbol;

@@ -28,10 +28,21 @@ from typing import Any, Dict, Optional
 import yaml
 from dotenv import load_dotenv
 
+from .maker import MakerParams
+
 HL_API_URL = "https://api.hyperliquid.xyz"
 HL_WS_URL = "wss://api.hyperliquid.xyz/ws"   # official ws — the only HL feed used
 
-HEDGE_VENUES = ("lighter", "lighter-rh", "tradexyz")
+HEDGE_VENUES = ("lighter", "lighter-rh", "tradexyz", "katana")
+
+# venues the BASE (entropy) leg may run on. Historically hard-wired to
+# Hyperliquid; "lighter" unlocks the Lighter-vs-Katana line where the whole
+# edge lives (BASIS-EXPLORE.md: Katana maker + Lighter taker ≈ 0.95bp toll).
+BASE_VENUES = ("hl", "lighter", "lighter-rh", "katana")
+
+# venues that implement the maker contract (maker_capable=True) and may run
+# with maker.enabled — the console pre-flights this at launch
+MAKER_VENUES = ("katana",)
 
 
 @dataclass(frozen=True)
@@ -78,9 +89,26 @@ class HLCreds:
 
 
 @dataclass
+class KatanaCreds:
+    """Katana Perps API credentials: HMAC key/secret for request auth plus
+    the EOA private key whose signature authorizes every order (EIP-712).
+    The wallet address is derived from the private key; KATANA_WALLET
+    overrides it only for exotic setups."""
+    api_key: Optional[str]
+    api_secret: Optional[str]
+    private_key: Optional[str]
+    wallet_address: Optional[str] = None
+
+    @property
+    def complete(self) -> bool:
+        return (bool(self.api_key) and bool(self.api_secret)
+                and bool(self.private_key))
+
+
+@dataclass
 class VenueConf:
     key: str                  # "entropy" | "hedge"
-    kind: str                 # "hl" | "lighter"
+    kind: str                 # "hl" | "lighter" | "katana"
     label: str                # human name for logs, e.g. "ENTROPY", "RH"
     symbol: str
     fee_bps: float
@@ -92,6 +120,8 @@ class VenueConf:
     # lighter
     lighter_profile: Optional[LighterProfile] = None
     lighter_creds: Optional[LighterCreds] = None
+    # katana
+    katana_creds: Optional[KatanaCreds] = None
 
 
 @dataclass
@@ -120,6 +150,7 @@ class Config:
     net_tolerance_base: float
     max_consecutive_errors: int
     rate_limit_pause_sec: float
+    max_signal_edge_bps: float
     staleness_sec: float
     reconcile_sec: float
     venue_probe_sec: float
@@ -127,6 +158,7 @@ class Config:
     # recorder
     recorder_enabled: bool
     recorder_csv: str
+    recorder_max_spread_bps: float
     # logging
     log_level: str
     status_interval_sec: float
@@ -140,6 +172,8 @@ class Config:
     # runtime
     hl_api_url: str = HL_API_URL
     hl_ws_url: str = HL_WS_URL
+    # maker mode (MAKER-DESIGN.md)
+    maker: MakerParams = None
 
     @property
     def creds_complete(self) -> bool:
@@ -148,6 +182,9 @@ class Config:
                 return False
             if v.kind == "lighter" and not (v.lighter_creds
                                             and v.lighter_creds.complete):
+                return False
+            if v.kind == "katana" and not (v.katana_creds
+                                           and v.katana_creds.complete):
                 return False
         return True
 
@@ -162,6 +199,10 @@ _SCHEMA: Dict[str, Any] = {
         "lower_bps": float,
     },
     "entropy": {
+        # symbol: base-leg ticker when it differs from --symbol, e.g.
+        # base "BTC" on Lighter vs hedge "BTC-USD" on Katana. Defaults to
+        # --symbol (mirrors hedge.symbol).
+        "symbol": str,
         "dex": str,
         "taker_fee_bps": float,
         "max_position_usd": float,
@@ -193,6 +234,11 @@ _SCHEMA: Dict[str, Any] = {
         "net_tolerance_base": float,
         "max_consecutive_errors": int,
         "rate_limit_pause_sec": float,
+        # refuse to chase an executable edge this far out (bps, 0 = off):
+        # dislocations far outside the band are almost always a phantom
+        # top-of-book on the thin entropy book — the entry leg never fills
+        # while the hedge leg does
+        "max_signal_edge_bps": float,
         "staleness_sec": float,
         "reconcile_sec": float,
         "venue_probe_sec": float,
@@ -201,6 +247,10 @@ _SCHEMA: Dict[str, Any] = {
     "recorder": {
         "enabled": bool,
         "csv": str,
+        # drop 1s samples whose top-of-book is wider than this (bps of mid);
+        # a lone far-out quote on a thin venue otherwise fabricates a
+        # hundreds-of-bps premium and a phantom executable edge. 0 = off.
+        "max_spread_bps": float,
     },
     "logging": {
         "level": str,
@@ -211,12 +261,41 @@ _SCHEMA: Dict[str, Any] = {
     },
     # session-aware band auto-calibration, driven by tools/auto_band.py:
     # midline = trailing per-ET-session premium median, width = k * session
-    # stdev with a floor derived from measured trade slippage
+    # stdev (optionally recency-weighted) with a floor derived from measured
+    # trade slippage
     "auto_band": {
         "enabled": bool,
         "window_days": float,
         "width_k": float,
         "min_width_bps": float,
+        # recency-weighted session stdev: weight halves every N hours, so a
+        # volatility spike fades out in days rather than window-lengths.
+        # 0 = plain stdev over the whole window
+        "sigma_halflife_h": float,
+        # slippage floor input: its own (shorter) lookback and a minimum
+        # number of complete fills before the floor is trusted at all
+        "slip_lookback_days": float,
+        "slip_min_fills": int,
+        # skip calibrating a profile whose engine log has been idle this
+        # many minutes (engine down); 0 disables the check
+        "skip_engine_down_min": float,
+    },
+    # maker mode (MAKER-DESIGN.md §7): mutually exclusive with the taker
+    # band strategy — when enabled, the band scanner does not run
+    "maker": {
+        "enabled": bool,
+        "edge_bps": float,
+        "costs_bps": float,
+        "requote_bps": float,
+        "requote_sec": float,
+        "size_base": float,
+        "sides": str,
+        "hedge_batch_ms": int,
+        "max_hedge_failures": int,
+        "hedge_retry_sec": float,
+        "interval_sec": float,
+        "trades_csv": str,
+        "selection_csv": str,
     },
     "web": {
         "enabled": bool,
@@ -289,10 +368,52 @@ def _env_i(name: str) -> Optional[int]:
     return int(v) if v not in (None, "") else None
 
 
+def _env_first_s(*names: str) -> Optional[str]:
+    """First name that is set — explicit leg-specific vars beat the shared
+    fallback. Presence is tested with `is not None` so a value like "0" wins
+    instead of falling through."""
+    for n in names:
+        v = _env_s(n)
+        if v is not None:
+            return v
+    return None
+
+
+def _env_first_i(*names: str) -> Optional[int]:
+    """Integer twin of _env_first_s (account index 0 is a valid value)."""
+    for n in names:
+        v = _env_i(n)
+        if v is not None:
+            return v
+    return None
+
+
+def lighter_creds(leg: str) -> LighterCreds:
+    """Credentials for one Lighter leg.
+
+    ``leg`` is "BASE" or "HEDGE". The leg-specific triple
+    (LIGHTER_BASE_* / LIGHTER_HEDGE_*) wins when present; otherwise the shared
+    LIGHTER_* triple is used, so single-account setups need no new variables.
+
+    Why per-leg: the two zkLighter deployments (mainnet chain 304 vs
+    Robinhood chain 466324) are separate accounts with separate API keys.
+    Trading Lighter-mainnet as the base leg while another worker hedges on
+    lighter-rh needs both key sets in the same .env — one shared triple would
+    make the two lines impossible to run side by side.
+    """
+    leg = leg.upper()
+    return LighterCreds(
+        _env_first_i(f"LIGHTER_{leg}_ACCOUNT_INDEX", "LIGHTER_ACCOUNT_INDEX"),
+        _env_first_i(f"LIGHTER_{leg}_API_KEY_INDEX", "LIGHTER_API_KEY_INDEX"),
+        _env_first_s(f"LIGHTER_{leg}_API_PRIVATE_KEY",
+                     "LIGHTER_API_PRIVATE_KEY"))
+
+
 # -------------------------------------------------------------------- loading
 
 def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
-                symbol: str, hedge_venue: str) -> Config:
+                symbol: str, hedge_venue: str,
+                base_venue: str = "hl") -> Config:
     # override=True: .env is the single source of truth. The console spawns
     # workers with an inherited environment that may hold STALE HL_*/LIGHTER_*
     # values (an earlier load_config call mutated the console's os.environ);
@@ -317,6 +438,15 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
         raise ConfigError(
             f"--hedge must be one of {list(HEDGE_VENUES)}, got "
             f"{hedge_venue!r} / --hedge 必须是 {list(HEDGE_VENUES)} 之一")
+    if base_venue not in BASE_VENUES:
+        raise ConfigError(
+            f"--base must be one of {list(BASE_VENUES)}, got {base_venue!r} / "
+            f"--base 必须是 {list(BASE_VENUES)} 之一")
+    if base_venue == hedge_venue:
+        raise ConfigError(
+            f"--base {base_venue!r} and --hedge {hedge_venue!r} are the same "
+            f"deployment — the two legs must be different venues / 两条腿不能"
+            f"是同一个市场")
 
     thr = raw.get("thresholds") or {}
     for k in ("midline_bps", "upper_bps", "lower_bps"):
@@ -335,22 +465,89 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
                           "more than the profitable depth loses money on the "
                           "tail / 必须在 (0, 1] 之间")
 
+    mk = raw.get("maker") or {}
+    maker = MakerParams(
+        enabled=bool(mk.get("enabled", False)),
+        edge_bps=float(mk.get("edge_bps", 2.0)),
+        costs_bps=float(mk.get("costs_bps", 5.5)),
+        requote_bps=float(mk.get("requote_bps", 1.0)),
+        requote_sec=float(mk.get("requote_sec", 30.0)),
+        size_base=float(mk.get("size_base", 0.005)),
+        sides=str(mk.get("sides", "both")),
+        hedge_batch_ms=int(mk.get("hedge_batch_ms", 250)),
+        max_hedge_failures=int(mk.get("max_hedge_failures", 3)),
+        hedge_retry_sec=float(mk.get("hedge_retry_sec", 0.5)),
+        interval_sec=float(mk.get("interval_sec", 0.5)),
+        trades_csv=str(mk.get("trades_csv", "logs/maker-trades.csv")),
+        selection_csv=str(mk.get("selection_csv",
+                                 "logs/maker-selection.csv")))
+    if maker.enabled:
+        if maker.sides not in ("both", "bid", "ask"):
+            raise ConfigError(
+                f"maker.sides must be one of both|bid|ask, got "
+                f"{maker.sides!r}")
+        for name, val in (("edge_bps", maker.edge_bps),
+                          ("costs_bps", maker.costs_bps),
+                          ("requote_bps", maker.requote_bps),
+                          ("requote_sec", maker.requote_sec),
+                          ("size_base", maker.size_base),
+                          ("hedge_retry_sec", maker.hedge_retry_sec),
+                          ("interval_sec", maker.interval_sec)):
+            if val <= 0:
+                raise ConfigError(
+                    f"maker.{name} must be > 0, got {val}")
+        if maker.hedge_batch_ms < 0 or maker.max_hedge_failures < 1:
+            raise ConfigError(
+                "maker.hedge_batch_ms must be >= 0 and "
+                "maker.max_hedge_failures >= 1")
+
     entropy_dex = _get(raw, "entropy", "dex", "io")
-    if hedge_venue == "tradexyz" and entropy_dex == "xyz":
+    if base_venue == "hl" and hedge_venue == "tradexyz" \
+            and entropy_dex == "xyz":
         raise ConfigError("entropy.dex 'xyz' with hedge_venue 'tradexyz' is "
                           "the same market on both legs / 两条腿是同一个市场")
 
-    entropy_hl_creds = HLCreds(_env_s("HL_PRIVATE_KEY"),
-                               _env_s("HL_ACCOUNT_ADDRESS"))
-    entropy = VenueConf(
-        key="entropy", kind="hl", label="ENTROPY",
-        symbol=symbol,
-        fee_bps=float(_get(raw, "entropy", "taker_fee_bps", 0.0)),
-        cap_usd=float(_get(raw, "entropy", "max_position_usd", 1000.0)),
-        orders_per_min=int(_get(raw, "entropy", "max_orders_per_min", 120)),
-        hl_dex=entropy_dex,
-        hl_creds=entropy_hl_creds,
-    )
+    # base-leg ticker override (mirrors hedge.symbol): the two venues may
+    # name the same market differently, e.g. "BTC" on Lighter vs "BTC-USD"
+    # on Katana
+    entropy_symbol = str(_get(raw, "entropy", "symbol", symbol)
+                         or symbol).strip().upper()
+
+    if base_venue == "lighter" or base_venue == "lighter-rh":
+        entropy = VenueConf(
+            key="entropy", kind="lighter",
+            label="LIGHTER" if base_venue == "lighter" else "LIGHTER-RH",
+            symbol=entropy_symbol,
+            fee_bps=float(_get(raw, "entropy", "taker_fee_bps", 0.0)),
+            cap_usd=float(_get(raw, "entropy", "max_position_usd", 1000.0)),
+            orders_per_min=int(_get(raw, "entropy", "max_orders_per_min", 120)),
+            lighter_profile=LIGHTER_PROFILES[base_venue],
+            lighter_creds=lighter_creds("BASE"),
+        )
+    elif base_venue == "katana":
+        entropy = VenueConf(
+            key="entropy", kind="katana", label="KATANA",
+            symbol=entropy_symbol,
+            fee_bps=float(_get(raw, "entropy", "taker_fee_bps", 1.9)),
+            cap_usd=float(_get(raw, "entropy", "max_position_usd", 1000.0)),
+            orders_per_min=int(_get(raw, "entropy", "max_orders_per_min", 30)),
+            katana_creds=KatanaCreds(
+                _env_s("KATANA_API_KEY"),
+                _env_s("KATANA_API_SECRET"),
+                _env_s("KATANA_PRIVATE_KEY"),
+                _env_s("KATANA_WALLET")),
+        )
+    else:
+        entropy = VenueConf(
+            key="entropy", kind="hl", label="ENTROPY",
+            symbol=entropy_symbol,
+            fee_bps=float(_get(raw, "entropy", "taker_fee_bps", 0.0)),
+            cap_usd=float(_get(raw, "entropy", "max_position_usd", 1000.0)),
+            orders_per_min=int(_get(raw, "entropy", "max_orders_per_min", 120)),
+            hl_dex=entropy_dex,
+            hl_creds=HLCreds(_env_s("HL_PRIVATE_KEY"),
+                             _env_s("HL_ACCOUNT_ADDRESS")),
+        )
 
     # hedge-leg ticker override: the two venues may name the same market
     # differently (e.g. entropy "ANTH" vs lighter-rh "ANTHROPIC")
@@ -368,6 +565,22 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
                 _env_s("HL_PRIVATE_KEY_XYZ") or _env_s("HL_PRIVATE_KEY"),
                 _env_s("HL_ACCOUNT_ADDRESS_XYZ") or _env_s("HL_ACCOUNT_ADDRESS")),
         )
+    elif hedge_venue == "katana":
+        hedge = VenueConf(
+            key="hedge", kind="katana", label="KATANA",
+            symbol=hedge_symbol,
+            # live market-level taker fee is ~1.9 bps (the API serves the
+            # exact value; the config number stays the explicit source of
+            # truth so a fee change can never silently move the thresholds)
+            fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 1.9)),
+            cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
+            orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 30)),
+            katana_creds=KatanaCreds(
+                _env_s("KATANA_API_KEY"),
+                _env_s("KATANA_API_SECRET"),
+                _env_s("KATANA_PRIVATE_KEY"),
+                _env_s("KATANA_WALLET")),
+        )
     else:
         hedge = VenueConf(
             key="hedge", kind="lighter",
@@ -377,9 +590,7 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
             cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
             orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 30)),
             lighter_profile=LIGHTER_PROFILES[hedge_venue],
-            lighter_creds=LighterCreds(_env_i("LIGHTER_ACCOUNT_INDEX"),
-                                       _env_i("LIGHTER_API_KEY_INDEX"),
-                                       _env_s("LIGHTER_API_PRIVATE_KEY")),
+            lighter_creds=lighter_creds("HEDGE"),
         )
 
     return Config(
@@ -403,12 +614,15 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
         net_tolerance_base=float(_get(raw, "execution", "net_tolerance_base", 0.001)),
         max_consecutive_errors=int(_get(raw, "execution", "max_consecutive_errors", 3)),
         rate_limit_pause_sec=float(_get(raw, "execution", "rate_limit_pause_sec", 10.0)),
+        max_signal_edge_bps=float(_get(raw, "execution", "max_signal_edge_bps", 0.0)),
         staleness_sec=float(_get(raw, "execution", "staleness_sec", 10.0)),
         reconcile_sec=float(_get(raw, "execution", "reconcile_sec", 15.0)),
         venue_probe_sec=float(_get(raw, "execution", "venue_probe_sec", 30.0)),
         http_keepalive_sec=float(_get(raw, "execution", "http_keepalive_sec", 10.0)),
         recorder_enabled=bool(_get(raw, "recorder", "enabled", True)),
         recorder_csv=_get(raw, "recorder", "csv", "logs/minutes.csv"),
+        recorder_max_spread_bps=float(
+            _get(raw, "recorder", "max_spread_bps", 50.0)),
         log_level=str(_get(raw, "logging", "level", "INFO")).upper(),
         status_interval_sec=float(_get(raw, "logging", "status_interval_sec", 30.0)),
         trades_csv=_get(raw, "logging", "trades_csv", "logs/trades.csv"),
@@ -417,4 +631,5 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
         web_enabled=bool(_get(raw, "web", "enabled", False)),
         web_host=str(_get(raw, "web", "host", "127.0.0.1")),
         web_port=int(_get(raw, "web", "port", 8787)),
+        maker=maker,
     )

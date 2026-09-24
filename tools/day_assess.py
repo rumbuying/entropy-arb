@@ -6,14 +6,14 @@ lines, with date inference since log lines only carry time-of-day), joins it
 with the 1-minute recorder CSVs, and measures how close the executable edge
 came to the actual firing hurdles (band + fees + inventory ladder + caps).
 """
-import csv, re, sys, math
+import csv, os, re, sys, math
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 LOGS = "/root/code/entropy/logs"
 BEIJING = ZoneInfo("Asia/Shanghai")
 UTC = timezone.utc
-NOW = datetime(2026, 9, 18, 11, 3, tzinfo=UTC)  # analysis time
+NOW = datetime.now(UTC)  # analysis time
 
 ENGINES = {
     "ANTH": dict(log=f"{LOGS}/engine-ANTH-lighter-rh.log",
@@ -44,8 +44,10 @@ RE_WARN = re.compile(r"^(\d\d):(\d\d):(\d\d)\.\d+ +(WARNING|ERROR)")
 
 
 def parse_log(path):
-    """Return list of (utc_dt, kind, data). Log lines use local CST (UTC+8)."""
-    events, prev_sec, day_shift = [], None, 0
+    """Return list of (utc_dt, kind, data). Log lines carry time-of-day only
+    (Beijing local); the file's mtime anchors the LAST day, and midnight
+    wraps are counted while scanning."""
+    raw_events, prev_sec, day_shift = [], None, 0
     with open(path) as fh:
         for line in fh:
             m = RE_STATUS.match(line)
@@ -76,11 +78,16 @@ def parse_log(path):
             if prev_sec is not None and sec < prev_sec - 6 * 3600:
                 day_shift += 1        # t.o.d. jumped back > 6h -> new day
             prev_sec = sec
-            # log stamps are Beijing local; anchor at 2026-09-17 00:00 CST
-            base = datetime(2026, 9, 17, 0, 0, tzinfo=BEIJING)
-            dt = (base + timedelta(days=day_shift, seconds=sec)).astimezone(UTC)
-            events.append((dt, kind, data))
-    return events
+            raw_events.append((day_shift, sec, kind, data))
+    if not raw_events:
+        return []
+    # anchor: midnight Beijing of the log's last modified day, walked back
+    # by the number of midnight wraps seen while scanning
+    mtime = os.path.getmtime(path)
+    base = datetime.fromtimestamp(mtime, BEIJING).replace(
+        hour=0, minute=0, second=0, microsecond=0) - timedelta(days=day_shift)
+    return [((base + timedelta(days=ds, seconds=sec)).astimezone(UTC),
+             kind, data) for ds, sec, kind, data in raw_events]
 
 
 def band_timeline(events):
@@ -134,6 +141,10 @@ def analyze(name, cfg):
         last_px = (float(rows[-1]["entropy_bid"]) + float(rows[-1]["entropy_ask"])) / 2
 
     print("=" * 100)
+    if cur_band is None:
+        print(f"[{name}]  log empty or engine down (last rows: "
+              f"{rows[-1]['time_utc'] if rows else 'none'}) — nothing to assess")
+        return
     print(f"[{name}]  band now: mid={cur_band[0]}  band=[{cur_band[1]:.2f}, {cur_band[2]:.2f}]"
           f"  taker fees total={fee} bps   pos_entropy={pos_e}")
     if pos_e is not None and last_px:
@@ -150,10 +161,14 @@ def analyze(name, cfg):
         gaps = [(b - a).total_seconds() for a, b in zip(status_dts, status_dts[1:])]
         print(f"       status cadence: max gap {max(gaps):.0f}s (staleness/health check)")
 
-    # today's minutes (UTC 2026-09-18 00:00 -> now) == Beijing daytime 08:00 ->
-    today = [r for r in rows if r["time_utc"] >= "2026-09-18" and r["time_utc"] <= "2026-09-18T11:03"]
-    week = [r for r in rows if r["time_utc"] >= "2026-09-11"]
-    print(f"       minutes today (UTC 00:00-11:03): {len(today)}   7d rows: {len(week)}")
+    # recent minutes: since UTC midnight, and the trailing 7 days
+    today_str = NOW.strftime("%Y-%m-%d")
+    now_str = NOW.strftime("%Y-%m-%dT%H:%M")
+    week_str = (NOW - timedelta(days=7)).strftime("%Y-%m-%d")
+    today = [r for r in rows if today_str <= r["time_utc"] <= now_str]
+    week = [r for r in rows if r["time_utc"] >= week_str]
+    print(f"       minutes today (UTC {today_str} 00:00-{NOW.strftime('%H:%M')}): "
+          f"{len(today)}   7d rows: {len(week)}")
 
     if not today:
         print("       !! no minute rows today — recorder gap?")
@@ -190,10 +205,8 @@ def analyze(name, cfg):
         near.append((min(m_hi, m_lo), r["time_utc"], "sell" if m_hi < m_lo else "buy"))
 
     near.sort()
-    skips_today = sum(1 for dt, k, d in events
-                      if k == "skip" and dt.date() == datetime(2026, 9, 18, tzinfo=UTC).date())
-    arb_today = sum(1 for dt, k, _ in events
-                    if k == "arb" and dt.date() == datetime(2026, 9, 18, tzinfo=UTC).date())
+    skips_today = sum(1 for dt, k, d in events if k == "skip" and dt.date() == NOW.date())
+    arb_today = sum(1 for dt, k, _ in events if k == "arb" and dt.date() == NOW.date())
     print(f"       minutes whose 1s-sampled extreme CROSSED the base hurdle: "
           f"sell {crossed_sell} / buy {crossed_buy} of {len(today)}   "
           f"| engine [ARB] fires today: {arb_today}, cap-blocked/deferred signals today: {skips_today}")

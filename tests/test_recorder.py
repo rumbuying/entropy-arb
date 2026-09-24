@@ -67,6 +67,48 @@ def test_stale_books_are_skipped():
     assert not os.path.exists(path)    # no row, no file
 
 
+def test_wide_spread_samples_are_skipped():
+    """A lone far-out quote must not fabricate a premium/edge."""
+    e_book, h_book = OrderBook(), OrderBook()
+    path = os.path.join(tempfile.mkdtemp(), "minutes.csv")
+    rec = MinuteRecorder(path, e_book, h_book, staleness_sec=1e9,
+                         max_spread_bps=50.0)
+    set_book(e_book, 100.0, 100.02)
+    set_book(h_book, 100.0, 107.0)      # hedge ask ~690 bps away (rogue)
+    rec.sample(1_700_000_000.0)
+    rec.close()
+    assert rec.rows_written == 0
+    assert rec.skipped_wide == 1
+    assert not os.path.exists(path)
+
+    # the same book with the guard off is recorded (old behaviour)
+    path2 = os.path.join(tempfile.mkdtemp(), "minutes.csv")
+    rec2 = MinuteRecorder(path2, e_book, h_book, staleness_sec=1e9)
+    rec2.sample(1_700_000_000.0)
+    rec2.close()
+    assert rec2.rows_written == 1
+
+
+def test_wide_sample_does_not_poison_the_minute():
+    """One bad second is dropped; the sane seconds still form the bar."""
+    e_book, h_book = OrderBook(), OrderBook()
+    path = os.path.join(tempfile.mkdtemp(), "minutes.csv")
+    rec = MinuteRecorder(path, e_book, h_book, staleness_sec=1e9,
+                         max_spread_bps=50.0)
+    set_book(e_book, 100.09, 100.11)    # mid 100.10
+    set_book(h_book, 100.0, 107.0)      # rogue ask
+    rec.sample(1_700_000_000.0)
+    set_book(h_book, 99.99, 100.01)     # mid 100.00, same minute
+    rec.sample(1_700_000_010.0)
+    rec.close()
+    with open(path, newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 1
+    assert int(rows[0]["samples"]) == 1
+    assert abs(float(rows[0]["premium_close_bps"]) - 10.0) < 0.2
+    assert rec.skipped_wide == 1
+
+
 def test_append_keeps_single_header():
     e_book, h_book = OrderBook(), OrderBook()
     path = os.path.join(tempfile.mkdtemp(), "minutes.csv")

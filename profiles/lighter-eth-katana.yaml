@@ -1,0 +1,80 @@
+# Lighter(mainnet) ↔ Katana Perps — ETH 线（base 腿解耦后新增）
+#
+#   record-only:  python3 main.py --config profiles/lighter-eth-katana.yaml \
+#                     --symbol ETH --base lighter --hedge katana --record-only
+#   live (maker): 在上面基础上启用文件末尾的 maker 块
+#
+# 选 ETH 的依据（44.5h 全量实测，见 logs/minutes-ETH-lighter-vs-katana.csv）：
+#   溢价 median +2.19 / sd 1.55bp，回归半衰期 ~15min
+#   maker 结构真实往返成本 ≈ 1.47bp（KAT maker 0.475×2 + Lighter taker 0 + Lighter 点差 0.52）
+#   → sd/成本 1.06；KAT OI $411k（BTC 的 2.5 倍、HYPE 的 20 倍）→ 唯一能上量的标的
+#   回测（maker 成本）：~42bp/天；$15k clip 约 $63/天毛（打五折 ~$32/天）
+thresholds:
+  # 占位值，由 auto_band 每 5 分钟用采集数据校准；maker 模式不使用该 midline
+  midline_bps: 2.81
+  upper_bps: 5
+  lower_bps: 5
+
+entropy:
+  symbol: ETH                # Lighter mainnet 的命名
+  taker_fee_bps: 0.0         # 实测 /api/v1/orderBooks: taker=maker=0
+  max_position_usd: 3000     # 首跑保守档（KAT OI $411k，可放大到 $10k+）
+  max_orders_per_min: 120
+
+hedge:
+  symbol: ETH-USD            # katana 带 -USD 后缀
+  taker_fee_bps: 1.9         # 实测 0.00019；maker 为 0.475
+  max_position_usd: 3000
+  max_orders_per_min: 30
+
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 150
+  min_order_notional_usd: 10
+
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 10
+  hedge_slippage_bps: 10
+  max_signal_edge_bps: 20    # 幻影过滤：ETH 点差仅 0.52/0.74bp，>20bp 的偏离基本不可成交
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+
+recorder:
+  enabled: true
+  csv: logs/minutes-ETH-lighter-katana.csv
+
+logging:
+  file: logs/engine-ETH-lighter-katana.log
+  trades_csv: logs/trades-ETH-lighter-katana.csv
+  dashboard: false
+  level: INFO
+
+auto_band:
+  enabled: true
+  window_days: 7
+  width_k: 2.5
+  min_width_bps: 5.0
+  sigma_halflife_h: 24
+  slip_lookback_days: 2
+  slip_min_fills: 5
+  skip_engine_down_min: 15
+
+# maker 模式 = 目标结构（Katana 挂单 + Lighter 吃单对冲，往返 ~0.95bp）
+# 先 record-only 攒够数据、确认 KATANA/LIGHTER_BASE 凭证与两端保证金后再启用
+#
+# maker:
+#   enabled: true
+#   edge_bps: 1.0            # 目标锁定净边际
+#   costs_bps: 1.0           # KAT maker 0.475 + Lighter taker 0 + 对冲滑点 ~0.5
+#   requote_bps: 1.0
+#   requote_sec: 20
+#   size_base: 0.05          # ~$135 @ $2700
+#   sides: both
+#   hedge_batch_ms: 250

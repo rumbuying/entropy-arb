@@ -3,13 +3,16 @@
 **[中文文档 / Chinese documentation → README.zh-CN.md](README.zh-CN.md)**
 
 Open-source two-venue perp arbitrage bot. One leg is always **Entropy**
-(the `io` builder dex on Hyperliquid); the other leg — the hedge — is one of:
+(the `io` builder dex on Hyperliquid, or the main HL perp dex via
+`entropy.dex: ""` for the deep crypto majors); the other leg — the hedge —
+is one of:
 
 | `--hedge` | venue | quote | taker fee | protocol |
 |---|---|---|---|---|
 | `lighter` | Lighter mainnet | USDC | 0 bps | zkLighter ws (diff books, async settle) |
 | `lighter-rh` | Lighter Robinhood chain | **USDG** | 0 bps | zkLighter ws |
 | `tradexyz` | Hyperliquid trade.xyz dex | USDC | ~1 bps | HL l2Book, sync IOC settle |
+| `katana` | Katana Perps (perps.katana.network) | USDC | ~1.9 bps | REST snapshot + l2orderbook ws diffs, sync IOC settle. Crypto majors only (BTC/ETH/SOL/…) — pair with `entropy.dex: ""` |
 
 > **Referral links** — signing up through these supports this project:
 > - Entropy — Tier 4 referral, 100% rebates: <https://entropy.io/?r=yourquantguy>
@@ -78,7 +81,7 @@ cp .env.example .env                     # credentials — required to trade
 
 The markets are **not** in the config file — you state them explicitly on
 every start: `--symbol` (traded on both venues) and `--hedge` (one of
-`lighter`, `lighter-rh`, `tradexyz`; Entropy is always the
+`lighter`, `lighter-rh`, `tradexyz`, `katana`; Entropy is always the
 other leg).
 
 There is **no paper mode** — the bot either collects data (`--record-only`)
@@ -156,6 +159,19 @@ choice in a sidecar JSON and refuses a LIVE start while credentials for the
 chosen venues are incomplete. Binding a non-loopback host requires a token
 (`--token`, or one is generated and printed).
 
+## Maker mode
+
+`maker.enabled: true` in `config.yaml` switches to the maker strategy: rest
+**post-only quotes** on the hedge venue (`--hedge katana`), anchored to the
+base leg's (HL) **executable prices** plus `costs_bps + edge_bps`, and hedge
+every fill instantly on the base leg (aggregated within `hedge_batch_ms`) —
+locking premium-minus-costs per fill. Inventory unwinds through the opposite
+quote; past `floor_frac` of the cap the adding side reprices itself more
+conservatively. Safety: a blind or disconnected hedge leg clears every
+resting quote within one tick; repeated hedge failures halt quoting (EXPOSED).
+**Mutually exclusive** with the taker band strategy. Full design, parameters
+and evaluation metrics: [MAKER-DESIGN.md](MAKER-DESIGN.md).
+
 ## Data collection & analysis
 
 The recorder runs automatically in every mode (`recorder.enabled: true`).
@@ -197,7 +213,7 @@ errors), credentials in `.env`, and the markets on the command line
 | `inventory.scale_bps` / `floor_frac` | inventory ladder (extra bps past `floor_frac` of the cap) | 10 / 0.5 |
 | `execution.premium_persist_sec` | edge must persist before firing | 0.3 |
 | `execution.*` | slippage bounds, timeouts, reconcile cadence… | see file |
-| `recorder.*` | minute-data recorder | on, `logs/minutes.csv` |
+| `recorder.*` | minute-data recorder (`max_spread_bps` drops phantom wide books) | on, `logs/minutes.csv`, 50 bps |
 | `logging.dashboard` / `logging.file` | Rich dashboard on a tty; log file while it runs | on, `logs/engine.log` |
 | `web.enabled` / `host` / `port` | engine-served read-only web overview (or `--web`) | off, `127.0.0.1:8787` |
 
@@ -213,13 +229,21 @@ errors), credentials in `.env`, and the markets on the command line
   `LIGHTER_API_PRIVATE_KEY`, registered on the **same deployment** as your
   `--hedge` flag (mainnet and the Robinhood chain are separate accounts and
   keys — see [lighter-python](https://github.com/elliottech/lighter-python)).
+- **Katana Perps** — create an API key with Trade scope at
+  <https://perps.katana.network/wallet/api-keys/login>.
+  `KATANA_API_KEY` / `KATANA_API_SECRET` sign every request (the secret is
+  shown ONCE at creation); `KATANA_PRIVATE_KEY` is the EOA wallet key that
+  owns the Katana Perps deposit and EIP-712-signs every order;
+  `KATANA_WALLET` is optional (derived from the key). Note: Katana lists
+  crypto majors only and its books are thin — collect data with
+  `--record-only` first and start from minimal caps.
 
 ## How execution works
 
 - Both legs are **taker** orders sent concurrently: Lighter market orders
   with average-price protection settling on the authenticated account
-  websocket; Hyperliquid IOC limits settling synchronously (with
-  orderStatus polling for unknown outcomes).
+  websocket; Hyperliquid and Katana IOC limits settling synchronously (with
+  orderStatus polling / reconcile escalation for unknown outcomes).
 - A **persistence gate** (`premium_persist_sec`) arms each direction and only
   fires if the edge survives — one-tick phantoms are filtered.
 - **Inventory ladder**: past `floor_frac` of a venue's cap, adding to the
@@ -240,9 +264,10 @@ errors), credentials in `.env`, and the markets on the command line
 main.py                  entry point (--record-only, or live by default)
 entropy_arb/config.py    YAML + .env contract, validation
 entropy_arb/book.py      order books + fee-aware crossing/sizing math
-entropy_arb/feeds.py     official HL ws + zkLighter ws book feeds
+entropy_arb/feeds.py     official HL ws + zkLighter ws + Katana ws book feeds
 entropy_arb/venue_hl.py  Hyperliquid dex adapter (Entropy, tradexyz)
 entropy_arb/venue_lighter.py  zkLighter adapter (mainnet, Robinhood chain)
+entropy_arb/venue_katana.py   Katana Perps adapter (HMAC + EIP-712)
 entropy_arb/engine.py    the two-venue strategy loop
 entropy_arb/dashboard.py Rich terminal dashboard
 entropy_arb/recorder.py  1-minute orderbook bars

@@ -20,10 +20,27 @@ STATE=$ROOT/logs/.watchdog-active
 LOGF=$ROOT/logs/watchdog.log
 [ -f /etc/default/entropy-watchdog ] && . /etc/default/entropy-watchdog
 # 控制台若启用了 token（systemd unit 的 --token），探测请求必须带上：
-# 否则 /api/* 一律 401，watchdog 会永久误报 console-down 并漏掉真实告警
-TOKEN=$(grep -oP '(?<=--token )\S+' /etc/systemd/system/entropy-console.service \
-        2>/dev/null || true)
-AUTH=""; [ -n "${TOKEN:-}" ] && AUTH="?token=${TOKEN}"
+# 否则 /api/* 一律 401，watchdog 会永久误报 console-down 并漏掉真实告警。
+# 解析顺序（unit 用 EnvironmentFile 注入时，grep '--token' 只能抓到字面量
+# ${ENTROPY_CONSOLE_TOKEN}，那不是真 token —— 2026-09-20 → 09-24 就是这样
+# 卡在 console-down，期间所有 HALT/断连/崩溃都不告警）：
+#   1. 环境变量 ENTROPY_CONSOLE_TOKEN（/etc/default/entropy-watchdog）
+#   2. unit 的 EnvironmentFile 里的 ENTROPY_CONSOLE_TOKEN
+#   3. unit 命令行里写死的 --token（旧写法）
+TOKEN="${ENTROPY_CONSOLE_TOKEN:-}"
+if [ -z "$TOKEN" ]; then
+  ENVF=$(grep -oP '(?<=^EnvironmentFile=).*' \
+           /etc/systemd/system/entropy-console.service 2>/dev/null | head -1)
+  if [ -n "${ENVF:-}" ] && [ -f "$ENVF" ]; then
+    TOKEN=$(grep -oP '(?<=^ENTROPY_CONSOLE_TOKEN=).*' "$ENVF" | head -1)
+  fi
+fi
+if [ -z "$TOKEN" ]; then
+  TOKEN=$(grep -oP '(?<=--token )\S+' \
+            /etc/systemd/system/entropy-console.service 2>/dev/null || true)
+  case "$TOKEN" in *'${'*) TOKEN="";; esac   # 变量引用不是 token
+fi
+[ -n "$TOKEN" ] || echo "watchdog: no console token resolved — /api/* will 401" >&2
 mkdir -p "$ROOT/logs"
 touch "$STATE"
 

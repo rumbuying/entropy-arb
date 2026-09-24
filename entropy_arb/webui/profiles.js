@@ -34,15 +34,36 @@ const FIELDS = [
   { path: "logging.trades_csv", type: "text", sec: 4 },
   { path: "logging.dashboard", type: "bool", sec: 4 },
   { path: "logging.level", type: "text", sec: 4 },
+  // ⑥ maker mode (MAKER-DESIGN.md) — mutually exclusive with the band strategy
+  { path: "maker.enabled", type: "bool", sec: 5 },
+  { path: "maker.edge_bps", type: "number", step: "0.5", sec: 5 },
+  { path: "maker.costs_bps", type: "number", step: "0.5", sec: 5 },
+  { path: "maker.requote_bps", type: "number", step: "0.5", sec: 5 },
+  { path: "maker.requote_sec", type: "number", step: "5", sec: 5 },
+  { path: "maker.size_base", type: "number", step: "0.001", sec: 5 },
+  { path: "maker.sides", type: "text", sec: 5 },
+  { path: "maker.hedge_batch_ms", type: "number", step: "50", sec: 5 },
+  { path: "maker.max_hedge_failures", type: "number", step: "1", sec: 5 },
+  { path: "maker.hedge_retry_sec", type: "number", step: "0.1", sec: 5 },
+  { path: "maker.interval_sec", type: "number", step: "0.1", sec: 5 },
+  { path: "maker.trades_csv", type: "text", sec: 5 },
+  { path: "maker.selection_csv", type: "text", sec: 5 },
 ];
 const SECTION_KEYS = ["profiles.group.thresholds", "profiles.group.sizing",
   "profiles.group.inventory", "profiles.group.execution",
-  "profiles.group.recorder"];
+  "profiles.group.recorder", "profiles.group.maker"];
+// mirrors MakerParams (entropy_arb/maker.py) — keep in sync
+const MAKER_DEFAULTS = { enabled: false, edge_bps: 2.0, costs_bps: 5.5,
+  requote_bps: 1.0, requote_sec: 30, size_base: 0.005, sides: "both",
+  hedge_batch_ms: 250, max_hedge_failures: 3, hedge_retry_sec: 0.5,
+  interval_sec: 0.5, trades_csv: "logs/maker-trades.csv",
+  selection_csv: "logs/maker-selection.csv" };
 
 export function initProfiles(pane, shell) {
   let profiles = [];
   let current = null;          // profile name
   let dirty = false;
+  let lastLoaded = null;       // parsed yaml as last loaded (for lossless save)
   const listeners = [];
 
   const layout = document.createElement("div");
@@ -82,7 +103,7 @@ export function initProfiles(pane, shell) {
     const sym = document.createElement("input"); sym.type = "text";
     sym.placeholder = t("profiles.symbol_ph"); sym.style.textTransform = "uppercase";
     const hedge = document.createElement("select");
-    ["lighter", "lighter-rh", "tradexyz"].forEach(v => {
+    ["lighter", "lighter-rh", "tradexyz", "katana"].forEach(v => {
       const o = document.createElement("option"); o.value = v; o.textContent = v;
       hedge.appendChild(o);
     });
@@ -201,7 +222,7 @@ export function initProfiles(pane, shell) {
     for (const p of ul) {
       const b = document.createElement("button");
       b.textContent = `${p.name}${p.symbol ? ` · ${p.symbol}/${p.hedge}` : ""}` +
-        (p.running ? " ●" : "");
+        (p.maker ? " ⚡MAKER" : "") + (p.running ? " ●" : "");
       if (p.name === current) b.classList.add("active");
       b.addEventListener("click", () => select(p.name));
       nav.appendChild(b);
@@ -222,6 +243,10 @@ export function initProfiles(pane, shell) {
     inputs.get("__symbol").value = p.symbol || "";
     inputs.get("__hedge").value = p.hedge || "lighter-rh";
     const obj = parseYaml(p.yaml);
+    // seed maker defaults so a profile without a maker block never saves an
+    // accidental enabled:true (bool selects default to their first option)
+    obj.maker = Object.assign({}, MAKER_DEFAULTS, obj.maker || {});
+    lastLoaded = JSON.parse(JSON.stringify(obj));
     for (const [path, input] of inputs) {
       if (path.startsWith("__")) continue;
       const v = path.split(".").reduce((o, k) => (o || {})[k], obj);
@@ -234,7 +259,9 @@ export function initProfiles(pane, shell) {
   }
 
   function collect() {
-    const obj = {};
+    // start from the profile as loaded so keys outside the form survive the
+    // save (auto_band, web, net_tolerance_base, comments are lost by design)
+    const obj = lastLoaded ? JSON.parse(JSON.stringify(lastLoaded)) : {};
     const flat = {};
     for (const [path, input] of inputs) {
       if (path.startsWith("__")) continue;

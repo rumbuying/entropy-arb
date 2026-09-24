@@ -77,6 +77,10 @@ async def amain(args) -> None:
     audit = audit_writer("logs/console.log")
     supervisor = Supervisor(root, args.profiles_dir,
                             port_range=(args.base_port, args.base_port + 198))
+    adopted = supervisor.adopt_running()
+    if adopted:
+        print(f"re-adopted {adopted} running worker(s) from the previous "
+              f"console — they were never stopped", flush=True)
     profiles = ProfilesManager(args.profiles_dir, args.env_file, audit_log=audit)
     secrets = SecretsManager(args.env_file, audit_log=audit)
     token = resolve_token(args)

@@ -30,8 +30,11 @@ Environment=PYTHONUNBUFFERED=1
 TimeoutStopSec=45
 Restart=on-failure
 RestartSec=3
-# 控制台退出时会先优雅停止所有它启动的 worker（supervisor.shutdown）
-KillMode=control-group
+# 控制台只是控制面：重启/崩溃时 worker（实盘引擎）必须存活。
+# KillMode=process 只杀控制台主进程；新控制台启动时会自动收养（adopt）
+# 存活的 worker 并重新纳管。不要改回 control-group——那会在控制台重启时
+# 连带杀掉所有实盘引擎。
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target
