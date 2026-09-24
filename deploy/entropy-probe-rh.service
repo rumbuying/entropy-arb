@@ -18,6 +18,9 @@
 #
 # 改标的 = 改 ExecStart 的 --symbols，然后
 #   systemctl daemon-reload && systemctl restart entropy-probe-rh
+#
+# 注意：lighter-rh **没有 DOGE 市场**（orderBooks 里不存在），所以这里只列 5 个
+# 标的；主网 probe 的 DOGE 在 rh 路线上无法配对。
 
 [Unit]
 Description=entropy-arb cross-venue basis probe (Lighter-RH vs Katana)
@@ -29,7 +32,7 @@ Type=simple
 WorkingDirectory=/root/code/entropy
 ExecStart=/usr/bin/python3.11 tools/basis_probe.py \
     --a lighter-rh --b katana \
-    --symbols BTC,ETH,SOL,ZEC,HYPE,DOGE
+    --symbols BTC,ETH,SOL,ZEC,HYPE
 Environment=PYTHONUNBUFFERED=1
 StandardOutput=append:/root/code/entropy/logs/probe-lighter-rh-vs-katana.log
 StandardError=append:/root/code/entropy/logs/probe-lighter-rh-vs-katana.log
