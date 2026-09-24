@@ -29,7 +29,7 @@ Type=simple
 WorkingDirectory=/root/code/entropy
 ExecStart=/usr/bin/python3.11 tools/basis_probe.py \
     --a lighter-rh --b katana \
-    --symbols ETH,HYPE,BTC
+    --symbols BTC,ETH,SOL,ZEC,HYPE,DOGE
 Environment=PYTHONUNBUFFERED=1
 StandardOutput=append:/root/code/entropy/logs/probe-lighter-rh-vs-katana.log
 StandardError=append:/root/code/entropy/logs/probe-lighter-rh-vs-katana.log
