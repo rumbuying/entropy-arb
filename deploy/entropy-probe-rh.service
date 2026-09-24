@@ -1,0 +1,40 @@
+# entropy-arb cross-venue basis probe — Lighter-RH (Robinhood chain) vs Katana
+#
+# 为什么单独一路：现有 entropy-probe 采的是 **Lighter 主网** ↔ Katana。若把
+# 基准腿换成 lighter-rh（已有账户、无需主网资金），基差行为必须单独实测——
+# 实测 rh ETH 相对主网 ETH 中位 +4.17bp、sd 1.31bp，两者并不同步，主网数据
+# 不能直接迁移。
+#
+# 与主网 probe 的关键区别：写**不同**的 CSV（minutes-<SYM>-lighter-rh-vs-katana.csv），
+# 因此两个进程不会交错追加同一文件。
+#
+# 安装（root）:
+#   cp deploy/entropy-probe-rh.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now entropy-probe-rh
+#
+# 查看:  systemctl status entropy-probe-rh
+#        tail -f /root/code/entropy/logs/probe-lighter-rh-vs-katana.log
+# 产出:  logs/minutes-<SYM>-lighter-rh-vs-katana.csv
+#
+# 改标的 = 改 ExecStart 的 --symbols，然后
+#   systemctl daemon-reload && systemctl restart entropy-probe-rh
+
+[Unit]
+Description=entropy-arb cross-venue basis probe (Lighter-RH vs Katana)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/code/entropy
+ExecStart=/usr/bin/python3.11 tools/basis_probe.py \
+    --a lighter-rh --b katana \
+    --symbols ETH,HYPE,BTC
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=append:/root/code/entropy/logs/probe-lighter-rh-vs-katana.log
+StandardError=append:/root/code/entropy/logs/probe-lighter-rh-vs-katana.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
