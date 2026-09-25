@@ -127,6 +127,34 @@ def quote_prices(hedge_bid, hedge_ask, costs_bps: float, edge_bps: float,
     return bid, ask
 
 
+def clamp_to_maker_book(bid_px, ask_px, *, maker_bid, maker_ask, tick,
+                        hedge_bid, hedge_ask, costs_bps):
+    """Keep post-only quotes on the correct side of the MAKER venue's touch.
+
+    The quotes are anchored to the HEDGE venue's executable prices, which is
+    right economically but assumes both venues trade near the same price. On a
+    pair with a persistent basis (Lighter-RH sits ~6-10bp above Katana) the
+    hedge-anchored price can land beyond the maker venue's touch, where GTX
+    rejects it outright (LIMIT_PRICE_CROSSES_SPREAD) — and retrying the same
+    price every tick also burns the venue's order budget.
+
+    So clamp each side just inside the touch, then drop the side when the
+    clamped price no longer covers costs: not quoting beats quoting a loser.
+    Returns (bid_px | None, ask_px | None)."""
+    cost = costs_bps / 1e4
+    if not (maker_bid and maker_ask and tick):
+        return bid_px, ask_px
+    if bid_px is not None:
+        bid_px = min(bid_px, maker_ask - tick)
+        if not (bid_px > 0 and hedge_bid / bid_px - 1.0 >= cost):
+            bid_px = None
+    if ask_px is not None:
+        ask_px = max(ask_px, maker_bid + tick)
+        if not (ask_px / hedge_ask - 1.0 >= cost):
+            ask_px = None
+    return bid_px, ask_px
+
+
 def requote_reason(*, remaining: float, size: float, anchor_now,
                    anchor_quoted, requote_bps: float, age_sec: float,
                    requote_sec: float, skew_now: float, skew_quoted: float,

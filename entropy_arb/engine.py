@@ -26,8 +26,8 @@ import aiohttp
 
 from .book import ArbPlan, floor_step, plan_arb
 from .config import Config, read_band
-from .maker import (FillEvent, MakerQuote, inventory_skew_bps, quote_prices,
-                    requote_reason)
+from .maker import (FillEvent, MakerQuote, clamp_to_maker_book,
+                    inventory_skew_bps, quote_prices, requote_reason)
 from .recorder import MinuteRecorder
 from .venue_hl import HLVenue
 from .venue_katana import KatanaVenue
@@ -813,6 +813,12 @@ class Engine:
                                   self.cfg.inventory_floor_frac)
         bid_px, ask_px = quote_prices(hbid, hask, cfg.costs_bps,
                                       cfg.edge_bps, skew)
+        # keep both sides inside the maker venue's own touch (a basis-heavy
+        # pair otherwise computes a price that GTX rejects as crossing)
+        bid_px, ask_px = clamp_to_maker_book(
+            bid_px, ask_px, maker_bid=mk.book.best_bid(),
+            maker_ask=mk.book.best_ask(), tick=mk.tick_size,
+            hedge_bid=hbid, hedge_ask=hask, costs_bps=cfg.costs_bps)
         live = mk.open_orders()
         anchors = {"bid": (bid_px, hbid), "ask": (ask_px, hask)}
         for side in sides:

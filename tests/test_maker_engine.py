@@ -65,6 +65,28 @@ def test_requote_reason_priorities():
     assert requote_reason(remaining=0.005, **common) is None
 
 
+def test_clamp_keeps_post_only_quotes_inside_the_maker_touch():
+    """A basis-heavy pair (Lighter-RH ~6-10bp above Katana) computes a hedge-
+    anchored price on the far side of the maker venue's touch; GTX rejects it
+    as LIMIT_PRICE_CROSSES_SPREAD and the retry loop burns the order budget."""
+    from entropy_arb.maker import clamp_to_maker_book
+    common = dict(maker_bid=91.69, maker_ask=91.72, tick=0.01,
+                  hedge_bid=91.756, hedge_ask=91.773, costs_bps=1.5)
+    # computed bid 91.7285 crosses Katana's ask 91.72 → clamped just below it
+    bid, ask = clamp_to_maker_book(91.7285, 91.8005, **common)
+    assert bid == 91.71 and bid < common["maker_ask"]
+    assert abs(ask - 91.8005) < 1e-9           # already inside: untouched
+    # an ask that would have to be clamped ABOVE the hedge ask is dropped
+    # entirely: selling at 91.70 against a 91.773 hedge loses ~8bp, and not
+    # quoting beats quoting a loser
+    bid2, ask2 = clamp_to_maker_book(91.0, 91.60, **common)
+    assert ask2 is None and bid2 == 91.0
+    # no maker book yet → pass the prices through
+    assert clamp_to_maker_book(1.0, 2.0, maker_bid=None, maker_ask=None,
+                               tick=0.01, hedge_bid=1.0, hedge_ask=2.0,
+                               costs_bps=1.5) == (1.0, 2.0)
+
+
 # ----------------------------------------------------------- stub venues
 
 class MakerStub:
@@ -88,6 +110,7 @@ class MakerStub:
         self.min_base = 0.0005          # Katana BTC-USD real minimum
         self.min_quote = 10.0
         self.size_decimals = 4
+        self.tick_size = 0.01           # maker-book clamp needs the tick
         self.signer = object()
         self.orders_feed = None
         self._ready = True

@@ -39,6 +39,11 @@ from typing import Optional
 
 import aiohttp
 
+try:                                    # websockets >= 13 (asyncio client)
+    from websockets.asyncio.client import connect as ws_connect
+except ImportError:                     # pragma: no cover — older websockets
+    from websockets import connect as ws_connect  # type: ignore
+
 from .book import OrderBook
 from .config import KatanaCreds, VenueConf
 from .feeds import KatanaBookFeed
