@@ -1,0 +1,83 @@
+# Lighter-RH(Robinhood 链) ↔ Katana Perps — HYPE 线
+#
+#   record-only: python3 main.py --config profiles/lighter-rh-hype-katana.yaml \
+#                    --symbol HYPE --base lighter-rh --hedge katana --record-only
+#   live:        启用文件末尾的 maker 块
+#
+# 为什么选 rh 路线（9.5h rh probe 实测，见 logs/minutes-HYPE-lighter-rh-vs-katana.csv）：
+#   溢价 median +10.21 / sd 2.76bp；rh 点差 1.75bp vs 主网 0.85bp
+#   maker 往返成本 2.70bp（0.95 手续费 + 1.75 rh 点差）→ sd/成本 1.02
+#   回测 52.5bp/天（rh）≈ 主网 48.1bp/天 → rh 路线不损失边际
+#   taker 结构 8.80bp 成本、sd/成本仅 0.31 → **不可行，必须走 maker**
+#   容量：KAT OI ~$37k（瓶颈）→ clip ≤ $2k
+#   ⚠ 溢价波动是阵发性的（66h sd 7.15 vs 本窗口 2.76），大偏移多为单边薄盘造成
+thresholds:
+  # 占位值，auto_band 每 5 分钟按 rh 数据校准（maker 模式不使用 midline）
+  midline_bps: 10.2
+  upper_bps: 7.0
+  lower_bps: 7.0
+
+entropy:
+  symbol: HYPE
+  taker_fee_bps: 0.0         # lighter-rh 实测 taker=maker=0
+  max_position_usd: 2000     # 受 KAT OI $37k 限制
+  max_orders_per_min: 120
+
+hedge:
+  symbol: HYPE-USD
+  taker_fee_bps: 1.9         # 实测 0.00019；maker 0.0000475
+  max_position_usd: 2000
+  max_orders_per_min: 30
+
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 150
+  min_order_notional_usd: 10
+
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 12       # rh 点差比主网宽，价格保护放宽
+  hedge_slippage_bps: 15
+  max_signal_edge_bps: 40    # 幻影过滤：sd 2.76 → 40bp ≈ 14σ
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+
+recorder:
+  enabled: true
+  csv: logs/minutes-HYPE-lighter-rh-katana.csv
+
+logging:
+  file: logs/engine-HYPE-lighter-rh-katana.log
+  trades_csv: logs/trades-HYPE-lighter-rh-katana.csv
+  dashboard: false
+  level: INFO
+
+auto_band:
+  enabled: true
+  window_days: 7
+  width_k: 2.5
+  min_width_bps: 5.0
+  sigma_halflife_h: 24
+  slip_lookback_days: 2
+  slip_min_fills: 5
+  skip_engine_down_min: 15
+
+# maker 模式（唯一可行结构：Katana 挂单 + rh 吃单对冲）
+# costs_bps = KAT maker 0.475 + rh 吃单点半差 ~0.9 + 缓冲（每笔成交锁定一次）
+#
+# maker:
+#   enabled: true
+#   edge_bps: 1.5            # 每笔目标净边际
+#   costs_bps: 1.5
+#   requote_bps: 1.0
+#   requote_sec: 20
+#   size_base: 3.0           # ~$273 @ $91，KAT 最小 0.5 / step 0.01
+#   sides: both
+#   hedge_batch_ms: 250
+#   max_hedge_failures: 3
