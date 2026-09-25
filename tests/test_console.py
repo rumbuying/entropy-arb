@@ -10,6 +10,7 @@ import os
 import stat
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -276,9 +277,83 @@ def test_supervisor_delete_stopped_only(tmp_path):
     asyncio.run(run())
 
 
-# ------------------------------------------------------------- analytics
+# ------------------------------------------------------------- venues tab
 
-def test_analytics_over_synthetic_csv(tmp_path):
+def test_venues_aggregation():
+    from entropy_arb.console.venues import aggregate, exchange_of
+    assert exchange_of("ENTROPY") == "HL(io)"
+    assert exchange_of("HL") == "HL(io)"
+    assert exchange_of("RH") == "Lighter-RH"
+    assert exchange_of("LIGHTER-RH") == "Lighter-RH"
+    assert exchange_of("KATANA") == "Katana"
+    assert exchange_of("LIGHTER") == "Lighter"
+
+    def snap(pnl, venues):
+        return {"session": {"pnl_mtm": pnl}, "venues": venues}
+
+    def venue(name, key, pos, pusd, equity=None, free=None):
+        return {"name": name, "key": key, "position": pos,
+                "position_usd": pusd, "bid": 2100.0, "ask": 2102.0,
+                "fresh": True, "down": False, "equity": equity, "free": free}
+
+    recs = [
+        {"status": {"id": "w1", "profile": "anth", "symbol": "ANTH",
+                    "hedge": "lighter-rh", "mode": "live",
+                    "state": "running"},
+         "snap": snap(11.9, {
+             "entropy": venue("ENTROPY", "entropy", 0.479, 1003.0,
+                              equity=503.9),
+             "hedge": venue("RH", "hedge", -0.478, 1001.0, free=136.0)}),
+         "realized": 5.0, "maker": False},
+        {"status": {"id": "w2", "profile": "sndk", "symbol": "SNDK",
+                    "hedge": "lighter-rh", "mode": "live",
+                    "state": "running"},
+         "snap": snap(-0.2, {
+             "entropy": venue("ENTROPY", "entropy", 0.0, None, equity=504.1),
+             "hedge": venue("RH", "hedge", 0.0, None, free=130.0)}),
+         "realized": None, "maker": False},
+        {"status": {"id": "w3", "profile": "old", "symbol": "OLD",
+                    "hedge": "hl", "mode": "live", "state": "stopped"},
+         "snap": None, "realized": None, "maker": False},
+    ]
+    out = aggregate(recs)
+    hl = next(e for e in out["exchanges"] if e["exchange"] == "HL(io)")
+    rh = next(e for e in out["exchanges"] if e["exchange"] == "Lighter-RH")
+    # equity deduped by max: two engines report the same HL account
+    assert hl["equity"] == 504.1 and hl["engines"] == 2
+    assert abs(hl["gross_usd"] - 1003.0) < 0.01
+    assert abs(hl["net_usd"] - 1003.0) < 0.01
+    assert rh["free"] == 136.0 and rh["engines"] == 2
+    assert abs(rh["net_usd"] + 1001.0) < 0.01
+    assert len(hl["positions"]) == 1 and hl["positions"][0]["side"] == "long"
+    assert len(rh["positions"]) == 1 and rh["positions"][0]["side"] == "short"
+    assert len(out["strategies"]) == 2          # stopped worker excluded
+    assert out["strategies"][0]["realized_today"] == 5.0
+    assert abs(out["total_pnl_mtm"] - 11.7) < 1e-9
+
+
+def test_venues_realized_today(tmp_path):
+    from entropy_arb.console.venues import realized_today
+    now = time.time()
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "trades-X-h.csv").write_text(
+        "ts,fill_edge_usd,buy_status,sell_status\n"
+        f"{now},1.5,filled,filled\n"
+        f"{now},2.0,filled,canceled\n"
+        f"{now - 90000},9.9,filled,filled\n")
+    st = {"symbol": "X", "hedge": "h"}
+    assert realized_today(str(tmp_path), st, {}) == 1.5
+
+    maker = tmp_path / "maker.csv"
+    maker.write_text("ts,hedge_qty,hedge_px,net_edge_bps\n"
+                     f"{now},0.1,100.0,10\n"
+                     f"{now},,\n")
+    py = {"maker": {"enabled": True, "trades_csv": str(maker)}}
+    assert abs(realized_today(str(tmp_path), st, py) - 0.01) < 1e-9
+
+
+# ------------------------------------------------------------- analyticsdef test_analytics_over_synthetic_csv(tmp_path):
     from entropy_arb.analysis import analyze, load_rows, run_backtest
     path = tmp_path / "minutes-test.csv"
     import time as _t

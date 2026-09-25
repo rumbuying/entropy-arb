@@ -260,6 +260,26 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         audit(f"worker delete: {wid}")
         return web.json_response({"ok": True})
 
+    async def api_venues(request):
+        """Venue-dimension board: all running engines folded into per-
+        exchange totals + position detail + per-strategy P&L."""
+        from entropy_arb.console import venues as venues_mod
+        sts = [supervisor.status(wid) for wid in supervisor.workers]
+        snaps = await asyncio.gather(
+            *(supervisor.snapshot(s["id"]) for s in sts))
+        recs = []
+        for s, snap in zip(sts, snaps):
+            if s["state"] != "running":
+                continue
+            py = venues_mod.load_profile_yaml(supervisor.profiles_dir,
+                                              s["profile"])
+            recs.append({
+                "status": s, "snap": snap, "maker": bool(
+                    (py.get("maker") or {}).get("enabled")),
+                "realized": venues_mod.realized_today(supervisor.root, s, py),
+            })
+        return web.json_response(venues_mod.aggregate(recs))
+
     async def worker_logs(request):
         wid = request.match_info["wid"]
         tail = int(request.query.get("tail", "120"))
@@ -314,6 +334,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_get("/api/secrets", secrets_status)
     app.router.add_post("/api/secrets", secrets_update)
     app.router.add_get("/api/workers", workers_list)
+    app.router.add_get("/api/venues", api_venues)
     app.router.add_post("/api/workers", worker_start)
     app.router.add_get("/api/workers/{wid}/state", worker_state)
     app.router.add_get("/api/workers/{wid}/ws", worker_ws)

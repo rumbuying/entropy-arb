@@ -15,6 +15,7 @@
 </div>
 <div class="tabs" id="tabs">
   <button data-tab="overview" data-i18n="tab.overview"></button>
+  <button data-tab="venues" data-i18n="tab.venues"></button>
   <button data-tab="runs" data-i18n="tab.runs"></button>
   <button data-tab="profiles" data-i18n="tab.profiles"></button>
   <button data-tab="secrets" data-i18n="tab.secrets"></button>
@@ -23,6 +24,7 @@
 </div>
 <div class="wrap">
   <div class="tabpane" id="pane-overview"></div>
+  <div class="tabpane" id="pane-venues"></div>
   <div class="tabpane" id="pane-runs"></div>
   <div class="tabpane" id="pane-profiles"></div>
   <div class="tabpane" id="pane-secrets"></div>
@@ -40,6 +42,7 @@ import { initSecrets } from "/static/secrets.js";
 import { initAnalyze } from "/static/analyze.js";
 import { initHistory } from "/static/history.js";
 import { initOverview } from "/static/overview.js";
+import { initVenues } from "/static/venues.js";
 
 /* ---- shared shell ------------------------------------------------------ */
 export const shell = {
@@ -88,6 +91,7 @@ document.querySelectorAll("#tabs button").forEach(b =>
 /* ---- init all tabs ------------------------------------------------------ */
 const tabs = {
   overview: initOverview(document.getElementById("pane-overview"), shell),
+  venues: initVenues(document.getElementById("pane-venues"), shell),
   runs: initRuns(document.getElementById("pane-runs"), shell),
   profiles: initProfiles(document.getElementById("pane-profiles"), shell),
   secrets: initSecrets(document.getElementById("pane-secrets"), shell),
@@ -109,6 +113,7 @@ showTab("overview");
 tabs.profiles.onChange(() => { tabs.runs.refreshProfiles(); tabs.analyze.refreshProfiles(); tabs.history.refreshProfiles(); });
 tabs.secrets.onChange(() => tabs.runs.refreshCreds());
 setInterval(() => tabs.overview.refresh(), 3000);
+setInterval(() => tabs.venues.refresh(), 5000);
 </script>
 </body>
 </html>
