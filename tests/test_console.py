@@ -241,6 +241,41 @@ def test_supervisor_port_allocation(tmp_path):
     assert p3 != p1
 
 
+def test_supervisor_delete_stopped_only(tmp_path):
+    async def run():
+        sup = Supervisor(str(tmp_path), str(tmp_path))
+        stub = tmp_path / "stub.py"
+        stub.write_text("import sys, time\ntry:\n"
+                        "    while True: time.sleep(0.1)\n"
+                        "except KeyboardInterrupt:\n    sys.exit(0)\n")
+        sup.build_argv = lambda w: [sys.executable, str(stub)]
+
+        assert sup.delete("w-none") is False
+
+        w = await sup.start("prof", "SNDK", "lighter-rh", "record")
+        try:
+            started = False
+            for _ in range(40):
+                started = sup.status(w.id)["state"] == "running"
+                if started:
+                    break
+                await asyncio.sleep(0.1)
+            assert started
+            try:
+                sup.delete(w.id)
+                raise AssertionError("delete of a running worker must raise")
+            except RuntimeError:
+                pass
+        finally:
+            await sup.stop(w.id, grace=5)
+        assert sup.delete(w.id) is True
+        assert w.id not in sup.workers
+        assert sup.delete(w.id) is False
+        await sup.shutdown()
+
+    asyncio.run(run())
+
+
 # ------------------------------------------------------------- analytics
 
 def test_analytics_over_synthetic_csv(tmp_path):

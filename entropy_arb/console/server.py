@@ -248,6 +248,18 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         audit(f"worker restart: {wid} -> {w.id}")
         return web.json_response(supervisor.status(w.id))
 
+    async def worker_delete(request):
+        wid = request.match_info["wid"]
+        try:
+            ok = supervisor.delete(wid)
+        except RuntimeError:
+            return web.json_response(
+                {"error": "worker is running — stop it first"}, status=409)
+        if not ok:
+            return web.json_response({"error": "not found"}, status=404)
+        audit(f"worker delete: {wid}")
+        return web.json_response({"ok": True})
+
     async def worker_logs(request):
         wid = request.match_info["wid"]
         tail = int(request.query.get("tail", "120"))
@@ -308,6 +320,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_get("/api/workers/{wid}/logs", worker_logs)
     app.router.add_post("/api/workers/{wid}/stop", worker_stop)
     app.router.add_post("/api/workers/{wid}/restart", worker_restart)
+    app.router.add_delete("/api/workers/{wid}", worker_delete)
 
     # analysis + history are added by entropy_arb.console.analytics when the
     # console server is constructed with it (register_analytics(app, ...))

@@ -1,7 +1,7 @@
 /* Runs tab: start/stop/restart engine workers + log viewer.
    LIVE starts demand the symbol to be typed back (two mistakes to fire). */
 
-import { getJSON, postJSON } from "./api.js";
+import { getJSON, postJSON, delJSON } from "./api.js";
 import { t } from "./i18n.js";
 import { fmtUsd, fmtUptime, statusBadgeClass } from "./fmt.js";
 
@@ -60,6 +60,9 @@ export function initRuns(pane, shell) {
       acts.appendChild(mk(t("runs.logs_btn"), "", () => logsDialog(w)));
       acts.appendChild(mk(t("runs.restart_btn"), "", () => act(`/api/workers/${w.id}/restart`), w.state !== "running"));
       acts.appendChild(mk(t("runs.stop_btn"), "danger", () => act(`/api/workers/${w.id}/stop`), w.state !== "running"));
+      if (w.state !== "running") {
+        acts.appendChild(mk(t("runs.delete_btn"), "danger", () => delWorker(w.id)));
+      }
       const isMaker = profiles.find(x => x.name === w.profile)?.maker;
       tr.innerHTML = `
         <td class="num">${w.id}</td>
@@ -91,6 +94,15 @@ export function initRuns(pane, shell) {
   async function act(url) {
     try {
       await postJSON(url);
+      shell.toast("✓");
+    } catch (e) { shell.toast(String(e.message || e), true); }
+    refresh();
+  }
+
+  async function delWorker(wid) {
+    if (!confirm(t("runs.delete_confirm"))) return;
+    try {
+      await delJSON(`/api/workers/${wid}`);
       shell.toast("✓");
     } catch (e) { shell.toast(String(e.message || e), true); }
     refresh();

@@ -358,6 +358,17 @@ class Supervisor:
         w2.restarts = w.restarts + 1
         return w2
 
+    def delete(self, wid: str) -> bool:
+        """Drop a stopped worker's record from the list. Log and trade
+        files on disk are untouched — this only clears the Runs view."""
+        w = self.workers.get(wid)
+        if w is None:
+            return False
+        if w.running:
+            raise RuntimeError("refusing to delete a running worker")
+        del self.workers[wid]
+        return True
+
     # ------------------------------------------------------------------ views
 
     def status(self, wid: str) -> dict:
