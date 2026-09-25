@@ -1,6 +1,6 @@
 # Lighter ↔ Katana 线交接文档
 
-> 写作时间：2026-09-25 · 对应提交 `256ec8b` 及其之前一串
+> 写作时间：2026-09-25 · 覆盖提交 `af9a26c`..`256ec8b` 及随后的 nonce 修复
 > 相关文档：[MAKER-DESIGN.md](MAKER-DESIGN.md)（maker 模式设计）、
 > [BASIS-EXPLORE.md](BASIS-EXPLORE.md)（三所基差探索）、
 > [KATANA-2D-REVIEW.md](KATANA-2D-REVIEW.md)、[HANDOVER.md](HANDOVER.md)（项目总交接）
@@ -84,7 +84,14 @@
 **三个修法（推荐 1+2 组合）**
 1. **每个 worker 一个 Lighter API key**（最正确）：同一账户可建多个 key，nonce 按 key 隔离。
    需要给 profile 加"凭证前缀"支持（如 `credentials: LIGHTER_HYPE`），然后在页面建 2–3 个 key
-2. **撞 nonce 自动刷新重试**（轻量缓解）：捕获 21104 → `signer.nonce_manager.hard_refresh_nonce()` → 重试一次
+2. ✅ **撞 nonce 自动刷新重试（已实现，2026-09-25）**：`venue_lighter.py` 的
+   `_submit_with_nonce_retry()` —— 检测到 21104 / `invalid nonce` 时，先
+   `nonce_manager.async_hard_refresh_nonce(api_key_index)` 重新从
+   `/api/v1/nextNonce` 取计数，再**重试一次**（仅一次，避免掩盖真实故障；
+   刷新本身失败也照样重试，绝不吞掉订单错误）。覆盖 `send_taker` 全部调用方
+   （taker band / `_hedge` / maker 对冲）。测试：`tests/test_lighter_nonce.py`。
+   *注意*：SDK 的 `process_api_key_and_nonce` 装饰器本来就会在异常路径刷新计数，
+   但**不重试**——缺的正是这一层
 3. **同时只跑一个 rh worker**（零改动，但 ANTH/SNDK 仍共用 key，偶发冲突仍在）
 
 ---
@@ -125,8 +132,9 @@
 | `f1ed1bf` | **Katana 委托密钥（session key）**：订单结构 `delegatedPublicKey` / 撤单 `delegatedKey` 填签名者地址；签名信封修复（signature 提到顶层） |
 | `0c8aa76` | **签名 0x 前缀**（ethers 格式；裸 hex 会导致 `INVALID_WALLET_SIGNATURE`）+ 请求体带 `delegatedKey` |
 | `256ec8b` | maker：`ws_connect` 导入 + **`clamp_to_maker_book()`**（post-only 不穿越 maker 盘口，夹逼后不覆盖成本则放弃该侧） |
+| *(本轮)* | **Lighter nonce 冲突自动恢复**：`_submit_with_nonce_retry()`（异常/错误码 21104 → 刷新计数 → 重试一次），覆盖 `send_taker` 全部调用方；`tests/test_lighter_nonce.py` |
 
-测试：**132 passed**。
+测试：**137 passed**。
 
 ---
 
@@ -182,10 +190,12 @@ POST /api/workers {"profile":"lighter-rh-hype-katana","symbol":"HYPE",
 
 ## 10. 待办清单
 
-- [ ] **P0** Lighter nonce 隔离（per-worker API key + 撞 nonce 自动刷新重试）
+- [x] **P0 撞 nonce 自动刷新 + 重试一次**（2026-09-25 完成，见 §4；测试 `tests/test_lighter_nonce.py`）
+- [ ] **P0** per-worker Lighter API key（根治 nonce 竞争；需要凭证前缀支持）
 - [ ] **P0** maker 启动时 cancel-all（清孤儿单）
 - [ ] P1 主网 ETH 线：`LIGHTER_BASE_*` 凭证 + 按部署命名（`LIGHTER_MAINNET_*` / `LIGHTER_RH_*`）以支持并行
-- [ ] P1 nonce 冲突若无法根治 → 明确"一个 rh worker 独占"的运行纪律并写进 OPERATIONS
+- [ ] P1 若仍频繁撞 nonce → 明确"一个 rh worker 独占"的运行纪律并写进 OPERATIONS
+- [ ] P1 **让 ANTH/SNDK 重启以载入新代码**（风险遥测 + nonce 重试目前只在磁盘上，运行中的进程是旧代码）
 - [ ] P2 rh 侧逐仓/隔离保证金（`tools/isolated_margin.py` 目前仅 HL）
 - [ ] P2 band 自动校准对 rh 路线的验证（`auto_band` 需要每个 profile 单独跑）
 

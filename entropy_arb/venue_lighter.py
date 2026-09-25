@@ -46,6 +46,46 @@ def _num(x) -> Optional[float]:
         return None
 
 
+NONCE_ERROR_CODE = 21104
+
+
+def _is_invalid_nonce(resp=None, err=None, exc=None) -> bool:
+    """True when the venue rejected the request because the nonce was already
+    consumed (code 21104 / "invalid nonce")."""
+    if getattr(resp, "code", None) == NONCE_ERROR_CODE:
+        return True
+    for value in (err, exc):
+        s = str(value or "").lower()
+        if "invalid nonce" in s or str(NONCE_ERROR_CODE) in s:
+            return True
+    return False
+
+
+async def _submit_with_nonce_retry(submit, refresh):
+    """Run `submit()` (-> (resp, err, exc)); on an invalid nonce, await
+    `refresh()` and run it exactly once more.
+
+    Why this exists: Lighter nonces are per (account_index, api_key_index) and
+    cached in the SDK's nonce manager. Two engines sharing one API key consume
+    each other's nonce, and the SDK only refreshes its counter — it does not
+    retry — so the collision surfaced as a hard send failure and, in maker
+    mode, escalated to EXPOSED after max_hedge_failures (2026-09-25).
+
+    One retry is enough after a refresh: it re-reads /api/v1/nextNonce, which
+    is ahead of every already-consumed value.
+    """
+    result = await submit()
+    if _is_invalid_nonce(*result):
+        try:
+            await refresh()
+        except Exception as e:                      # noqa: BLE001
+            # never let a failed refresh mask the order error: retry anyway
+            # (the SDK may already have refreshed on its own path)
+            log.warning("nonce refresh failed (%r) — retrying once anyway", e)
+        result = await submit()
+    return result
+
+
 class AccountOrdersFeed:
     """Authenticated stream of our own order updates (settlement channel)."""
 
@@ -291,23 +331,31 @@ class LighterVenue:
         fut = self.orders_feed.watch(coi) if self.orders_feed else None
         base_amount = int(round(qty * 10 ** self.size_decimals))
         price = int(round(limit_px * 10 ** self.price_decimals))
-        try:
-            _tx, resp, err = await self.signer.create_order(
-                market_index=self.market_id,
-                client_order_index=coi,
-                base_amount=base_amount,
-                price=price,
-                is_ask=not is_buy,
-                order_type=SignerClient.ORDER_TYPE_MARKET,
-                time_in_force=SignerClient.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
-                reduce_only=reduce_only,
-                order_expiry=SignerClient.DEFAULT_IOC_EXPIRY,
-            )
-        except Exception as e:
+
+        async def _submit():
+            try:
+                _tx, resp, err = await self.signer.create_order(
+                    market_index=self.market_id,
+                    client_order_index=coi,
+                    base_amount=base_amount,
+                    price=price,
+                    is_ask=not is_buy,
+                    order_type=SignerClient.ORDER_TYPE_MARKET,
+                    time_in_force=SignerClient.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
+                    reduce_only=reduce_only,
+                    order_expiry=SignerClient.DEFAULT_IOC_EXPIRY,
+                )
+                return resp, err, None
+            except Exception as e:                  # noqa: BLE001 — surfaced below
+                return None, None, e
+
+        resp, err, exc = await _submit_with_nonce_retry(
+            _submit, self._refresh_nonce)
+        if exc is not None:
             if fut is not None:
                 self.orders_feed.unwatch(coi)
-            msg = f"{type(e).__name__}: {e}"
-            if getattr(e, "status", None) == 429 or "(429)" in str(e):
+            msg = f"{type(exc).__name__}: {exc}"
+            if getattr(exc, "status", None) == 429 or "(429)" in str(exc):
                 msg = "RATE_LIMITED: " + msg
             return {"status": "send-failed", "filled_base": 0.0, "avg_px": None,
                     "err": msg, "unresolved": False}
@@ -353,6 +401,25 @@ class LighterVenue:
             return None
         return (float(acct.get("total_asset_value") or 0.0),
                 float(acct.get("available_balance") or 0.0))
+
+    async def _refresh_nonce(self) -> None:
+        """Re-read this API key's nonce counter from the venue.
+
+        Called between the two attempts of `_submit_with_nonce_retry`; never
+        raises, so it can't mask the order error it is trying to recover from.
+        """
+        creds = self.conf.lighter_creds
+        manager = getattr(self.signer, "nonce_manager", None)
+        if manager is None or creds is None or creds.api_key_index is None:
+            return
+        try:
+            await manager.async_hard_refresh_nonce(creds.api_key_index)
+            log.warning("[%s] invalid nonce — refreshed api_key_index=%s "
+                        "counter and retrying once (another engine sharing "
+                        "this key consumed it?)",
+                        self.name, creds.api_key_index)
+        except Exception as e:                      # noqa: BLE001
+            log.error("[%s] nonce refresh failed: %r", self.name, e)
 
     async def fetch_position(self) -> float:
         acct = await self._account()
