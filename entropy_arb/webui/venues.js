@@ -58,6 +58,16 @@ export function initVenues(pane, shell) {
         <td class="num">${e.engines}</td>`;
       exchTable.appendChild(tr);
     }
+    const sum = key => d.exchanges.reduce(
+      (acc, e) => (e[key] === null || e[key] === undefined ? acc : acc + e[key]), null);
+    const totEx = document.createElement("tr");
+    totEx.innerHTML = `<td><b>${t("venue.total")}</b></td>
+      <td class="num"><b>${fmt(sum("equity"))}</b></td>
+      <td class="num"><b>${fmt(sum("free"))}</b></td>
+      <td class="num"><b>${fmt(sum("gross_usd"))}</b></td>
+      <td class="num"><b>${fmt(sum("net_usd"))}</b></td>
+      <td class="num"><b>${d.exchanges.reduce((a, e) => a + e.engines, 0)}</b></td>`;
+    exchTable.appendChild(totEx);
 
     posTitle.textContent = t("venue.pos_title");
     posTable.innerHTML =
