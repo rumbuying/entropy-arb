@@ -20,14 +20,15 @@ thresholds:
 entropy:
   symbol: HYPE
   taker_fee_bps: 0.0         # lighter-rh 实测 taker=maker=0
-  max_position_usd: 600      # 试点档（rh 20% 初始保证金 → 占用 $120）
+  max_position_usd: 200      # 试点档（rh 实测 imf=50% → 占用 $100）
   max_orders_per_min: 120
 
 hedge:
   symbol: HYPE-USD
   taker_fee_bps: 1.9         # 实测 0.00019；maker 0.0000475
-  max_position_usd: 600
-  max_orders_per_min: 30
+  max_position_usd: 200
+  # 报价 requote = 撤+挂各 1 次配额；30/min 会被 anchor 抖动耗尽（实测 2s 一次）
+  max_orders_per_min: 90
 
 sizing:
   take_fraction: 0.5
@@ -75,9 +76,9 @@ maker:
   enabled: true
   edge_bps: 1.5            # 每笔目标净边际
   costs_bps: 1.5           # KAT maker 0.475 + rh 吃单点半差 ~0.9 + 缓冲
-  requote_bps: 1.0
-  requote_sec: 20
-  size_base: 2.0           # ~$183 @ $91；KAT 最小 0.5 / step 0.01
+  requote_bps: 3.0         # 1bp 是噪声：锚是对冲腿现价，抖动 1bp 不该重挂
+  requote_sec: 30
+  size_base: 1.0           # ~$92 @ $91；KAT 最小 0.5 / step 0.01
   sides: both
   hedge_batch_ms: 250
   max_hedge_failures: 3

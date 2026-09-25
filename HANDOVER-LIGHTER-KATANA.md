@@ -55,6 +55,12 @@
 `logs/minutes-<SYM>-lighter-rh-vs-katana.csv`（rh）。bad-row 过滤：`|premium| < 150bps`
 （ZEC 薄盘出现过 1687/2030bps 假行）。
 
+**⚠️ 资金效率（2026-09-25 实测修正）**：rh 的初始保证金率**按标的而异** ——
+ANTHROPIC **20%**，而 **HYPE / ZEC 都是 50%**（`initial_margin_fraction` 字段实测，
+两笔合计与账户 `cross_initial_margin_requirement` 分毫不差）。所以
+**$1 的 rh 保证金只能支撑 $2 名义**，上面表里的 `$/天` 要按此折算资金占用；
+Katana 侧是 10%。例：$200 cap 的 HYPE 线 → rh $100 + Katana $20 ≈ $120 资金。
+
 ---
 
 ## 3. 现在跑着什么
@@ -66,7 +72,7 @@
 | record-only：`katana-btc` / `lighter-eth-katana` / `lighter-hype-katana` | 主网对照采集 |
 | `entropy-probe`（systemd） | 主网 Lighter↔Katana，6 标的 |
 | `entropy-probe-rh`（systemd） | **rh** Lighter↔Katana，5 标的（rh 无 DOGE） |
-| **已停止** | `lighter-rh-hype-katana`、`lighter-rh-zec-katana`（maker 试点，因 nonce 阻塞） |
+| **maker 试点（live）** | `lighter-rh-hype-katana`、`lighter-rh-zec-katana` —— 2026-09-25 12:29 起跑，cap 各 $200 / size 1.0 与 0.1；已验证报价挂单、成交、批量对冲、net≈0 |
 
 ---
 
@@ -151,7 +157,8 @@
 - `LIGHTER_*` = **rh 账户 27904**（ANTH/SNDK 的对冲腿 + 新线的基准腿共用）
 - `LIGHTER_BASE_*` **未配置**（主网账户还没建立）
 - rh 账户：available **$299.11**、collateral $496.54、IM_req $204.94；只剩 ANTH 的合法对冲空头 0.478 ANTHROPIC
-- rh 初始保证金 **20%**（实测 ANTHROPIC $1023 → 占用 $204.6，**cross 全仓**）
+- rh 初始保证金 **按标的而异**：ANTHROPIC 20%，**HYPE/ZEC 50%**（实测；**cross 全仓**）
+- Katana 初始保证金 **10%**（挂单同样占用）
 - ⚠️ **主网 base 与 rh base 不能同时跑**：`LIGHTER_BASE_*` 只有一组，会互相抢（需要按部署命名才可并行）
 
 ---
@@ -185,6 +192,11 @@ POST /api/workers {"profile":"lighter-rh-hype-katana","symbol":"HYPE",
 6. **`position` 无符号**（rh 账户接口）——见 §5 教训
 7. **rh 全仓（cross）保证金**：一条线的亏损会吃掉另一条的保证金（可用 `tools/isolated_margin.py`
    的思路做逐仓，目前该工具只支持 HL）
+8. **保证金率因标的而异**（ANTH 20% vs HYPE/ZEC 50%）：算仓位前先查
+   `initial_margin_fraction`，别按统一费率估（本次就是按 20% 估导致把可用保证金打到只剩 $6）
+9. **requote 会吃光订单预算**：`requote_bps: 1.0` 对这条线太紧（锚是对冲腿现价，秒级抖动 >1bp），
+   实测 2s 一次 requote × (撤+挂) 直接打满 30/min。现在用 `requote_bps: 3.0` +
+   `max_orders_per_min: 90`
 
 ---
 
@@ -192,7 +204,8 @@ POST /api/workers {"profile":"lighter-rh-hype-katana","symbol":"HYPE",
 
 - [x] **P0 撞 nonce 自动刷新 + 重试一次**（2026-09-25 完成，见 §4；测试 `tests/test_lighter_nonce.py`）
 - [ ] **P0** per-worker Lighter API key（根治 nonce 竞争；需要凭证前缀支持）
-- [ ] **P0** maker 启动时 cancel-all（清孤儿单）
+- [x] **P0** maker 试点上线（HYPE + ZEC，2026-09-25；参数已按 50% 保证金率与 requote 预算修正）
+- [ ] **P0** maker 启动时 cancel-all（清孤儿单）—— 本次上线前是手工确认 0 挂单才启动的
 - [ ] P1 主网 ETH 线：`LIGHTER_BASE_*` 凭证 + 按部署命名（`LIGHTER_MAINNET_*` / `LIGHTER_RH_*`）以支持并行
 - [ ] P1 若仍频繁撞 nonce → 明确"一个 rh worker 独占"的运行纪律并写进 OPERATIONS
 - [ ] P1 **让 ANTH/SNDK 重启以载入新代码**（风险遥测 + nonce 重试目前只在磁盘上，运行中的进程是旧代码）
