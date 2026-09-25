@@ -12,9 +12,9 @@
 #     这类大偏移多半是单边薄盘/陈旧价，靠 max_signal_edge_bps 挡住
 thresholds:
   # 占位值，由 auto_band 校准（sd 7.15 → k=2.5 约 ±18bp）
-  midline_bps: 0.29
-  upper_bps: 5.72
-  lower_bps: 5.72
+  midline_bps: 0
+  upper_bps: 5.33
+  lower_bps: 5.33
 
 entropy:
   symbol: HYPE
