@@ -811,18 +811,27 @@ class Engine:
         skew = inventory_skew_bps(mk.position, mid, mk.cap_usd,
                                   self.cfg.inventory_scale_bps,
                                   self.cfg.inventory_floor_frac)
-        bid_px, ask_px = quote_prices(hbid, hask, cfg.costs_bps,
-                                      cfg.edge_bps, skew)
+        # surcharge only the side that would ADD to inventory; the reduce
+        # side keeps the flat price or a near-cap position can never unwind
+        priced = {adds: quote_prices(hbid, hask, cfg.costs_bps,
+                                     cfg.edge_bps, skew if adds else 0.0)
+                  for adds in (True, False)}
         # keep both sides inside the maker venue's own touch (a basis-heavy
         # pair otherwise computes a price that GTX rejects as crossing)
-        bid_px, ask_px = clamp_to_maker_book(
-            bid_px, ask_px, maker_bid=mk.book.best_bid(),
-            maker_ask=mk.book.best_ask(), tick=mk.tick_size,
-            hedge_bid=hbid, hedge_ask=hask, costs_bps=cfg.costs_bps)
+        px = {adds: clamp_to_maker_book(
+                  *priced[adds], maker_bid=mk.book.best_bid(),
+                  maker_ask=mk.book.best_ask(), tick=mk.tick_size,
+                  hedge_bid=hbid, hedge_ask=hask, costs_bps=cfg.costs_bps)
+              for adds in (True, False)}
         live = mk.open_orders()
-        anchors = {"bid": (bid_px, hbid), "ask": (ask_px, hask)}
         for side in sides:
-            await self._maker_tick_side(side, anchors[side], live, skew, now)
+            is_bid = side == "bid"
+            pos = mk.position
+            adds = True if pos == 0 else (is_bid if pos > 0 else not is_bid)
+            bid_px, ask_px = px[adds]
+            anchors = {"bid": (bid_px, hbid), "ask": (ask_px, hask)}
+            await self._maker_tick_side(side, anchors[side], live,
+                                        skew if adds else 0.0, now)
 
     async def _maker_tick_side(self, side, anchor_pair, live, skew,
                                now: float) -> None:

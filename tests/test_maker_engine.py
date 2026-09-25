@@ -254,6 +254,30 @@ def test_tick_places_both_sides_at_anchored_prices():
     assert bid.side == "bid" and ask.order_id
 
 
+def test_inventory_surcharge_lands_on_the_adding_side_only():
+    eng = make_engine()
+    eng.hedge.position = 0.0045          # ~$362 of $500 cap → mid-ladder skew
+    skew = inventory_skew_bps(0.0045, 80455.0, 500.0,
+                              eng.cfg.inventory_scale_bps,
+                              eng.cfg.inventory_floor_frac)
+    assert skew > 0
+    asyncio.run(eng._maker_tick(("bid", "ask")))
+    bid, ask = eng._mk_quotes["bid"], eng._mk_quotes["ask"]
+    approx(ask.px, 80519.0 * 1.00075, tol=1e-4)          # reduce side: flat
+    approx(bid.px, 80518.0 / (1.0 + (7.5 + skew) / 1e4), tol=1e-4)
+    approx(ask.skew_bps, 0.0)
+    approx(bid.skew_bps, skew, tol=0.01)
+
+    eng2 = make_engine()
+    eng2.hedge.position = -0.0045        # short: surcharge flips to the ask
+    asyncio.run(eng2._maker_tick(("bid", "ask")))
+    bid2, ask2 = eng2._mk_quotes["bid"], eng2._mk_quotes["ask"]
+    approx(bid2.px, 80518.0 / 1.00075, tol=1e-4)         # reduce side: flat
+    approx(ask2.px, 80519.0 * (1.0 + (7.5 + skew) / 1e4), tol=1e-4)
+    approx(bid2.skew_bps, 0.0)
+    approx(ask2.skew_bps, skew, tol=0.01)
+
+
 def test_safety_block_clears_quotes_once_and_resumes():
     eng = make_engine()
     asyncio.run(eng._maker_tick(("bid", "ask")))
