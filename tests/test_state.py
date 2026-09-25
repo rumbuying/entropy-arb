@@ -135,6 +135,65 @@ def test_full_snapshot_fields_and_math():
     assert snap["config"]["upper_bps"] == 4.0
 
 
+def test_liquidation_distance_and_margin_frac():
+    """Risk telemetry: distance to liquidation and margin utilisation."""
+    eng = make_engine()
+    eng.entropy.set_book(100.0, 100.2)     # mid 100.1, long
+    eng.hedge.set_book(100.0, 100.2)
+    eng.entropy.position = 2.0
+    eng.entropy.liq_px = 90.0              # long: (100.1-90)/100.1 = 1009 bps
+    eng.entropy.margin_used = 95.0
+    eng.entropy.margin_collateral = 100.0
+    eng.hedge.position = -2.0
+    eng.hedge.liq_px = 130.0               # short: (130-100.1)/100.1 = 2987 bps
+    eng.hedge.margin_used = 10.0
+    eng.hedge.margin_collateral = 100.0
+    eng.entropy.unrealized = -24.70
+    eng.hedge.unrealized = 8.23
+
+    snap = build_snapshot(eng)
+    json_safe(snap)
+    ev, hv = snap["venues"]["entropy"], snap["venues"]["hedge"]
+    # the entry-edge ledger can stay green while this number is red
+    assert ev["unrealized_usd"] == -24.70 and hv["unrealized_usd"] == 8.23
+    assert abs(snap["session"]["unrealized_usd"] - (-16.47)) < 1e-9
+    assert abs(ev["liq_dist_bps"] - (100.1 - 90.0) / 100.1 * 1e4) < 1e-6
+    assert abs(hv["liq_dist_bps"] - (130.0 - 100.1) / 100.1 * 1e4) < 1e-6
+    assert abs(ev["margin_frac"] - 0.95) < 1e-9
+    assert abs(hv["margin_frac"] - 0.10) < 1e-9
+
+    # flat position or unknown venue risk -> nulls, never a bogus number
+    eng.entropy.position = 0.0
+    eng.hedge.liq_px = None
+    snap = build_snapshot(eng)
+    ev, hv = snap["venues"]["entropy"], snap["venues"]["hedge"]
+    assert ev["liq_dist_bps"] is None and hv["liq_dist_bps"] is None
+    assert hv["liq_px"] is None
+
+
+def test_hl_margin_frac_is_leverage_not_isolated_bucket():
+    """Isolated perps report marginUsed == accountValue always, so the limit
+    metric must come from leverage vs max leverage instead."""
+    eng = make_engine()
+    eng.entropy.kind = "hl"
+    eng.entropy.set_book(100.0, 100.2)          # mid 100.1
+    eng.entropy.position = 2.0                  # notional 200.2
+    eng.entropy.max_leverage = 6.0
+    eng.entropy.equity = 100.0
+    eng.entropy.margin_used = 100.0             # isolated bucket
+    eng.entropy.margin_collateral = 100.0
+    ev = build_snapshot(eng)["venues"]["entropy"]
+    assert abs(ev["leverage"] - 2.002) < 1e-9
+    assert ev["max_leverage"] == 6.0
+    assert abs(ev["margin_frac"] - (200.2 / 6.0) / 100.0) < 1e-9
+    # margin_frac = required initial margin vs the dex bucket actually posted,
+    # so it hits 1.0 (no room to add) when the bucket is exactly the minimum
+    eng.entropy.margin_collateral = 200.2 / 6.0
+    ev = build_snapshot(eng)["venues"]["entropy"]
+    assert abs(ev["margin_frac"] - 1.0) < 1e-9
+    assert abs(ev["leverage"] - 2.002) < 1e-9      # notional vs portfolio equity
+
+
 def test_status_precedence():
     eng = make_engine()
     eng.entropy.set_book(100.0, 100.2)

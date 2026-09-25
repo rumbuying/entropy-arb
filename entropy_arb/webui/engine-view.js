@@ -50,6 +50,19 @@ function venueRow(v, cfg, now) {
     v.volume_usd ? fmtUsd0(v.volume_usd) : span("muted", "—")));
   tr.appendChild(h("td", { class: "num" }, fmtUsd(v.equity, { signed: false, decimals: 2 })));
   tr.appendChild(h("td", { class: "num" }, fmtUsd(v.free, { signed: false, decimals: 2 })));
+  // 距强平：正数 = 还有多少空间；<10% 或保证金用满标红
+  let liq = span("muted", "—");
+  if (v.liq_dist_bps !== null && v.liq_dist_bps !== undefined) {
+    const warn = v.liq_dist_bps < 1000
+      || (v.margin_frac !== null && v.margin_frac !== undefined && v.margin_frac >= 0.9);
+    liq = span(`num ${warn ? "neg" : "pos"}`, `${(v.liq_dist_bps / 100).toFixed(1)}%`);
+    if (v.leverage !== null && v.leverage !== undefined)
+      liq.appendChild(span("muted", ` · ${v.leverage.toFixed(1)}x`
+        + (v.max_leverage ? `/${v.max_leverage.toFixed(0)}x` : "")));
+    else if (v.margin_frac !== null && v.margin_frac !== undefined)
+      liq.appendChild(span("muted", ` · mgn ${(v.margin_frac * 100).toFixed(0)}%`));
+  }
+  tr.appendChild(h("td", { class: "num" }, liq));
   return tr;
 }
 
@@ -79,12 +92,13 @@ export function createEngineCard({ compact = false } = {}) {
         h("th", { text: t("col.position") }),
         h("th", { text: t("col.volume") }),
         h("th", { text: t("col.equity") }),
-        h("th", { text: t("col.free") }))), venuesBody));
+        h("th", { text: t("col.free") }),
+        h("th", { text: t("col.liq") }))), venuesBody));
 
   // session
   const kv = h("div", { class: "kv" });
   const sessionCard = h("div", { class: "card" }, h("h3", { text: t("session.title") }), kv);
-  const sessionKeys = ["pnl", "delta", "eq", "exp", "fill", "th", "net", "err", "last", "rows"];
+  const sessionKeys = ["pnl", "delta", "eq", "upnl", "exp", "fill", "th", "net", "err", "last", "rows"];
   const sessionCells = {};
   for (const k of sessionKeys) {
     const v = span("num", "—");
@@ -115,17 +129,19 @@ export function createEngineCard({ compact = false } = {}) {
   // trades
   const tradesBody = h("tbody", {});
   const tradesTitle = h("h3", {});
-  const tradesCard = h("div", { class: "card" }, tradesTitle,
+  const tradesNote = h("div", { class: "note", style: "margin-bottom:6px" },
+                       t("exec.note"));
+  const tradesCard = h("div", { class: "card" }, tradesTitle, tradesNote,
     h("table", { class: "data" },
       h("thead", {}, h("tr", {},
-        h("th", { text: t("col.venue") === "" ? "" : "time" }),
+        h("th", { text: t("exec.time") }),
         h("th", { text: t("signal.dir") }),
-        h("th", { text: "qty" }),
-        h("th", { text: "notional" }),
-        h("th", { text: "prem bps" }),
-        h("th", { text: t("session.exp_edge").replace("Σ ", "expected ") }),
-        h("th", { text: t("session.fill_edge").replace("Σ ", "actual ") }),
-        h("th", { text: "status" }))), tradesBody));
+        h("th", { text: t("exec.qty") }),
+        h("th", { text: t("exec.notional") }),
+        h("th", { text: t("exec.prem") }),
+        h("th", { text: t("exec.exp") }),
+        h("th", { text: t("exec.actual") }),
+        h("th", { text: t("exec.status") }))), tradesBody));
 
   // events
   const evlog = h("div", { class: "evlog" });
@@ -194,6 +210,9 @@ export function createEngineCard({ compact = false } = {}) {
       eq: [t("session.equity_sum"), span("num", fmtUsd(s.equity_sum, { signed: false, decimals: 2 }))],
       exp: [t("session.exp_edge"), span(`num ${cls(s.exp_edge)}`, fmtUsd(s.exp_edge))],
       fill: [t("session.fill_edge"), span(`num ${cls(s.fill_edge)}`, fmtUsd(s.fill_edge))],
+      upnl: [t("session.unrealized"), span(`num ${cls(s.unrealized_usd)}`,
+        s.unrealized_usd === null || s.unrealized_usd === undefined
+          ? "—" : fmtUsd(s.unrealized_usd))],
       th: [t("session.trades"), span("num", `${s.trades} / ${s.hedges}`)],
       net: [t("session.net_delta"), span("num " +
         (Math.abs(s.net_delta) > s.net_tolerance_base ? "err" : "muted"),

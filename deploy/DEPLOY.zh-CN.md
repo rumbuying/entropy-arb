@@ -13,7 +13,7 @@
 | `config.yaml` 阈值（midline -4.2 / upper 6.5 / lower 5.5，28.5h 实测） | ✅ |
 | **控制台 systemd 常驻**（`entropy-console.service`，开机自启+崩溃拉起） | ✅ 已装，active |
 | **日志轮转**（`/etc/logrotate.d/entropy`，log 周轮/CVS 月轮，copytruncate） | ✅ 已装，dry-run 验证 |
-| **看门狗**（`entropy-watchdog.timer`，每 2 分钟：控制台存活/worker 崩溃/HALT/交易所断连，恢复自动通知） | ✅ 已装，告警→恢复闭环实测通过 |
+| **看门狗**（`entropy-watchdog.timer`，每 2 分钟：控制台存活/worker 崩溃/HALT/交易所断连/距强平/保证金占用，恢复自动通知） | ✅ 已装，告警→恢复闭环实测通过 |
 | **每周备份**（`entropy-backup.timer`，周日 03:00，config.yaml+profiles+.env → /root/backups，留 8 份，0600） | ✅ 已装，手动跑通 |
 | 机器时钟 | ✅ chrony NTP 已同步 |
 | 端口 8788 / 8787 / 8801+ | ✅ 无冲突 |
@@ -58,10 +58,12 @@ systemctl restart entropy-console         # 重启（会优雅停掉所有 worke
 ./deploy/entropy-backup.sh                # 手动备份
 ```
 
-看门狗规则：worker 崩溃 / 引擎 HALT / 交易所断连 / 控制台无响应 → 告警
-一次，恢复时通知。**Telegram 推送**：编辑 `/etc/default/entropy-watchdog`
+看门狗规则：worker 崩溃 / 引擎 HALT / 交易所断连 / 控制台无响应 /
+**距强平 < 10% / 保证金用满 90%** → 告警一次，恢复时通知。最后两条直接向
+HL/Lighter 查询（读 `.env` 的公开账户标识），引擎挂了也照报。
+**Telegram 推送**：编辑 `/etc/default/entropy-watchdog`
 填 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`（去掉行首 #），立即生效，
-无需重启任何服务。
+无需重启任何服务；同一文件可用 `LIQ_WARN_BPS` / `MARGIN_WARN_FRAC` 调阈值。
 
 ## 4. 剩下必做：上线前人工验证（需要你的浏览器）
 

@@ -31,6 +31,14 @@ log = logging.getLogger("hl")
 INFO_TIMEOUT = 10.0
 
 
+def _num(x) -> Optional[float]:
+    """float(x) or None — venue payloads use strings and omit fields."""
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
 class NonceAllocator:
     def __init__(self) -> None:
         self._last = 0
@@ -75,6 +83,13 @@ class HLVenue:
         self.equity = None
         self.free = None
         self.start_equity = None
+        # risk telemetry (refreshed with fetch_position): distance to the
+        # venue's liquidation price and margin utilisation, so the watchdog
+        # and the console can warn before a leg gets liquidated
+        self.liq_px: Optional[float] = None
+        self.margin_used: Optional[float] = None
+        self.margin_collateral: Optional[float] = None
+        self.unrealized: Optional[float] = None
         self.include_core_equity = True  # cleared when two venues share one account
         self.fee_bps = conf.fee_bps
         self.cap_usd = conf.cap_usd
@@ -85,6 +100,7 @@ class HLVenue:
         self.asset_id = -1
         self.size_decimals = 0
         self.min_base = 0.0
+        self.max_leverage = 0.0
         self.min_quote = 10.0
         self._cloid = int(time.time() * 1000)
         self._signing = None      # lazy hyperliquid-sdk signing module
@@ -112,6 +128,7 @@ class HLVenue:
                 self.asset_id = idx
                 self.size_decimals = int(a["szDecimals"])
                 self.min_base = 10 ** -self.size_decimals
+                self.max_leverage = float(a.get("maxLeverage") or 0)
                 log.info("[%s] %s asset_id=%d szDecimals=%d maxLev=%sx "
                          "(main dex)", self.name, self.coin, self.asset_id,
                          self.size_decimals, a.get("maxLeverage"))
@@ -136,6 +153,7 @@ class HLVenue:
             self.asset_id = 110000 + (dex_index - 1) * 10000 + idx
             self.size_decimals = int(a["szDecimals"])
             self.min_base = 10 ** -self.size_decimals
+            self.max_leverage = float(a.get("maxLeverage") or 0)
             log.info("[%s] %s asset_id=%d szDecimals=%d maxLev=%sx %s",
                      self.name, self.coin, self.asset_id, self.size_decimals,
                      a.get("maxLeverage"),
@@ -346,10 +364,17 @@ class HLVenue:
         assert addr is not None
         st = await self._info({"type": "clearinghouseState", "user": addr,
                                "dex": self.conf.hl_dex})
+        ms = st.get("marginSummary") or {}
+        self.margin_used = _num(ms.get("totalMarginUsed"))
+        self.margin_collateral = _num(ms.get("accountValue"))
         for ap in st.get("assetPositions") or []:
             pos = ap.get("position") or {}
             if pos.get("coin") == self.coin:
+                self.liq_px = _num(pos.get("liquidationPx"))
+                self.unrealized = _num(pos.get("unrealizedPnl"))
                 return float(pos.get("szi") or 0.0)
+        self.liq_px = None
+        self.unrealized = None
         return 0.0
 
     async def close(self) -> None:

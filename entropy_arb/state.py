@@ -11,11 +11,13 @@ Snapshot shape (all values JSON-safe; None where unknown):
     symbol, hedge_name, entropy_dex
     venues.entropy / venues.hedge:
         name, bid, ask, spread_bps, book_age_sec, fresh, position,
-        position_usd, volume_usd, equity, free, down, limited
+        position_usd, volume_usd, equity, free, liq_px, liq_dist_bps,
+        margin_frac, margin_used, margin_collateral, leverage, max_leverage,
+        unrealized_usd, down, limited
     session:
-        pnl_mtm, account_delta, equity_sum, exp_edge, fill_edge, trades,
-        hedges, net_delta, net_tolerance_base, consec_errors,
-        last_trade_ago_sec, minute_rows
+        pnl_mtm, account_delta, equity_sum, unrealized_usd, exp_edge,
+        fill_edge, trades, hedges, net_delta, net_tolerance_base,
+        consec_errors, last_trade_ago_sec, minute_rows
     signal:
         mid_premium_bps, midline_bps, upper_bps, lower_bps,
         band_low_bps, band_high_bps, entropy_fee_bps, hedge_fee_bps,
@@ -43,6 +45,31 @@ def _venue_state(eng, v, now: float) -> Dict[str, Any]:
     fresh = v.book.is_fresh(eng.cfg.staleness_sec)
     pos_usd = abs(v.position) * m if (m is not None and v.position) else None
     age = now - v.book.last_update_ts if v.book.ready else None
+    # risk telemetry: how far the venue's mark is from forced liquidation
+    # (positive bps = room left), and how much of the venue margin is used
+    liq_px = getattr(v, "liq_px", None)
+    liq_dist_bps = None
+    if liq_px and m and v.position:
+        liq_dist_bps = (m - liq_px) / m * 1e4
+        if v.position < 0:
+            liq_dist_bps = -liq_dist_bps
+    margin_used = getattr(v, "margin_used", None)
+    collateral = getattr(v, "margin_collateral", None)
+    notional = abs(v.position * m) if (m is not None and v.position) else 0.0
+    leverage = (notional / v.equity
+                if (notional and v.equity) else None)
+    max_leverage = getattr(v, "max_leverage", None) or None
+    # "how close to the venue's margin limit" — for an isolated perp the raw
+    # marginUsed/accountValue is always 1.0 by construction, so HL is measured
+    # by required-initial-margin vs equity (= leverage vs max leverage) and
+    # Lighter by pledged collateral vs free balance.
+    if getattr(v, "kind", "") == "hl":
+        margin_frac = ((notional / max_leverage) / collateral  # dex bucket
+                       if (notional and max_leverage and collateral) else None)
+    else:
+        margin_frac = (margin_used / collateral
+                       if (margin_used is not None and collateral) else None)
+        max_leverage = None
     return {
         "name": v.name,
         "key": v.key,
@@ -56,6 +83,14 @@ def _venue_state(eng, v, now: float) -> Dict[str, Any]:
         "volume_usd": v.volume_usd,
         "equity": v.equity,
         "free": v.free,
+        "liq_px": liq_px,
+        "liq_dist_bps": liq_dist_bps,
+        "margin_frac": margin_frac,
+        "margin_used": margin_used,
+        "margin_collateral": collateral,
+        "leverage": leverage,
+        "max_leverage": max_leverage,
+        "unrealized_usd": getattr(v, "unrealized", None),
         "down": v.key in eng._venue_down,
         "limited": eng._venue_limited(v),
     }
@@ -132,10 +167,14 @@ def build_snapshot(eng, log_buffer=None) -> Dict[str, Any]:
     # ---- session ------------------------------------------------------------
     eqs = [v.equity for v in eng.venues.values()]
     net = sum(v.position for v in eng.venues.values())
+    upls = [getattr(v, "unrealized", None) for v in eng.venues.values()]
     snap["session"] = {
         "pnl_mtm": eng.session_pnl(),
         "account_delta": eng.account_delta(),
         "equity_sum": (sum(eqs) if all(e is not None for e in eqs) else None),
+        # venue-reported mark of the OPEN position — the number the entry-edge
+        # ledger can never show (it only sums entries, never marks)
+        "unrealized_usd": (sum(upls) if all(u is not None for u in upls) else None),
         "exp_edge": eng.total_exp_edge,
         "fill_edge": eng.total_fill_edge,
         "trades": eng.trades,

@@ -38,6 +38,14 @@ AUTH_REFRESH_SEC = 8 * 60
 REST_TIMEOUT = 10.0
 
 
+def _num(x) -> Optional[float]:
+    """float(x) or None — venue payloads use strings and omit fields."""
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
 class AccountOrdersFeed:
     """Authenticated stream of our own order updates (settlement channel)."""
 
@@ -155,6 +163,12 @@ class LighterVenue:
         self.equity = None
         self.free = None
         self.start_equity = None
+        # risk telemetry (refreshed with fetch_position): distance to the
+        # venue's liquidation price and margin utilisation
+        self.liq_px: Optional[float] = None
+        self.margin_used: Optional[float] = None
+        self.margin_collateral: Optional[float] = None
+        self.unrealized: Optional[float] = None
         self.fee_bps = conf.fee_bps
         self.cap_usd = conf.cap_usd
         self.orders_per_min = conf.orders_per_min
@@ -344,9 +358,18 @@ class LighterVenue:
         acct = await self._account()
         if acct is None:
             raise RuntimeError(f"[{self.name}] account not found")
+        self.margin_collateral = _num(acct.get("collateral"))
+        avail = _num(acct.get("available_balance"))
+        self.margin_used = (self.margin_collateral - avail
+                            if (self.margin_collateral is not None
+                                and avail is not None) else None)
         for p in acct.get("positions") or []:
             if int(p.get("market_id", -1)) == self.market_id:
+                self.liq_px = _num(p.get("liquidation_price"))
+                self.unrealized = _num(p.get("unrealized_pnl"))
                 return float(p.get("sign") or 1.0) * float(p.get("position") or 0.0)
+        self.liq_px = None
+        self.unrealized = None
         return 0.0
 
     async def close(self) -> None:

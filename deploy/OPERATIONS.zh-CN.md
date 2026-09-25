@@ -83,6 +83,11 @@ sizing:
 
 - 每周：Analyzer 复测 `hours=24`（阈值漂移是最大风险）；
 - 告警：`/etc/default/entropy-watchdog` 填 Telegram 两项即推送；
+  该文件还可调 `LIQ_WARN_BPS`（默认 1000 = 距强平 <10% 报警）与
+  `MARGIN_WARN_FRAC`（默认 0.9 = 保证金余量不足 10% 报警；HL 逐仓按
+  「所需初始保证金 / 该 dex 已占用权益」算，Lighter 按「已占用/抵押品」算）——
+  这两项直接查 HL/Lighter 账户，不依赖引擎存活；
+- 强平距离/保证金占用：Overview 或引擎页 venues 表最后一列「距强平」；
 - HALT 后：先看 Runs 页日志尾部找原因，再手动 restart；
 - 服务器重启后：Runs 页手动重启 worker（console 会自起，worker 不会）；
 - 想加仓：profile 里改 `max_position_usd` → 保存 → Runs 页 restart 生效。
