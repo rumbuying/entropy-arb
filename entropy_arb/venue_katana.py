@@ -173,6 +173,18 @@ class KatanaSigner:
                           else ZERO_ADDRESS)
         self.describe()
 
+    def delegated_params(self) -> dict:
+        """Request-body field that tells the venue which delegated key signed.
+
+        The SDK's order/cancel params inherit `DelegatedKeyParams
+        {delegatedKey?: string}` and it is sent only when a delegated key is in
+        use — the venue rebuilds the EIP-712 struct from it, so omitting it
+        while signing with a session key yields INVALID_WALLET_SIGNATURE.
+        Note the name differs from the struct field (delegatedPublicKey)."""
+        if self.delegated == ZERO_ADDRESS:
+            return {}
+        return {"delegatedKey": self.delegated}
+
     def describe(self) -> str:
         s = f"wallet={self.wallet}"
         if self._account.address.lower() != self.wallet:
@@ -226,7 +238,10 @@ class KatanaSigner:
         }
         signed = Account.sign_typed_data(
             self._account.key, self.DOMAIN, _ORDER_TYPES, message)
-        return signed.signature.hex()
+        # 0x-prefixed, as ethers (the SDK's signer) produces: the venue
+        # recovers the signer from this string, and a bare hex body makes it
+        # recover the wrong address (INVALID_WALLET_SIGNATURE).
+        return "0x" + signed.signature.hex()
 
     def sign_cancel(self, p: dict) -> str:
         """EIP-712 signature for a cancellation request.
@@ -249,7 +264,7 @@ class KatanaSigner:
             types = _CANCEL_BY_WALLET_TYPES
         signed = Account.sign_typed_data(
             self._account.key, self.DOMAIN, types, message)
-        return signed.signature.hex()
+        return "0x" + signed.signature.hex()
 
 
 class KatanaVenue:
@@ -464,6 +479,7 @@ class KatanaVenue:
             "timeInForce": "ioc",
             "reduceOnly": bool(reduce_only),
             "clientOrderId": client_order_id,
+            **self.signer.delegated_params(),
         }
         try:
             params["signature"] = self.signer.sign_order(params)
@@ -542,6 +558,7 @@ class KatanaVenue:
             "timeInForce": "gtx",
             "reduceOnly": bool(reduce_only),
             "clientOrderId": client_order_id,
+            **self.signer.delegated_params(),
         }
         try:
             params["signature"] = self.signer.sign_order(params)
@@ -618,7 +635,8 @@ class KatanaVenue:
         make the quotes disappear): one request, one rate-limit unit, no
         dependence on knowing the live order ids."""
         assert self.signer is not None and self.market
-        params = {"nonce": str(uuid.uuid1()), "wallet": self.signer.wallet}
+        params = {"nonce": str(uuid.uuid1()), "wallet": self.signer.wallet,
+                  **self.signer.delegated_params()}
         if order_ids:
             params["orderIds"] = [str(i) for i in order_ids]
         else:

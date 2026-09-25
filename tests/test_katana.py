@@ -173,7 +173,7 @@ def test_signer_recovers_wallet():
             "delegatedPublicKey": "0x0000000000000000000000000000000000000000",
             "clientOrderId": "abc123",
         })
-    got = Account.recover_message(typed, signature="0x" + sig)
+    got = Account.recover_message(typed, signature=sig)
     assert got.lower() == TEST_ADDR.lower()
 
 
@@ -234,7 +234,7 @@ def test_delegated_session_key_signs_and_declares_itself():
          "isReduceOnly": False, "timeInForce": 2, "selfTradePrevention": 0,
          "isLiquidationAcquisitionOnly": False,
          "delegatedPublicKey": TEST_ADDR, "clientOrderId": "abc123"})
-    got = Account.recover_message(typed, signature="0x" + sig)
+    got = Account.recover_message(typed, signature=sig)
     assert got.lower() == TEST_ADDR.lower()
 
 

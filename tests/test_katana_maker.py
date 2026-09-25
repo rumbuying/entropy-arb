@@ -138,7 +138,7 @@ def test_place_maker_signs_gtx_order():
     # a maker sell must be rounded UP (never sell below the quote)
     assert params["price"] == "80070.00000000"
     assert "signature" not in params          # top level only
-    sig = "0x" + body["signature"]
+    sig = body["signature"]
     typed = encode_typed_data(
         KatanaSigner.DOMAIN, _ORDER_TYPES,
         {"nonce": int(params["nonce"].replace("-", ""), 16),
@@ -182,7 +182,7 @@ def test_cancel_market_uses_market_struct():
          "delegatedKey": "0x0000000000000000000000000000000000000000",
          "marketSymbol": MARKET})
     assert "signature" not in params          # top level only
-    sig = "0x" + body["signature"]
+    sig = body["signature"]
     assert Account.recover_message(typed, signature=sig).lower() == WALLET
 
 
@@ -204,7 +204,7 @@ def test_cancel_by_ids_uses_order_id_struct():
          "delegatedKey": "0x0000000000000000000000000000000000000000",
          "orderIds": ["o1", "o2"]})
     assert "signature" not in params          # top level only
-    sig = "0x" + body["signature"]
+    sig = body["signature"]
     assert Account.recover_message(typed, signature=sig).lower() == WALLET
 
 
