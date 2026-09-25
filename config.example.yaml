@@ -104,6 +104,9 @@ maker:
   max_hedge_failures: 3      # failures before EXPOSED halt / 对冲连续失败停机阈值
   hedge_retry_sec: 0.5       # hedge retry backoff / 对冲重试间隔
   interval_sec: 0.5          # quote-loop tick / 报价循环周期
+  vol_widen_k: 2.0           # adaptive widen = k × stdev(basis,1m bars)；0 关闭
+  vol_widen_window_min: 120  # basis history window for the stdev / 波动统计窗口（分钟）
+  vol_widen_cap_bps: 15.0    # max widen / 波动加宽上限（bps；离场侧只加一半）
   trades_csv: logs/maker-trades.csv
   selection_csv: logs/maker-selection.csv
 

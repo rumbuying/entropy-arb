@@ -294,6 +294,9 @@ _SCHEMA: Dict[str, Any] = {
         "max_hedge_failures": int,
         "hedge_retry_sec": float,
         "interval_sec": float,
+        "vol_widen_k": float,
+        "vol_widen_window_min": int,
+        "vol_widen_cap_bps": float,
         "trades_csv": str,
         "selection_csv": str,
     },
@@ -478,6 +481,9 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
         max_hedge_failures=int(mk.get("max_hedge_failures", 3)),
         hedge_retry_sec=float(mk.get("hedge_retry_sec", 0.5)),
         interval_sec=float(mk.get("interval_sec", 0.5)),
+        vol_widen_k=float(mk.get("vol_widen_k", 2.0)),
+        vol_widen_window_min=int(mk.get("vol_widen_window_min", 120)),
+        vol_widen_cap_bps=float(mk.get("vol_widen_cap_bps", 15.0)),
         trades_csv=str(mk.get("trades_csv", "logs/maker-trades.csv")),
         selection_csv=str(mk.get("selection_csv",
                                  "logs/maker-selection.csv")))
@@ -500,6 +506,13 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
             raise ConfigError(
                 "maker.hedge_batch_ms must be >= 0 and "
                 "maker.max_hedge_failures >= 1")
+        if maker.vol_widen_k < 0 or maker.vol_widen_cap_bps < 0:
+            raise ConfigError(
+                "maker.vol_widen_k / vol_widen_cap_bps must be >= 0")
+        if maker.vol_widen_window_min < 10:
+            raise ConfigError(
+                f"maker.vol_widen_window_min must be >= 10, got "
+                f"{maker.vol_widen_window_min}")
 
     entropy_dex = _get(raw, "entropy", "dex", "io")
     if base_venue == "hl" and hedge_venue == "tradexyz" \

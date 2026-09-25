@@ -17,7 +17,7 @@ from entropy_arb.config import load_config  # noqa: E402
 from entropy_arb.engine import Engine  # noqa: E402
 from entropy_arb.maker import (FillEvent,  # noqa: E402
                                inventory_skew_bps, quote_prices,
-                               requote_reason)
+                               requote_reason, vol_widen_bps)
 
 NO_ENV = os.path.join(tempfile.gettempdir(), "entropy-arb-no-such.env")
 TMP = tempfile.mkdtemp(prefix="maker-test-")
@@ -252,6 +252,59 @@ def test_tick_places_both_sides_at_anchored_prices():
     approx(ask.px, 80519.0 * 1.00075, tol=1e-4)
     approx(bid.qty, 0.005)
     assert bid.side == "bid" and ask.order_id
+
+
+def test_basis_history_seeded_from_minutes_csv(tmp_path):
+    eng = make_engine()
+    csvp = tmp_path / "minutes-test.csv"
+    csvp.write_text(
+        "minute_ts,premium_close_bps\n"
+        + "".join(f"{1700000000 + i},{0 if i % 2 == 0 else 10}\n"
+                  for i in range(120)))
+    eng.cfg.recorder_csv = str(csvp)
+    eng._seed_prem_history()
+    assert len(eng._mk_prem) == 120
+    assert 5.0 < eng._mk_widen < 15.0      # widen live from the first quote
+
+
+def test_vol_widen_bps_math():
+    assert vol_widen_bps([], 2.0, 15.0) == 0.0            # no data yet
+    assert vol_widen_bps([5.0] * 120, 2.0, 15.0) == 0.0   # zero std
+    assert vol_widen_bps([0.0, 10.0] * 60, 0.0, 15.0) == 0.0   # disabled (k=0)
+    approx(vol_widen_bps([0.0, 10.0] * 60, 2.0, 15.0, min_samples=10), 10.0)
+    assert vol_widen_bps([0.0, 100.0] * 60, 2.0, 15.0,
+                         min_samples=10) == 15.0          # capped
+
+
+def test_quotes_widen_with_basis_volatility():
+    eng = make_engine()
+    # 120 minutes of basis samples, std 5bps → k=2 → widen ≈10bps
+    eng._mk_prem.extend([0.0, 10.0] * 60)
+    eng._mk_prem_bucket = None              # force resample on next tick
+    asyncio.run(eng._maker_tick(("bid", "ask")))
+    widen = eng._mk_widen
+    assert 5.0 < widen < 15.0
+    bid, ask = eng._mk_quotes["bid"], eng._mk_quotes["ask"]
+    # flat position: both sides are ADD sides → full widen on each
+    approx(bid.px, 80518.0 / (1.0 + (7.5 + widen) / 1e4), tol=1e-4)
+    approx(ask.px, 80519.0 * (1.0 + (7.5 + widen) / 1e4), tol=1e-4)
+
+
+def test_reduce_side_widen_is_halved():
+    eng = make_engine()
+    eng.hedge.position = 0.0045             # long, mid-ladder inventory skew
+    skew = inventory_skew_bps(0.0045, 80455.0, 500.0,
+                              eng.cfg.inventory_scale_bps,
+                              eng.cfg.inventory_floor_frac)
+    eng._mk_prem.extend([0.0, 10.0] * 60)   # widen ≈10bps
+    eng._mk_prem_bucket = None
+    asyncio.run(eng._maker_tick(("bid", "ask")))
+    widen = eng._mk_widen
+    assert 5.0 < widen < 15.0
+    bid, ask = eng._mk_quotes["bid"], eng._mk_quotes["ask"]
+    # reduce side (ask, long position) carries half the widen and no skew
+    approx(ask.px, 80519.0 * (1.0 + (7.5 + 0.5 * widen) / 1e4), tol=1e-4)
+    approx(bid.px, 80518.0 / (1.0 + (7.5 + skew + widen) / 1e4), tol=1e-4)
 
 
 def test_inventory_surcharge_lands_on_the_adding_side_only():

@@ -27,7 +27,8 @@ import aiohttp
 from .book import ArbPlan, floor_step, plan_arb
 from .config import Config, read_band
 from .maker import (FillEvent, MakerQuote, clamp_to_maker_book,
-                    inventory_skew_bps, quote_prices, requote_reason)
+                    inventory_skew_bps, quote_prices, requote_reason,
+                    vol_widen_bps)
 from .recorder import MinuteRecorder
 from .venue_hl import HLVenue
 from .venue_katana import KatanaVenue
@@ -116,6 +117,10 @@ class Engine:
         self._mk_hedge_sent_ts = None
         # adverse-selection samples: dicts with prem captured at fill, +1s, +10s
         self._mk_selection: list = []
+        # adaptive widen state: per-minute basis samples + cached surcharge
+        self._mk_prem: deque = deque(maxlen=1440)
+        self._mk_prem_bucket = None
+        self._mk_widen = 0.0
 
     # ------------------------------------------------------------- utilities
 
@@ -695,6 +700,32 @@ class Engine:
     MAKER_SELECTION_HEADER = ["ts", "side", "qty", "prem_fill_bps",
                               "prem_1s_bps", "prem_10s_bps"]
 
+    def _seed_prem_history(self) -> None:
+        """Preload the basis history from the recorder's minutes CSV so the
+        volatility widen is live from the first quote after a restart —
+        the tight-quote minutes right after a reboot are exactly when fast
+        markets pick quotes off."""
+        import csv as _csv
+        import os as _os
+        path = self.cfg.recorder_csv
+        try:
+            if not path or not _os.path.exists(path):
+                return
+            with open(path, newline="", errors="replace") as fh:
+                rows = list(_csv.DictReader(fh))
+            vals = [float(r["premium_close_bps"]) for r in rows[-1440:]
+                    if r.get("premium_close_bps") not in (None, "")]
+            self._mk_prem.extend(vals)
+            mc = self.cfg.maker
+            self._mk_widen = vol_widen_bps(
+                list(self._mk_prem)[-mc.vol_widen_window_min:],
+                mc.vol_widen_k, mc.vol_widen_cap_bps)
+            log.info("[MAKER] basis history seeded %d minutes from %s "
+                     "(widen %.2fbps)", len(self._mk_prem), path,
+                     self._mk_widen)
+        except Exception as e:
+            log.warning("[MAKER] basis history seed failed: %r", e)
+
     def _setup_maker_roles(self) -> None:
         """maker role falls on the hedge venue (--hedge katana → Katana
         quotes); the base leg is the taker hedge. Startup fails loudly when
@@ -708,11 +739,16 @@ class Engine:
         self.maker, self.taker_hedge = mk, hg
         mk.maker_mode = True
         mk.on_fill(self._on_maker_fill)
+        self._seed_prem_history()
         log.warning("[MAKER] mode on — quoting %s on %s, hedging fills on %s "
-                    "(edge %.2fbps + costs %.2fbps, batch %dms); taker band "
-                    "strategy disabled", mk.conf.symbol, mk.name, hg.name,
+                    "(edge %.2fbps + costs %.2fbps, batch %dms, widen "
+                    "%.1f×std/%dmin cap %.1fbps); taker band strategy "
+                    "disabled", mk.conf.symbol, mk.name, hg.name,
                     self.cfg.maker.edge_bps, self.cfg.maker.costs_bps,
-                    self.cfg.maker.hedge_batch_ms)
+                    self.cfg.maker.hedge_batch_ms,
+                    self.cfg.maker.vol_widen_k,
+                    self.cfg.maker.vol_widen_window_min,
+                    self.cfg.maker.vol_widen_cap_bps)
 
     def _maker_safety_block(self):
         """Reason the quote loop must stand down right now, or None.
@@ -808,13 +844,31 @@ class Engine:
         mid = mk.book.mid()
         if not (hbid and hask and mid):
             return
+        # sample the basis once per minute and re-derive the volatility
+        # widen (same idea as autoband, but priced into the maker quotes)
+        bucket = int(now // 60)
+        if bucket != self._mk_prem_bucket:
+            self._mk_prem_bucket = bucket
+            prem = self.premium_bps()
+            if prem is not None:
+                self._mk_prem.append(prem)
+                mc = self.cfg.maker
+                self._mk_widen = vol_widen_bps(
+                    list(self._mk_prem)[-mc.vol_widen_window_min:],
+                    mc.vol_widen_k, mc.vol_widen_cap_bps)
+        widen = self._mk_widen
         skew = inventory_skew_bps(mk.position, mid, mk.cap_usd,
                                   self.cfg.inventory_scale_bps,
                                   self.cfg.inventory_floor_frac)
-        # surcharge only the side that would ADD to inventory; the reduce
-        # side keeps the flat price or a near-cap position can never unwind
+        # inventory surcharge only on the side that would ADD to inventory
+        # (the reduce side keeps a reachable price or a near-cap position
+        # can never unwind); the volatility widen applies to both sides,
+        # halved on the reduce side — flat exit quotes get picked off in
+        # trends, full ones would deadlock the exit
+        surcharge = {adds: (skew + widen) if adds else 0.5 * widen
+                     for adds in (True, False)}
         priced = {adds: quote_prices(hbid, hask, cfg.costs_bps,
-                                     cfg.edge_bps, skew if adds else 0.0)
+                                     cfg.edge_bps, surcharge[adds])
                   for adds in (True, False)}
         # keep both sides inside the maker venue's own touch (a basis-heavy
         # pair otherwise computes a price that GTX rejects as crossing)
@@ -831,7 +885,7 @@ class Engine:
             bid_px, ask_px = px[adds]
             anchors = {"bid": (bid_px, hbid), "ask": (ask_px, hask)}
             await self._maker_tick_side(side, anchors[side], live,
-                                        skew if adds else 0.0, now)
+                                        surcharge[adds], now)
 
     async def _maker_tick_side(self, side, anchor_pair, live, skew,
                                now: float) -> None:

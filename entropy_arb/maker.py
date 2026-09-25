@@ -37,6 +37,7 @@ shapes, cancel semantics, rate-limit shape) behind this contract.
 """
 from __future__ import annotations
 
+import statistics
 from dataclasses import dataclass
 
 
@@ -77,6 +78,9 @@ class MakerParams:
     max_hedge_failures: int = 3
     hedge_retry_sec: float = 0.5
     interval_sec: float = 0.5         # quote-loop tick
+    vol_widen_k: float = 2.0          # widen = k × stdev(basis, window) bps
+    vol_widen_window_min: int = 120   # basis history for the stdev, minutes
+    vol_widen_cap_bps: float = 15.0   # upper bound on the volatility widen
     trades_csv: str = "logs/maker-trades.csv"
     selection_csv: str = "logs/maker-selection.csv"
 
@@ -110,6 +114,20 @@ def inventory_skew_bps(position: float, mid, cap_usd: float,
     if u <= floor:
         return 0.0
     return scale_bps * (u - floor) / (1.0 - floor)
+
+
+def vol_widen_bps(prem_samples, k: float, cap_bps: float,
+                  min_samples: int = 30) -> float:
+    """Adaptive quote widening from recent basis volatility.
+
+    ``prem_samples`` is the recent per-minute premium series in bps. The
+    widen is ``k × stdev`` capped at ``cap_bps`` — the same shape the
+    autoband uses for the taker band. Zero until ``min_samples`` exist, so
+    a fresh restart quotes tight until there is data to be careful about;
+    ``k = 0`` disables the feature entirely."""
+    if k <= 0 or len(prem_samples) < min_samples:
+        return 0.0
+    return min(k * statistics.pstdev(prem_samples), cap_bps)
 
 
 def quote_prices(hedge_bid, hedge_ask, costs_bps: float, edge_bps: float,
