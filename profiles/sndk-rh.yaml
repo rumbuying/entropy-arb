@@ -1,5 +1,5 @@
 thresholds:
-  midline_bps: -3.04
+  midline_bps: -3.34
   upper_bps: 9.91
   lower_bps: 9.91
 sizing:

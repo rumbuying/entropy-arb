@@ -11,7 +11,7 @@
 #   回测（maker 成本）：~42bp/天；$15k clip 约 $63/天毛（打五折 ~$32/天）
 thresholds:
   # 占位值，由 auto_band 每 5 分钟用采集数据校准；maker 模式不使用该 midline
-  midline_bps: 2.81
+  midline_bps: 2.28
   upper_bps: 5
   lower_bps: 5
 
