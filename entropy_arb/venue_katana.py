@@ -142,6 +142,15 @@ def _f(v, default: float = 0.0) -> float:
         return default
 
 
+def _signed_envelope(params: dict) -> dict:
+    """The wire body for every signed Katana request: the signature at the TOP
+    level, never nested inside `parameters` (the venue rejects
+    "parameters.signature is not allowed")."""
+    return {"parameters": {k: v for k, v in params.items()
+                           if k != "signature"},
+            "signature": params.get("signature")}
+
+
 class KatanaSigner:
     """API-key HMAC + EIP-712 order signatures for one wallet."""
 
@@ -155,12 +164,19 @@ class KatanaSigner:
         self._account = Account.from_key(creds.private_key)
         self.wallet = (creds.wallet_address
                        or self._account.address).lower()
+        # Delegated (session) key: the SDK signs with the delegate and declares
+        # it in the struct's delegatedPublicKey / delegatedKey field — that is
+        # how the exchange knows to validate the signature against the delegate
+        # instead of the wallet itself. Signer == wallet → zero address.
+        self.delegated = (self._account.address.lower()
+                          if self._account.address.lower() != self.wallet
+                          else ZERO_ADDRESS)
         self.describe()
 
     def describe(self) -> str:
         s = f"wallet={self.wallet}"
         if self._account.address.lower() != self.wallet:
-            s += f" (signer={self._account.address})"
+            s += f" (delegated signer={self._account.address})"
         return s
 
     # ------------------------------------------------------------------ auth
@@ -205,7 +221,7 @@ class KatanaSigner:
             "timeInForce": TIF_SIG.get(p.get("timeInForce", "ioc"), TIF_IOC),
             "selfTradePrevention": STP_DC,
             "isLiquidationAcquisitionOnly": False,
-            "delegatedPublicKey": ZERO_ADDRESS,
+            "delegatedPublicKey": self.delegated,
             "clientOrderId": p.get("clientOrderId", ""),
         }
         signed = Account.sign_typed_data(
@@ -221,7 +237,7 @@ class KatanaSigner:
         from eth_account import Account
         nonce_u128 = int(p["nonce"].replace("-", ""), 16)
         base = {"nonce": nonce_u128, "wallet": p["wallet"],
-                "delegatedKey": ZERO_ADDRESS}
+                "delegatedKey": self.delegated}
         if p.get("orderIds"):
             message = {**base, "orderIds": list(p["orderIds"])}
             types = _CANCEL_BY_ORDER_IDS_TYPES
@@ -401,9 +417,13 @@ class KatanaVenue:
 
         Shared by taker orders, maker quotes and cancellations so the error
         mapping is identical across all three. Returns
-        (json_body, err, unresolved)."""
-        body = {"parameters": params, "signature": params.get("signature")}
-        payload = json.dumps(body, separators=(",", ":"))
+        (json_body, err, unresolved).
+
+        The signature rides at the TOP level: the venue rejects it inside
+        `parameters` ("parameters.signature is not allowed"), so it is lifted
+        out of the caller's dict here rather than being embedded twice."""
+        payload = json.dumps(_signed_envelope(params),
+                             separators=(",", ":"))
         headers = {**self.signer.hmac_headers(payload),
                    "Content-Type": "application/json"}
         url = f"{self.rest_url}{path}"

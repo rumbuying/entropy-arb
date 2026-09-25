@@ -182,6 +182,90 @@ def test_signature_deterministic():
     assert s.sign_order(_params(s)) == s.sign_order(_params(s))
 
 
+def test_direct_signer_declares_zero_delegated_address():
+    # signer == wallet (no KATANA_WALLET override): delegated stays zero
+    s = _signer()
+    assert s.delegated == "0x" + "0" * 40
+
+
+def test_delegated_session_key_signs_and_declares_itself():
+    """A session/delegated key (KATANA_WALLET ≠ signing key) must declare its
+    own address in delegatedPublicKey, exactly like the SDK's
+    `data.delegatedKey || ZeroAddress`; otherwise the exchange validates the
+    signature against the wallet and rejects the order."""
+    from eth_account import Account
+    from eth_account.messages import encode_typed_data
+    wallet = "0x3fe959b60abe97eafcc984e4347a783c2bfff2fe"
+    s = KatanaSigner(KatanaCreds(
+        api_key="1e7c4f52-4af7-4e1b-aa94-94fac8d931aa",
+        api_secret="ufuh3ywgg854aq7m73oy6gnnpj5ar9a67szuw5lclbz77zqu0j",
+        private_key=TEST_KEY, wallet_address=wallet))
+    assert s.wallet == wallet
+    assert s.delegated == TEST_ADDR.lower()
+
+    sig = s.sign_order(_params(s))
+    typed = encode_typed_data(
+        KatanaSigner.DOMAIN,
+        {"Order": [
+            {"name": "nonce", "type": "uint128"},
+            {"name": "wallet", "type": "address"},
+            {"name": "marketSymbol", "type": "string"},
+            {"name": "orderType", "type": "uint8"},
+            {"name": "orderSide", "type": "uint8"},
+            {"name": "quantity", "type": "string"},
+            {"name": "limitPrice", "type": "string"},
+            {"name": "triggerPrice", "type": "string"},
+            {"name": "triggerType", "type": "uint8"},
+            {"name": "callbackRate", "type": "string"},
+            {"name": "conditionalOrderId", "type": "uint128"},
+            {"name": "isReduceOnly", "type": "bool"},
+            {"name": "timeInForce", "type": "uint8"},
+            {"name": "selfTradePrevention", "type": "uint8"},
+            {"name": "isLiquidationAcquisitionOnly", "type": "bool"},
+            {"name": "delegatedPublicKey", "type": "address"},
+            {"name": "clientOrderId", "type": "string"},
+        ]},
+        {"nonce": int("34b98930c0a711ee8e2b79802eed094c", 16),
+         "wallet": wallet,
+         "marketSymbol": "BTC-USD", "orderType": 1, "orderSide": 1,
+         "quantity": "0.00050000", "limitPrice": "80600.00000000",
+         "triggerPrice": "0.00000000", "triggerType": 0,
+         "callbackRate": "0.00000000", "conditionalOrderId": 0,
+         "isReduceOnly": False, "timeInForce": 2, "selfTradePrevention": 0,
+         "isLiquidationAcquisitionOnly": False,
+         "delegatedPublicKey": TEST_ADDR, "clientOrderId": "abc123"})
+    got = Account.recover_message(typed, signature="0x" + sig)
+    assert got.lower() == TEST_ADDR.lower()
+
+
+def test_signed_envelope_keeps_signature_at_top_level():
+    """Regression: the signature used to be embedded twice — once inside
+    `parameters` and once at the top level — and the live venue rejects that
+    with `parameters.signature is not allowed`, blocking every order."""
+    from entropy_arb.venue_katana import _signed_envelope
+    body = _signed_envelope({"nonce": "n", "wallet": "0xabc",
+                             "signature": "0xdead"})
+    assert body == {"parameters": {"nonce": "n", "wallet": "0xabc"},
+                    "signature": "0xdead"}
+    assert "signature" not in body["parameters"]
+    # the caller's dict is left untouched
+    params = {"nonce": "n", "signature": "0xdead"}
+    _signed_envelope(params)
+    assert params["signature"] == "0xdead"
+
+
+def test_order_body_never_carries_delegated_field():
+    """The venue rejects `parameters.delegatedPublicKey` outright
+    (BAD_REQUEST): the delegated key belongs to the EIP-712 struct only."""
+    import inspect
+    from entropy_arb import venue_katana
+    src = inspect.getsource(venue_katana)
+    for func in ("send_taker", "place_maker", "cancel_orders"):
+        body = src.split(f"async def {func}")[1].split("\n    async def ")[0]
+        assert '"delegatedPublicKey"' not in body, func
+        assert '"delegatedKey"' not in body, func
+
+
 def test_hmac_known_vector():
     # RFC 4231 test case 2: HMAC-SHA256 over "what do ya want for nothing?"
     s = _signer()

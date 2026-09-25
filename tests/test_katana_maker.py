@@ -131,12 +131,14 @@ def test_place_maker_signs_gtx_order():
     r = asyncio.run(v.place_maker(is_buy=False, qty=0.005, limit_px=80070.0))
     assert r["status"] == "open" and r["err"] is None
 
-    params = json.loads(s.only()[2]["data"])["parameters"]
+    body = json.loads(s.only()[2]["data"])
+    params = body["parameters"]
     assert params["timeInForce"] == "gtx"
     assert params["side"] == "sell"
     # a maker sell must be rounded UP (never sell below the quote)
     assert params["price"] == "80070.00000000"
-    sig = "0x" + params["signature"]
+    assert "signature" not in params          # top level only
+    sig = "0x" + body["signature"]
     typed = encode_typed_data(
         KatanaSigner.DOMAIN, _ORDER_TYPES,
         {"nonce": int(params["nonce"].replace("-", ""), 16),
@@ -157,7 +159,8 @@ def test_maker_buy_rounds_price_down():
     s = FakeSession([FakeResponse(200, KatanaMakerCase().resting_response())])
     v = _venue(s)
     asyncio.run(v.place_maker(is_buy=True, qty=0.005, limit_px=79930.7))
-    params = json.loads(s.only()[2]["data"])["parameters"]
+    body = json.loads(s.only()[2]["data"])
+    params = body["parameters"]
     assert params["price"] == "79930.00000000"     # floored, never pays up
 
 
@@ -169,7 +172,8 @@ def test_cancel_market_uses_market_struct():
     s = FakeSession([FakeResponse(200, {})])
     v = _venue(s)
     asyncio.run(v.cancel_orders())
-    params = json.loads(s.only()[2]["data"])["parameters"]
+    body = json.loads(s.only()[2]["data"])
+    params = body["parameters"]
     assert "orderIds" not in params and params["market"] == MARKET
     typed = encode_typed_data(
         KatanaSigner.DOMAIN, _CANCEL_BY_MARKET_TYPES,
@@ -177,7 +181,8 @@ def test_cancel_market_uses_market_struct():
          "wallet": params["wallet"],
          "delegatedKey": "0x0000000000000000000000000000000000000000",
          "marketSymbol": MARKET})
-    sig = "0x" + params["signature"]
+    assert "signature" not in params          # top level only
+    sig = "0x" + body["signature"]
     assert Account.recover_message(typed, signature=sig).lower() == WALLET
 
 
@@ -189,7 +194,8 @@ def test_cancel_by_ids_uses_order_id_struct():
     s = FakeSession([FakeResponse(200, {})])
     v = _venue(s)
     asyncio.run(v.cancel_orders(order_ids=["o1", "o2"]))
-    params = json.loads(s.only()[2]["data"])["parameters"]
+    body = json.loads(s.only()[2]["data"])
+    params = body["parameters"]
     assert params["orderIds"] == ["o1", "o2"]
     typed = encode_typed_data(
         KatanaSigner.DOMAIN, _CANCEL_BY_ORDER_IDS_TYPES,
@@ -197,7 +203,8 @@ def test_cancel_by_ids_uses_order_id_struct():
          "wallet": params["wallet"],
          "delegatedKey": "0x0000000000000000000000000000000000000000",
          "orderIds": ["o1", "o2"]})
-    sig = "0x" + params["signature"]
+    assert "signature" not in params          # top level only
+    sig = "0x" + body["signature"]
     assert Account.recover_message(typed, signature=sig).lower() == WALLET
 
 
