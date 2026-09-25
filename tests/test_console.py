@@ -101,6 +101,24 @@ def test_secrets_per_leg_lighter_venues(tmp_path):
     assert st["venues"]["lighter-base"] is False
 
 
+def test_secrets_opaque_token_accepts_base64_and_jwt(tmp_path):
+    """Katana's API secret is an opaque token verified by HMAC at the venue, so
+    the local shape rule must not guess an alphabet (it used to reject base64
+    padding and dots, which blocked a real key from being saved)."""
+    from entropy_arb.console.secrets import validate_value
+    for good in ("AbCdEf0123456789", "YWJjZGVmZ2hpamtsbW5vcA==",
+                 "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc",
+                 "tok-with_underscore-and-dash", "a" * 8):
+        assert validate_value("KATANA_API_SECRET", good) is None, good
+
+    # a paste that wrapped is still caught, with a shape-only explanation
+    err = validate_value("KATANA_API_SECRET", "abc\ndefghijklmnop")
+    assert err and "line break" in err and "abc" not in err
+    assert validate_value("KATANA_API_SECRET", "   ") is not None
+    err = validate_value("KATANA_API_SECRET", "short")
+    assert err and "truncated" in err
+
+
 # ------------------------------------------------------------- profiles
 
 VALID_YAML = """\

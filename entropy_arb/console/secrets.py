@@ -31,7 +31,11 @@ RE_INT = re.compile(r"^\d+$")
 # time of writing — validate shape loosely: any non-empty printable token)
 RE_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                      r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
-RE_TOKEN = re.compile(r"^[A-Za-z0-9_\-]{16,}$")
+# Katana API secrets are opaque tokens: the venue verifies them by HMAC, so a
+# local shape rule must not guess an alphabet. This only guards against the two
+# mistakes a paste makes — a wrapped/multi-line value, or an empty/truncated
+# one — while accepting base64 ('=', '+', '/'), JWT dots, etc.
+RE_TOKEN = re.compile(r"^\S{8,}$")
 
 # key -> (kind, description)
 KEY_KINDS: Dict[str, str] = {
@@ -102,6 +106,22 @@ def _hex_key_error(value: str) -> str:
             + ("; " + "; ".join(why) if why else ""))
 
 
+def _token_error(value: str) -> str:
+    """Explain why an opaque token failed the shape check, describing only the
+    SHAPE (length, whitespace) — never echoing any character of the value."""
+    s = value.strip()
+    why = []
+    if not s:
+        why.append("empty")
+    if re.search(r"\s", value):
+        why.append("contains a space or line break (copy may have wrapped)")
+    if s and len(s) < 8:
+        why.append(f"only {len(s)} character(s) — a truncated paste?")
+    return ("expect the API secret token shown once when the key was created "
+            "(a single line, no spaces)"
+            + ("; " + "; ".join(why) if why else ""))
+
+
 def validate_value(key: str, value: str) -> Optional[str]:
     """Return an error message, or None when the value is well-formed."""
     kind = KEY_KINDS.get(key)
@@ -118,7 +138,7 @@ def validate_value(key: str, value: str) -> Optional[str]:
     if kind == "uuid" and not RE_UUID.match(value):
         return "expect a UUID (API key from the Katana Perps API keys page)"
     if kind == "token" and not RE_TOKEN.match(value):
-        return "expect the API secret token (shown once when the key was created)"
+        return _token_error(value)
     return None
 
 
