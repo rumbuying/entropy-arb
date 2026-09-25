@@ -16,6 +16,11 @@ Web 管理控制台**（P1–P4 全部完成）：引擎内嵌只读网页总览
 本次新增代码约 4900 行；**零新增第三方依赖**（控制台/网页全部基于已有的
 aiohttp + 原生 ES modules，无构建步骤）。
 
+> **2026-09-25 更新**：本轮工作（基准腿解耦 `--base`、Katana 委托密钥、
+> maker 报价夹逼、Lighter↔Katana 实盘试点与其 nonce 阻塞）单独整理在
+> **[HANDOVER-LIGHTER-KATANA.md](HANDOVER-LIGHTER-KATANA.md)**，接手该线请先读它。
+> 测试数已增至 132。
+
 ## 2. 新机器快速开始
 
 ```bash

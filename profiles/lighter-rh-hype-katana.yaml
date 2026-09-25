@@ -20,13 +20,13 @@ thresholds:
 entropy:
   symbol: HYPE
   taker_fee_bps: 0.0         # lighter-rh 实测 taker=maker=0
-  max_position_usd: 2000     # 受 KAT OI $37k 限制
+  max_position_usd: 600      # 试点档（rh 20% 初始保证金 → 占用 $120）
   max_orders_per_min: 120
 
 hedge:
   symbol: HYPE-USD
   taker_fee_bps: 1.9         # 实测 0.00019；maker 0.0000475
-  max_position_usd: 2000
+  max_position_usd: 600
   max_orders_per_min: 30
 
 sizing:
@@ -71,13 +71,17 @@ auto_band:
 # maker 模式（唯一可行结构：Katana 挂单 + rh 吃单对冲）
 # costs_bps = KAT maker 0.475 + rh 吃单点半差 ~0.9 + 缓冲（每笔成交锁定一次）
 #
-# maker:
-#   enabled: true
-#   edge_bps: 1.5            # 每笔目标净边际
-#   costs_bps: 1.5
-#   requote_bps: 1.0
-#   requote_sec: 20
-#   size_base: 3.0           # ~$273 @ $91，KAT 最小 0.5 / step 0.01
-#   sides: both
-#   hedge_batch_ms: 250
-#   max_hedge_failures: 3
+maker:
+  enabled: true
+  edge_bps: 1.5            # 每笔目标净边际
+  costs_bps: 1.5           # KAT maker 0.475 + rh 吃单点半差 ~0.9 + 缓冲
+  requote_bps: 1.0
+  requote_sec: 20
+  size_base: 2.0           # ~$183 @ $91；KAT 最小 0.5 / step 0.01
+  sides: both
+  hedge_batch_ms: 250
+  max_hedge_failures: 3
+  hedge_retry_sec: 0.5
+  interval_sec: 0.5
+  trades_csv: logs/maker-trades-HYPE-lighter-rh.csv
+  selection_csv: logs/maker-selection-HYPE-lighter-rh.csv
