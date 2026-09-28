@@ -13,9 +13,9 @@
 #     max_signal_edge_bps 挡住（本文件设 25bp ≈ 8σ）
 thresholds:
   # 占位值，auto_band 按 rh 数据校准
-  midline_bps: 7.8
-  upper_bps: 8.0
-  lower_bps: 8.0
+  midline_bps: 4.94
+  upper_bps: 10.82
+  lower_bps: 10.82
 
 entropy:
   symbol: ZEC
@@ -74,7 +74,7 @@ auto_band:
 #
 maker:
   enabled: true
-  edge_bps: 2.0
+  edge_bps: 4.0
   costs_bps: 2.0           # KAT maker 0.475 + rh 吃单点半差 ~1.3 + 缓冲
   requote_bps: 3.0
   requote_sec: 30
