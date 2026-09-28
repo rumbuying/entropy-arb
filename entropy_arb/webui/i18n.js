@@ -148,7 +148,7 @@ const STRINGS = {
     "venue.pos_title": "Positions by exchange",
     "venue.strat_title": "Strategy P&L",
     "venue.total": "TOTAL",
-    "venue.mtm_note": "Session MTM resets on every engine restart; realized today comes from the trades CSVs (locked edge, two-leg fills only).",
+    "venue.mtm_note": "Session MTM resets on every engine restart. Realized today = FIFO round-trip PnL booked on the close date (both legs' fees included); open inventory is unrealized and shows in session MTM.",
     "logs.title": "worker logs",
     // profiles
     "profiles.new": "New profile",
@@ -350,7 +350,7 @@ const STRINGS = {
     "venue.pos_title": "按交易所的持仓明细",
     "venue.strat_title": "策略盈亏",
     "venue.total": "合计",
-    "venue.mtm_note": "会话浮动 MTM 在引擎每次重启后清零；今日已实现取自成交流水（仅双腿完整成交的锁定边际）。",
+    "venue.mtm_note": "会话浮动 MTM 在引擎每次重启后清零；今日已实现 = FIFO 往返盈亏、按平仓日记账（含双腿手续费）；未平库存不计入本列，体现在会话浮动中。",
     "logs.title": "引擎日志",
     "profiles.new": "新建配置",
     "profiles.save": "校验并保存",

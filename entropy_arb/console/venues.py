@@ -22,6 +22,8 @@ def exchange_of(venue_name: str) -> str:
     n = (venue_name or "").upper()
     if "ENTROPY" in n or n == "HL":
         return "HL(io)"
+    if "BACKPACK" in n:
+        return "Backpack"
     if n == "RH" or "LIGHTER-RH" in n:
         return "Lighter-RH"
     if "KATANA" in n:
@@ -38,12 +40,15 @@ def _local_midnight() -> float:
 
 
 def realized_today(root: str, status: dict, profile_yaml: dict) -> "float | None":
-    """Today's locked edge from the strategy's trades CSV, or None.
+    """Today's realized PnL from the strategy's trades CSV, or None.
 
-    Taker engines write logs/trades-{SYM}-{hedge}.csv (sum fill_edge_usd
-    over fully-filled entries); maker engines write the profile's
-    maker.trades_csv (sum net_edge_bps × qty × px). No file or no fills
-    today → None so the UI can show a dash instead of a fake zero."""
+    Taker engines: FIFO round-trip PnL booked on the close date (see
+    _taker_fifo_realized) — a basis line sells/buys inventory across days,
+    so summing instantaneous fill_edge over "today's" rows would report
+    open-cost as a loss. Maker engines write the profile's maker.trades_csv
+    (sum net_edge_bps × qty × px); a maker round is opened and hedged in
+    the same second, so its locked net edge IS the realized PnL.
+    No file or no closes today → None so the UI shows a dash."""
     midnight = _local_midnight()
     if (profile_yaml or {}).get("maker", {}).get("enabled"):
         path = profile_yaml["maker"].get("trades_csv") or ""
@@ -68,20 +73,51 @@ def realized_today(root: str, status: dict, profile_yaml: dict) -> "float | None
                         f"trades-{status.get('symbol')}-{status.get('hedge')}.csv")
     if not os.path.exists(path):
         return None
-    total = 0.0
+    return _taker_fifo_realized(path, midnight)
+
+
+def _taker_fifo_realized(path: str, midnight: float) -> "float | None":
+    """FIFO round-trip PnL, booked on the day a basis unit is CLOSED.
+
+    Each two-leg fill opens (or reduces) one basis unit: buy_entropy = +1
+    (long entropy / short hedge), sell_entropy = -1. A trade that reduces
+    the opposite queue closes units; the round trip realizes
+    per_unit(open edge) + per_unit(close edge) — exact, because
+    (H1−E1) at open + (E2−H2) at close = spread_open − spread_close, and
+    both legs' fees are already inside fill_edge_usd. Only closes dated
+    on/after `midnight` count toward "today"; open inventory is unrealized
+    and lives in the session-MTM column instead."""
+    from collections import deque
+    queue: deque = deque()      # open units: [qty, edge_per_unit_usd, sign]
+    realized = 0.0
     seen = False
     with open(path, newline="", errors="replace") as fh:
         for r in csv.DictReader(fh):
             try:
-                if float(r["ts"]) < midnight:
+                matched = min(float(r["buy_fill"]), float(r["sell_fill"]))
+                if matched <= 0:
                     continue
-                if r.get("buy_status") == "filled" and \
-                        r.get("sell_status") == "filled":
-                    total += float(r["fill_edge_usd"])
-                    seen = True
+                ts = float(r["ts"])
+                edge = float(r["fill_edge_usd"])
+                sign = 1.0 if r.get("direction") == "buy_entropy" else -1.0
             except (KeyError, ValueError, TypeError):
                 continue
-    return total if seen else None
+            per = edge / matched
+            rem = matched
+            while rem > 1e-12 and queue and queue[0][2] != sign:
+                u = queue[0]
+                k = min(u[0], rem)
+                pnl = (u[1] + per) * k
+                if ts >= midnight:
+                    realized += pnl
+                    seen = True
+                u[0] -= k
+                rem -= k
+                if u[0] <= 1e-12:
+                    queue.popleft()
+            if rem > 1e-12:
+                queue.append([rem, per, sign])
+    return realized if seen else None
 
 
 def _notional(v: dict) -> "float | None":

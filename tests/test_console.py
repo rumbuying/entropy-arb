@@ -337,13 +337,17 @@ def test_venues_realized_today(tmp_path):
     now = time.time()
     logs = tmp_path / "logs"
     logs.mkdir()
+    # FIFO round trips booked on the close date: the old +9.9 open (from
+    # >24h ago) is closed by today's -1.0 sell, realizing +8.9 today; the
+    # one-leg-only row never counts; today's open (+2.0) stays unrealized.
     (logs / "trades-X-h.csv").write_text(
-        "ts,fill_edge_usd,buy_status,sell_status\n"
-        f"{now},1.5,filled,filled\n"
-        f"{now},2.0,filled,canceled\n"
-        f"{now - 90000},9.9,filled,filled\n")
+        "ts,direction,buy_fill,sell_fill,fill_edge_usd\n"
+        f"{now - 90000},buy_entropy,1.0,1.0,9.9\n"
+        f"{now},sell_entropy,1.0,1.0,-1.0\n"
+        f"{now},sell_entropy,0.0,2.0,-9.9\n"
+        f"{now},buy_entropy,1.0,1.0,2.0\n")
     st = {"symbol": "X", "hedge": "h"}
-    assert realized_today(str(tmp_path), st, {}) == 1.5
+    assert abs(realized_today(str(tmp_path), st, {}) - 8.9) < 1e-9
 
     maker = tmp_path / "maker.csv"
     maker.write_text("ts,hedge_qty,hedge_px,net_edge_bps\n"
