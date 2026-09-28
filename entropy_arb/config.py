@@ -33,16 +33,18 @@ from .maker import MakerParams
 HL_API_URL = "https://api.hyperliquid.xyz"
 HL_WS_URL = "wss://api.hyperliquid.xyz/ws"   # official ws — the only HL feed used
 
-HEDGE_VENUES = ("lighter", "lighter-rh", "tradexyz", "katana")
+HEDGE_VENUES = ("lighter", "lighter-rh", "tradexyz", "katana", "backpack")
 
 # venues the BASE (entropy) leg may run on. Historically hard-wired to
 # Hyperliquid; "lighter" unlocks the Lighter-vs-Katana line where the whole
 # edge lives (BASIS-EXPLORE.md: Katana maker + Lighter taker ≈ 0.95bp toll).
-BASE_VENUES = ("hl", "lighter", "lighter-rh", "katana")
+# "backpack" is the taker-hedge role in maker mode (e.g. Katana quotes hedged
+# on Backpack — see BACKPACK-PLAN.md).
+BASE_VENUES = ("hl", "lighter", "lighter-rh", "katana", "backpack")
 
 # venues that implement the maker contract (maker_capable=True) and may run
 # with maker.enabled — the console pre-flights this at launch
-MAKER_VENUES = ("katana",)
+MAKER_VENUES = ("katana", "backpack")
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,20 @@ class KatanaCreds:
 
 
 @dataclass
+class BackpackCreds:
+    """Backpack Exchange API credentials (Ed25519): the API key IS the
+    base64 verifying key and the secret IS the base64 32-byte private seed.
+    Create the key with Trade-only permissions on the exchange's API settings
+    page — no withdrawal scope."""
+    api_key: Optional[str]
+    api_secret: Optional[str]
+
+    @property
+    def complete(self) -> bool:
+        return bool(self.api_key) and bool(self.api_secret)
+
+
+@dataclass
 class VenueConf:
     key: str                  # "entropy" | "hedge"
     kind: str                 # "hl" | "lighter" | "katana"
@@ -122,6 +138,8 @@ class VenueConf:
     lighter_creds: Optional[LighterCreds] = None
     # katana
     katana_creds: Optional[KatanaCreds] = None
+    # backpack
+    backpack_creds: Optional[BackpackCreds] = None
 
 
 @dataclass
@@ -185,6 +203,9 @@ class Config:
                 return False
             if v.kind == "katana" and not (v.katana_creds
                                            and v.katana_creds.complete):
+                return False
+            if v.kind == "backpack" and not (v.backpack_creds
+                                             and v.backpack_creds.complete):
                 return False
         return True
 
@@ -550,6 +571,21 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
                 _env_s("KATANA_PRIVATE_KEY"),
                 _env_s("KATANA_WALLET")),
         )
+    elif base_venue == "backpack":
+        entropy = VenueConf(
+            key="entropy", kind="backpack", label="BACKPACK",
+            symbol=entropy_symbol,
+            # tier-1 perp taker fee is 5.0bp on the EU entity — VERIFY your
+            # account's actual tier before trusting this default (the API
+            # serves it; the config number stays the explicit source of
+            # truth so a fee change can never silently move the thresholds)
+            fee_bps=float(_get(raw, "entropy", "taker_fee_bps", 5.0)),
+            cap_usd=float(_get(raw, "entropy", "max_position_usd", 1000.0)),
+            orders_per_min=int(_get(raw, "entropy", "max_orders_per_min", 120)),
+            backpack_creds=BackpackCreds(
+                _env_s("BACKPACK_API_KEY"),
+                _env_s("BACKPACK_API_SECRET")),
+        )
     else:
         entropy = VenueConf(
             key="entropy", kind="hl", label="ENTROPY",
@@ -593,6 +629,20 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
                 _env_s("KATANA_API_SECRET"),
                 _env_s("KATANA_PRIVATE_KEY"),
                 _env_s("KATANA_WALLET")),
+        )
+    elif hedge_venue == "backpack":
+        hedge = VenueConf(
+            key="hedge", kind="backpack", label="BACKPACK",
+            symbol=hedge_symbol,
+            # tier-1 perp taker fee is 5.0bp on the EU entity — VERIFY your
+            # account's actual tier before trusting this default (同上：显式
+            # 配置是唯一事实源，接口值只做对照)
+            fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 5.0)),
+            cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
+            orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 120)),
+            backpack_creds=BackpackCreds(
+                _env_s("BACKPACK_API_KEY"),
+                _env_s("BACKPACK_API_SECRET")),
         )
     else:
         hedge = VenueConf(

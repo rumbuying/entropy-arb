@@ -196,7 +196,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 {"error": "live start requires confirm=<symbol>"}, status=400)
         creds = secrets.status()["venues"]
         needed = {"lighter": "lighter", "lighter-rh": "lighter-rh",
-                  "tradexyz": "tradexyz", "katana": "katana"}
+                  "tradexyz": "tradexyz", "katana": "katana",
+                  "backpack": "backpack"}
         if mode == "live":
             # the entropy leg's credential requirement follows --base; a
             # Lighter leg uses its per-leg override when one is present

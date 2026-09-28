@@ -1,0 +1,91 @@
+# Lighter-RH(Robinhood 链) ↔ Backpack — HYPE 线（Backpack 挂单）
+#
+#   record-only: python3 main.py --config profiles/lighter-rh-hype-backpack.yaml \
+#                    --symbol HYPE --base lighter-rh --hedge backpack --record-only
+#   live:        本文件已启用 maker（对冲腿=Backpack 挂单，基准腿=rh 吃单对冲）
+#
+# ⚠ 上线前必做（见 BACKPACK-PLAN.md §4）：
+#   1. python3 tools/backpack_check.py --symbol HYPE --order-path
+#      （只读体检 + 远端盘口 post-only 挂撤单；需 .env 里的 BACKPACK_API_KEY/SECRET）
+#   2. tools/basis_probe.py --a lighter-rh --b backpack --symbols HYPE 采集 ≥1–2 天
+#   3. 实测费率：EU 实体 tier1 为 maker 2.0 / taker 5.0 bps——以账户实际档位
+#      修正下方 costs_bps（主站档位不同）
+#
+# 与 rh↔katana 线的差异：Backpack 深度是量级优势（SOL 实测 700+ 档/边 vs
+# Katana 1 档），无 30 天 session key、无 nonce 竞争；代价是 maker 费更高。
+thresholds:
+  # 占位值，auto_band 每 5 分钟按数据校准（maker 模式不使用 midline）
+  midline_bps: 0.0
+  upper_bps: 8.0
+  lower_bps: 8.0
+
+entropy:
+  symbol: HYPE
+  taker_fee_bps: 0.0         # lighter-rh 实测 taker=maker=0
+  max_position_usd: 200      # 试点档（rh HYPE imf=50% → 占用 $100）
+  max_orders_per_min: 120
+
+hedge:
+  # 缺省自动补全为 HYPE_USDC_PERP；显式写出以便核对
+  symbol: HYPE_USDC_PERP
+  # ⚠ 实测后修正！EU tier1 taker=5.0；本 profile 的 taker 路径不用（maker），
+  # 但净delta对冲走这条费率
+  taker_fee_bps: 5.0
+  max_position_usd: 200
+  max_orders_per_min: 120    # Backpack 限频远高于 rh/katana，报价节奏由 requote 决定
+
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 150
+  min_order_notional_usd: 10
+
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 12       # rh 点差比主网宽，价格保护放宽
+  hedge_slippage_bps: 10     # Backpack 深，保护可以收紧
+  max_signal_edge_bps: 40    # 幻影过滤
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+
+recorder:
+  enabled: true
+  csv: logs/minutes-HYPE-lighter-rh-backpack.csv
+
+logging:
+  file: logs/engine-HYPE-lighter-rh-backpack.log
+  trades_csv: logs/trades-HYPE-lighter-rh-backpack.csv
+  dashboard: false
+  level: INFO
+
+auto_band:
+  enabled: true
+  window_days: 7
+  width_k: 2.5
+  min_width_bps: 5.0
+  sigma_halflife_h: 24
+  slip_lookback_days: 2
+  slip_min_fills: 5
+  skip_engine_down_min: 15
+
+# maker 模式：Backpack 挂单 + rh 吃单对冲
+# costs_bps = BP maker(~2.0，实测后修正) + rh 吃单点半差 ~0.9 + 缓冲
+maker:
+  enabled: true
+  edge_bps: 1.5
+  costs_bps: 3.5             # ⚠ 以实测 maker 费率修正
+  requote_bps: 3.0           # 锚是对冲腿现价，1bp 是噪声
+  requote_sec: 30
+  size_base: 1.0             # step 0.01 / min 0.01，~$100 档
+  sides: both
+  hedge_batch_ms: 250
+  max_hedge_failures: 3
+  hedge_retry_sec: 0.5
+  interval_sec: 0.5
+  trades_csv: logs/maker-trades-HYPE-lighter-rh-bp.csv
+  selection_csv: logs/maker-selection-HYPE-lighter-rh-bp.csv

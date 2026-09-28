@@ -103,15 +103,15 @@ async def amain(cfg, record_only: bool, use_dashboard: bool, force_tty: bool,
 def main() -> None:
     p = argparse.ArgumentParser(
         description="Two-venue LIVE arbitrage: Entropy vs Lighter mainnet / "
-                    "Lighter Robinhood / trade.xyz. Without --record-only, "
-                    "real orders are sent.")
+                    "Lighter Robinhood / trade.xyz / Katana / Backpack. "
+                    "Without --record-only, real orders are sent.")
     p.add_argument("--symbol", required=True,
                    help="symbol traded on both venues, e.g. SNDK / "
                         "两个交易所共同交易的品种")
     p.add_argument("--hedge", required=True, choices=HEDGE_VENUES,
                    metavar="VENUE",
                    help=f"hedge venue, one of: {', '.join(HEDGE_VENUES)} / "
-                        f"对冲腿，四选一")
+                        f"对冲腿，五选一")
     p.add_argument("--base", default="hl", choices=BASE_VENUES,
                    metavar="VENUE",
                    help=f"base (entropy) leg venue, one of: "

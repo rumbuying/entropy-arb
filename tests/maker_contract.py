@@ -80,6 +80,11 @@ class FakeSession:
         self.requests.append(("DELETE", url, kw))
         return self._take()
 
+    def request(self, method, url, **kw):
+        """Generic form (Backpack sends POST/DELETE through one call)."""
+        self.requests.append((method.upper(), url, kw))
+        return self._take()
+
     async def close(self):
         pass
 
@@ -219,15 +224,28 @@ def check_cancel_all_for_market_is_one_request(case: MakerCase) -> None:
 
 
 def check_cancel_by_ids(case: MakerCase) -> None:
-    s = FakeSession([FakeResponse(200, {})])
+    s = FakeSession([FakeResponse(200, {}), FakeResponse(200, {})])
     v = case.make_venue(s)
     r = _run(v.cancel_orders(order_ids=["a", "b"]))
     assert r["ok"] is True, f"[{case.venue_name}] {r}"
-    method, url, kw = s.only()
-    params = case.request_params(method, url, kw)
-    joined = json.dumps(params)
-    assert "a" in joined and "b" in joined, \
-        f"[{case.venue_name}] id list not sent: {joined[:200]}"
+    if getattr(case, "expects_batch_cancel", True):
+        method, url, kw = s.only()
+        params = case.request_params(method, url, kw)
+        joined = json.dumps(params)
+        assert "a" in joined and "b" in joined, \
+            f"[{case.venue_name}] id list not sent: {joined[:200]}"
+    else:
+        # venue has no batch cancel endpoint: one single-order cancel per id
+        # (the engine's only by-id caller replaces one quote at a time), all
+        # ids must be sent — the atomic market-wide path stays one request
+        # and is asserted separately above
+        assert len(s.requests) == 2, \
+            f"[{case.venue_name}] expected 2 single cancels, got " \
+            f"{len(s.requests)}"
+        sent = [case.request_params(m, u, kw) for m, u, kw in s.requests]
+        joined = json.dumps(sent)
+        assert "a" in joined and "b" in joined, \
+            f"[{case.venue_name}] id list not sent: {joined[:200]}"
 
 
 def check_ready_gating_for_maker(case: MakerCase) -> None:

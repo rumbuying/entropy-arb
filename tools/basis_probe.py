@@ -2,7 +2,8 @@
 """Cross-venue basis probe — record minute book bars for ANY venue pair.
 
 The engine's recorder is hard-wired to one shape: base leg = Hyperliquid
-(main dex or ``xyz``), hedge leg = lighter | lighter-rh | tradexyz | katana.
+(main dex or ``xyz``), hedge leg = lighter | lighter-rh | tradexyz | katana
+| backpack.
 That cannot express a pair where **Lighter is the base leg** (e.g.
 Katana-vs-Lighter), which is exactly the pair we want to measure next.
 
@@ -25,7 +26,7 @@ No credentials: every feed here is a public market-data stream.
     # bounded run
     python3 tools/basis_probe.py --a lighter --b katana --symbols BTC --duration 3600
 
-Venues: ``hl`` | ``lighter`` | ``lighter-rh`` | ``katana``
+Venues: ``hl`` | ``lighter`` | ``lighter-rh`` | ``katana`` | ``backpack``
 Output: ``<out-dir>/minutes-<SYM>-<a>-vs-<b>.csv``  (MinuteRecorder schema)
 """
 from __future__ import annotations
@@ -43,13 +44,15 @@ import aiohttp  # noqa: E402
 
 from entropy_arb.book import OrderBook  # noqa: E402
 from entropy_arb.config import HL_WS_URL, LIGHTER_PROFILES  # noqa: E402
-from entropy_arb.feeds import (HLBookFeed, KatanaBookFeed,  # noqa: E402
-                               LighterBookFeed)
+from entropy_arb.feeds import (BackpackBookFeed, HLBookFeed,  # noqa: E402
+                               KatanaBookFeed, LighterBookFeed)
 from entropy_arb.recorder import MinuteRecorder  # noqa: E402
+from entropy_arb.venue_backpack import PROD_REST as BACKPACK_REST  # noqa: E402
+from entropy_arb.venue_backpack import PROD_WS as BACKPACK_WS  # noqa: E402
 from entropy_arb.venue_katana import PROD_REST as KATANA_REST  # noqa: E402
 from entropy_arb.venue_katana import PROD_WS as KATANA_WS  # noqa: E402
 
-VENUES = ("hl", "lighter", "lighter-rh", "katana")
+VENUES = ("hl", "lighter", "lighter-rh", "katana", "backpack")
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=20)
 
 # one fetch per venue per process: /markets is rate-limited (429) and the
@@ -113,6 +116,34 @@ async def resolve(session: aiohttp.ClientSession, venue: str,
         def make(name, book, notify):
             return KatanaBookFeed(name, KATANA_REST, KATANA_WS, market, book,
                                   notify, session=session)
+        return Resolved(venue, symbol, market, note, make)
+
+    if venue == "backpack":
+        if "backpack-markets" not in _CACHE:
+            async with session.get(f"{BACKPACK_REST}/api/v1/markets",
+                                   timeout=HTTP_TIMEOUT) as r:
+                r.raise_for_status()
+                raw = await r.json()
+            _CACHE["backpack-markets"] = raw if isinstance(raw, list) else []
+        entries = _CACHE["backpack-markets"]
+        candidates = {symbol, f"{symbol}_USDC_PERP"}
+        entry = next((m for m in entries
+                      if str(m.get("symbol", "")).upper() in candidates
+                      and m.get("marketType") == "PERP"), None)
+        if entry is None:
+            raise RuntimeError(f"{symbol} not on Backpack perps")
+        if entry.get("orderBookState") != "Open":
+            raise RuntimeError(f"{entry['symbol']}: orderBookState="
+                               f"{entry.get('orderBookState')}")
+        market = entry["symbol"]
+        flt = entry.get("filters") or {}
+        note = (f"tick={((flt.get('price') or {}).get('tickSize'))} "
+                f"step={((flt.get('quantity') or {}).get('stepSize'))} "
+                f"min={((flt.get('quantity') or {}).get('minQuantity'))}")
+
+        def make(name, book, notify):
+            return BackpackBookFeed(name, BACKPACK_REST, BACKPACK_WS, market,
+                                    book, notify, session=session)
         return Resolved(venue, symbol, market, note, make)
 
     if venue in ("lighter", "lighter-rh"):

@@ -36,6 +36,10 @@ RE_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
 # mistakes a paste makes — a wrapped/multi-line value, or an empty/truncated
 # one — while accepting base64 ('=', '+', '/'), JWT dots, etc.
 RE_TOKEN = re.compile(r"^\S{8,}$")
+# Backpack Ed25519 key material: the API key is the base64 verifying key and
+# the secret is the base64 32-byte seed — both decode to exactly 32 bytes
+# (44 base64 chars with padding). Checked by decode, not by alphabet.
+RE_B64 = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 
 # key -> (kind, description)
 KEY_KINDS: Dict[str, str] = {
@@ -59,6 +63,8 @@ KEY_KINDS: Dict[str, str] = {
     "KATANA_API_SECRET": "token",
     "KATANA_PRIVATE_KEY": "private_key",
     "KATANA_WALLET": "address",
+    "BACKPACK_API_KEY": "b64_32",
+    "BACKPACK_API_SECRET": "b64_32",
 }
 
 # what each hedge choice needs to be tradeable (creds_complete semantics)
@@ -70,6 +76,7 @@ VENUE_REQUIREMENTS: Dict[str, List[str]] = {
     "lighter-rh": ["LIGHTER_ACCOUNT_INDEX", "LIGHTER_API_KEY_INDEX",
                    "LIGHTER_API_PRIVATE_KEY"],
     "katana": ["KATANA_API_KEY", "KATANA_API_SECRET", "KATANA_PRIVATE_KEY"],
+    "backpack": ["BACKPACK_API_KEY", "BACKPACK_API_SECRET"],
 }
 
 # the same requirements under a per-leg override name, tried first
@@ -122,6 +129,26 @@ def _token_error(value: str) -> str:
             + ("; " + "; ".join(why) if why else ""))
 
 
+def _b64_32_error(value: str) -> str:
+    """Explain why a Backpack key material paste failed the shape check,
+    describing only the SHAPE — never echoing any character of the value."""
+    s = value.strip()
+    why = []
+    if re.search(r"\s", value):
+        why.append("contains a space or line break (copy may have wrapped)")
+    if not RE_B64.match(s):
+        why.append("non-base64 characters in the body")
+    try:
+        raw = base64.b64decode(s, validate=True)
+        if len(raw) != 32:
+            why.append(f"decodes to {len(raw)} bytes, need 32")
+    except Exception:
+        why.append("not valid base64")
+    return ("expect the base64 32-byte Ed25519 key material "
+            "(44 chars ending with '=')"
+            + ("; " + "; ".join(why) if why else ""))
+
+
 def validate_value(key: str, value: str) -> Optional[str]:
     """Return an error message, or None when the value is well-formed."""
     kind = KEY_KINDS.get(key)
@@ -139,7 +166,18 @@ def validate_value(key: str, value: str) -> Optional[str]:
         return "expect a UUID (API key from the Katana Perps API keys page)"
     if kind == "token" and not RE_TOKEN.match(value):
         return _token_error(value)
+    if kind == "b64_32" and (not RE_B64.match(value.strip())
+                             or not _b64_32_ok(value)):
+        return _b64_32_error(value)
     return None
+
+
+def _b64_32_ok(value: str) -> bool:
+    try:
+        import base64
+        return len(base64.b64decode(value.strip(), validate=True)) == 32
+    except Exception:
+        return False
 
 
 def _line_pattern(key: str):

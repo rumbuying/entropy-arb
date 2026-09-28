@@ -1,0 +1,90 @@
+# Backpack ↔ Katana Perps — 高波动标的线（Katana 挂单 + Backpack 吃单对冲）
+#
+#   采集:  python3 main.py --config profiles/backpack-hype-katana.yaml \
+#              --symbol HYPE --base backpack --hedge katana --record-only
+#   live:  启用文件末尾 maker 块（对冲腿=Katana 挂单，基准腿=Backpack 吃单对冲）
+#
+# 结构逻辑：Katana 的 maker 费极低（~0.475bp）适合挂单；Backpack 深度好、
+# 点差小，替换 rh/HL 成为对冲腿可以吃更大 clip。成本栈：
+#   KAT maker 0.475 + BP taker(实测! tier1 5.0) + BP 半点差 ~0.2 ≈ 5.7bp
+# → 只有 sd ≥ 4bp 的标的（ZEC/HYPE 类）才可能养得活；**先采集再定**。
+#
+# ⚠ 上线前必做（BACKPACK-PLAN.md §4）：
+#   1. tools/backpack_check.py --symbol HYPE --order-path
+#   2. tools/basis_probe.py --a backpack --b katana --symbols HYPE,ZEC 采集 ≥1–2 天
+thresholds:
+  # 占位值，auto_band 校准（maker 模式不使用 midline）。
+  # 口径：premium = Backpack / Katana − 1
+  midline_bps: 0.0
+  upper_bps: 8.0
+  lower_bps: 8.0
+
+entropy:
+  # Backpack 为基准腿（taker 对冲角色）
+  symbol: HYPE_USDC_PERP
+  # ⚠ 实测后修正！EU tier1 taker=5.0 bps
+  taker_fee_bps: 5.0
+  max_position_usd: 200
+  max_orders_per_min: 120
+
+hedge:
+  symbol: HYPE-USD           # Katana 的符号
+  taker_fee_bps: 1.9
+  max_position_usd: 200      # KAT 容量天花板仍在（OI ~$37k/HYPE）
+  max_orders_per_min: 90
+
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 150
+  min_order_notional_usd: 10
+
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 10       # Backpack 深，保护收紧
+  hedge_slippage_bps: 15     # Katana 薄，放宽
+  max_signal_edge_bps: 40
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+
+recorder:
+  enabled: true
+  csv: logs/minutes-HYPE-backpack-katana.csv
+
+logging:
+  file: logs/engine-HYPE-backpack-katana.log
+  trades_csv: logs/trades-HYPE-backpack-katana.csv
+  dashboard: false
+  level: INFO
+
+auto_band:
+  enabled: true
+  window_days: 7
+  width_k: 2.5
+  min_width_bps: 5.0
+  sigma_halflife_h: 24
+  slip_lookback_days: 2
+  slip_min_fills: 5
+  skip_engine_down_min: 15
+
+# maker 模式（采集确认 sd/成本后再启用）
+# costs_bps = KAT maker 0.475 + BP taker 5.0 + BP 半点差 ~0.2 + 缓冲
+maker:
+  enabled: false             # ⚠ 采集分析后再开
+  edge_bps: 1.5
+  costs_bps: 6.5             # ⚠ 以实测 BP taker 费率修正
+  requote_bps: 3.0
+  requote_sec: 30
+  size_base: 1.0
+  sides: both
+  hedge_batch_ms: 250
+  max_hedge_failures: 3
+  hedge_retry_sec: 0.5
+  interval_sec: 0.5
+  trades_csv: logs/maker-trades-HYPE-bp-katana.csv
+  selection_csv: logs/maker-selection-HYPE-bp-katana.csv

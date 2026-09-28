@@ -13,6 +13,7 @@ is one of:
 | `lighter-rh` | Lighter Robinhood chain | **USDG** | 0 bps | zkLighter ws |
 | `tradexyz` | Hyperliquid trade.xyz dex | USDC | ~1 bps | HL l2Book, sync IOC settle |
 | `katana` | Katana Perps (perps.katana.network) | USDC | ~1.9 bps | REST snapshot + l2orderbook ws diffs, sync IOC settle. Crypto majors only (BTC/ETH/SOL/…) — pair with `entropy.dex: ""` |
+| `backpack` | Backpack Exchange perps | USDC | ~2–5 bps (tier — verify!) | REST + ws depth (snapshot + absolute diffs), sync IOC settle; Ed25519-signed. Deep books; maker-capable (post-only) — see [BACKPACK-PLAN.md](BACKPACK-PLAN.md) |
 
 > **Referral links** — signing up through these supports this project:
 > - Entropy — Tier 4 referral, 100% rebates: <https://entropy.io/?r=yourquantguy>
@@ -162,15 +163,16 @@ chosen venues are incomplete. Binding a non-loopback host requires a token
 ## Maker mode
 
 `maker.enabled: true` in `config.yaml` switches to the maker strategy: rest
-**post-only quotes** on the hedge venue (`--hedge katana`), anchored to the
-base leg's (HL) **executable prices** plus `costs_bps + edge_bps`, and hedge
-every fill instantly on the base leg (aggregated within `hedge_batch_ms`) —
-locking premium-minus-costs per fill. Inventory unwinds through the opposite
-quote; past `floor_frac` of the cap the adding side reprices itself more
-conservatively. Safety: a blind or disconnected hedge leg clears every
-resting quote within one tick; repeated hedge failures halt quoting (EXPOSED).
-**Mutually exclusive** with the taker band strategy. Full design, parameters
-and evaluation metrics: [MAKER-DESIGN.md](MAKER-DESIGN.md).
+**post-only quotes** on the hedge venue (`--hedge katana` or
+`--hedge backpack`), anchored to the base leg's (HL) **executable prices**
+plus `costs_bps + edge_bps`, and hedge every fill instantly on the base leg
+(aggregated within `hedge_batch_ms`) — locking premium-minus-costs per fill.
+Inventory unwinds through the opposite quote; past `floor_frac` of the cap
+the adding side reprices itself more conservatively. Safety: a blind or
+disconnected hedge leg clears every resting quote within one tick; repeated
+hedge failures halt quoting (EXPOSED). **Mutually exclusive** with the taker
+band strategy. Full design, parameters and evaluation metrics:
+[MAKER-DESIGN.md](MAKER-DESIGN.md).
 
 ## Data collection & analysis
 
@@ -237,6 +239,13 @@ errors), credentials in `.env`, and the markets on the command line
   `KATANA_WALLET` is optional (derived from the key). Note: Katana lists
   crypto majors only and its books are thin — collect data with
   `--record-only` first and start from minimal caps.
+- **Backpack Exchange** — create an API key with **Trade-only** permissions
+  (never withdrawals) in the exchange's API settings.
+  `BACKPACK_API_KEY` is the base64 Ed25519 verifying key (the API key
+  itself); `BACKPACK_API_SECRET` is the base64 32-byte private seed shown
+  once at creation — every request is Ed25519-signed with it. Verify your
+  actual maker/taker fee tier before setting `taker_fee_bps`
+  (see [BACKPACK-PLAN.md](BACKPACK-PLAN.md)).
 
 ## How execution works
 
@@ -268,6 +277,7 @@ entropy_arb/feeds.py     official HL ws + zkLighter ws + Katana ws book feeds
 entropy_arb/venue_hl.py  Hyperliquid dex adapter (Entropy, tradexyz)
 entropy_arb/venue_lighter.py  zkLighter adapter (mainnet, Robinhood chain)
 entropy_arb/venue_katana.py   Katana Perps adapter (HMAC + EIP-712)
+entropy_arb/venue_backpack.py Backpack Exchange adapter (Ed25519-signed REST + ws)
 entropy_arb/engine.py    the two-venue strategy loop
 entropy_arb/dashboard.py Rich terminal dashboard
 entropy_arb/recorder.py  1-minute orderbook bars

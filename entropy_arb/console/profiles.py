@@ -72,7 +72,8 @@ logging:
 
 # Maker mode (optional): post-only quotes on the hedge venue, taker hedging
 # on the base leg. Mutually exclusive with the taker band strategy above and
-# requires a maker_capable hedge venue (currently: katana) + maker params.
+# requires a maker_capable hedge venue (currently: katana or backpack)
+# + maker params.
 # See MAKER-DESIGN.md. Uncomment and set enabled: true to switch modes.
 # maker:
 #   enabled: true

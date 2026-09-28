@@ -216,8 +216,12 @@ def make_engine(cap_maker=500.0, **maker_over):
                  selection_csv=f"{csv_dir}/maker-selection.csv")
     maker.update(maker_over)
     mk_lines = "\n".join(f"  {k}: {json.dumps(v)}" for k, v in maker.items())
+    # recorder.csv must stay inside the tmp dir: _seed_prem_history reads it,
+    # and an ambient logs/minutes.csv (a real deploy's data) would silently
+    # turn the volatility widen on and break these exact expectations
     y.write(f"thresholds:\n  midline_bps: 7.4\n  upper_bps: 1.0\n"
-            f"  lower_bps: 1.0\nmaker:\n{mk_lines}\n")
+            f"  lower_bps: 1.0\nmaker:\n{mk_lines}\n"
+            f"recorder:\n  csv: {csv_dir}/minutes.csv\n")
     y.close()
     cfg = load_config(y.name, NO_ENV, symbol="BTC", hedge_venue="katana")
     eng = Engine(cfg)

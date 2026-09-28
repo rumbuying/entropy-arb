@@ -72,8 +72,8 @@ cp .env.example .env                     # 密钥——交易必填
 ```
 
 交易哪个市场**不在**配置文件中——每次启动时用命令行参数显式指定：
-`--symbol`（两个交易所共同交易的品种）和 `--hedge`（四选一：
-`lighter`、`lighter-rh`、`tradexyz`、`katana`；Entropy 永远是
+`--symbol`（两个交易所共同交易的品种）和 `--hedge`（五选一：
+`lighter`、`lighter-rh`、`tradexyz`、`katana`、`backpack`；Entropy 永远是
 另一条腿）。
 
 本机器人**没有模拟盘**——要么采集数据（`--record-only`），要么实盘交易。
@@ -144,8 +144,8 @@ python3 main.py --symbol SNDK --hedge lighter-rh
 
 ## 挂单模式（maker）
 
-`config.yaml` 里 `maker.enabled: true` 切换为挂单策略：在对冲腿（`--hedge katana`）
-以 **post-only 挂单**吸收流量，报价锚定基准腿（HL）的**可成交价**并叠加
+`config.yaml` 里 `maker.enabled: true` 切换为挂单策略：在对冲腿（`--hedge katana` 或
+`--hedge backpack`）以 **post-only 挂单**吸收流量，报价锚定基准腿（HL）的**可成交价**并叠加
 `costs_bps + edge_bps`；成交瞬间在基准腿吃单对冲（`hedge_batch_ms` 内聚合），
 每笔锁定"溢价 − 成本"的净边际。库存通过对称报价自然了结，超过仓位上限的
 `floor_frac` 后加仓侧自动加价。安全设计：对冲腿失明/断连 → 毫秒级撤光全部挂单；
@@ -213,6 +213,11 @@ python3 main.py --symbol SNDK --hedge lighter-rh
   合约的 EOA 钱包私钥，每笔订单用它做 EIP-712 签名；`KATANA_WALLET`
   可选（默认从私钥推导）。注意：Katana 只有加密大盘永续，且当前盘口
   很薄——先用 `--record-only` 采集数据、从最小仓位开始。
+- **Backpack Exchange** —— 在交易所的 API 设置页创建**仅 Trade 权限**的
+  API 密钥（绝不开提现）。`BACKPACK_API_KEY` 就是 base64 的 Ed25519
+  验证公钥；`BACKPACK_API_SECRET` 是创建时仅显示一次的 base64 32 字节
+  私钥种子——每个请求都用它做 Ed25519 签名。设置 `taker_fee_bps` 前先
+  核实账户的实际费率档位（见 [BACKPACK-PLAN.md](BACKPACK-PLAN.md)）。
 
 ## 执行机制
 
@@ -241,6 +246,7 @@ entropy_arb/feeds.py     官方 HL ws + zkLighter ws + Katana ws 行情
 entropy_arb/venue_hl.py  Hyperliquid dex 适配器（Entropy、tradexyz）
 entropy_arb/venue_lighter.py  zkLighter 适配器（主网、Robinhood 链）
 entropy_arb/venue_katana.py   Katana Perps 适配器（HMAC + EIP-712）
+entropy_arb/venue_backpack.py Backpack Exchange 适配器（Ed25519 签名 REST + ws）
 entropy_arb/engine.py    双交易所策略主循环
 entropy_arb/dashboard.py Rich 终端仪表盘
 entropy_arb/recorder.py  分钟级盘口数据采集

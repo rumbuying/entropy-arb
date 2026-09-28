@@ -30,6 +30,7 @@ from .maker import (FillEvent, MakerQuote, clamp_to_maker_book,
                     inventory_skew_bps, quote_prices, requote_reason,
                     vol_widen_bps)
 from .recorder import MinuteRecorder
+from .venue_backpack import BackpackVenue
 from .venue_hl import HLVenue
 from .venue_katana import KatanaVenue
 from .venue_lighter import LighterVenue
@@ -226,6 +227,8 @@ class Engine:
             return LighterVenue(vc, self.session, self.cfg.settle_timeout_sec)
         if vc.kind == "katana":
             return KatanaVenue(vc, self.session, self.cfg.settle_timeout_sec)
+        if vc.kind == "backpack":
+            return BackpackVenue(vc, self.session, self.cfg.settle_timeout_sec)
         return HLVenue(vc, self.cfg.hl_api_url, self.cfg.hl_ws_url,
                        self.session, self.cfg.settle_timeout_sec)
 
@@ -728,14 +731,16 @@ class Engine:
 
     def _setup_maker_roles(self) -> None:
         """maker role falls on the hedge venue (--hedge katana → Katana
-        quotes); the base leg is the taker hedge. Startup fails loudly when
-        the selected venue cannot act as maker — never mid-session."""
+        quotes, --hedge backpack → Backpack quotes); the base leg is the
+        taker hedge. Startup fails loudly when the selected venue cannot act
+        as maker — never mid-session."""
         mk, hg = self.hedge, self.entropy
         if not getattr(mk, "maker_capable", False):
             raise RuntimeError(
                 f"[{mk.name}] does not implement the maker contract — maker "
                 f"mode needs a maker_capable hedge venue (e.g. --hedge "
-                f"katana) / maker 模式要求对冲腿支持挂单契约")
+                f"katana or --hedge backpack) / maker 模式要求对冲腿支持挂单"
+                f"契约")
         self.maker, self.taker_hedge = mk, hg
         mk.maker_mode = True
         mk.on_fill(self._on_maker_fill)
