@@ -60,6 +60,8 @@ export function initRuns(pane, shell) {
       acts.appendChild(mk(t("runs.logs_btn"), "", () => logsDialog(w)));
       acts.appendChild(mk(t("runs.restart_btn"), "", () => act(`/api/workers/${w.id}/restart`), w.state !== "running"));
       acts.appendChild(mk(t("runs.stop_btn"), "danger", () => act(`/api/workers/${w.id}/stop`), w.state !== "running"));
+      acts.appendChild(mk(t("flat.title"), "danger", () => flattenDialog(w),
+                          w.state !== "running" || w.mode !== "live"));
       if (w.state !== "running") {
         acts.appendChild(mk(t("runs.delete_btn"), "danger", () => delWorker(w.id)));
       }
@@ -106,6 +108,60 @@ export function initRuns(pane, shell) {
       shell.toast("✓");
     } catch (e) { shell.toast(String(e.message || e), true); }
     refresh();
+  }
+
+  function flattenDialog(w) {
+    const box = document.createElement("div");
+    box.innerHTML = `<h2>⚠ ${t("flat.title")} — ${w.id} (${w.symbol})</h2>`;
+    const warn = document.createElement("div");
+    warn.className = "note";
+    warn.textContent = t("flat.warn");
+    const confirm = document.createElement("input");
+    confirm.type = "text";
+    confirm.placeholder = t("flat.confirm") + ": " + w.symbol;
+    const msg = document.createElement("div");
+    msg.className = "note";
+    const pre = document.createElement("pre");
+    pre.className = "evlog";
+    pre.style.maxHeight = "320px";
+    pre.style.display = "none";
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const cancel = document.createElement("button");
+    cancel.textContent = "✕";
+    const go = document.createElement("button");
+    go.className = "danger";
+    go.textContent = t("flat.go");
+    actions.append(cancel, go);
+    box.append(warn, confirm, msg, pre, actions);
+    const dlg = shell.modal(box);
+    cancel.addEventListener("click", dlg.close);
+    go.addEventListener("click", async () => {
+      if (confirm.value.trim().toUpperCase() !== w.symbol) {
+        msg.textContent = t("flat.confirm") + ": " + w.symbol;
+        return;
+      }
+      go.disabled = true;
+      cancel.disabled = true;
+      msg.textContent = "⏳ " + t("flat.running");
+      try {
+        const r = await postJSON(`/api/flatten`,
+                                 { wid: w.id, confirm: w.symbol });
+        msg.textContent = (r.ok ? "✓ " : "✗ ") + t("flat.result");
+        pre.style.display = "block";
+        pre.textContent = (r.error ? "✗ " + r.error + "\n" : "")
+          + (r.log || []).join("\n");
+        for (const [k, v] of Object.entries(r.legs || {})) {
+          pre.textContent += `\n[${k}] flat=${v.flat} remaining=${v.remaining}`;
+        }
+        shell.toast((r.ok ? "✓ " : "✗ ") + t("flat.title"), !r.ok);
+        refresh();
+      } catch (e) {
+        msg.textContent = "✗ " + (e.message || String(e));
+        go.disabled = false;
+        cancel.disabled = false;
+      }
+    });
   }
 
   function refreshProfiles() {

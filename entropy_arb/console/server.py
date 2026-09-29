@@ -20,7 +20,8 @@ from typing import Optional
 
 from aiohttp import WSMsgType, web
 
-from ..config import BASE_VENUES, MAKER_VENUES
+from ..config import BASE_VENUES, HEDGE_VENUES, MAKER_VENUES
+from . import ops
 from .profiles import ProfilesManager
 from .secrets import SecretsManager, mask_updates_for_audit
 from .supervisor import Supervisor
@@ -28,6 +29,7 @@ from .supervisor import Supervisor
 log = logging.getLogger("console")
 
 POLL_SEC = 1.0
+DIAG_VENUES = tuple(sorted(set(BASE_VENUES) | set(HEDGE_VENUES)))
 
 
 def create_app(supervisor: Supervisor, profiles: ProfilesManager,
@@ -261,6 +263,73 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         audit(f"worker delete: {wid}")
         return web.json_response({"ok": True})
 
+    # ---------------------------------------------------------- ops (buttons)
+
+    async def diagnostics(request):
+        """Venue health check behind the API Keys tab's 🩺 button: market,
+        signer, equity, signed position, optional order-path test."""
+        b = await body(request)
+        venue = (b.get("venue") or "").strip().lower()
+        symbol = (b.get("symbol") or "").strip().upper()
+        role = b.get("role") or "hedge"
+        if venue not in DIAG_VENUES:
+            return web.json_response(
+                {"error": f"venue must be one of {list(DIAG_VENUES)}"},
+                status=400)
+        if not symbol:
+            return web.json_response({"error": "symbol required"},
+                                     status=400)
+        if role not in ("base", "hedge"):
+            return web.json_response(
+                {"error": "role must be base|hedge"}, status=400)
+        order_path = bool(b.get("order_path"))
+        audit(f"diagnostics: venue={venue} symbol={symbol} role={role} "
+              f"order_path={order_path}")
+        try:
+            r = await asyncio.wait_for(
+                ops.run_diagnostics(
+                    venue, symbol, env_file=secrets.env_path, role=role,
+                    dex=str(b.get("dex") or ""), order_path=order_path),
+                timeout=ops.DIAG_TIMEOUT_SEC + 30.0)
+        except asyncio.TimeoutError:
+            r = {"ok": False, "steps": [{"name": "timeout", "ok": False,
+                                         "detail": "diagnostics timed out"}]}
+        return web.json_response(r)
+
+    async def flatten(request):
+        """Stop a worker (if running) and close its residual on both legs
+        with reduce-only IOC. Two mistakes to fire: confirm=<SYMBOL>."""
+        b = await body(request)
+        wid = b.get("wid") or ""
+        confirm = (b.get("confirm") or "").strip().upper()
+        w = supervisor.workers.get(wid)
+        if w is None:
+            return web.json_response({"error": "unknown worker"}, status=404)
+        if confirm != w.symbol:
+            return web.json_response(
+                {"error": f"live flatten requires confirm={w.symbol}"},
+                status=400)
+        if w.mode != "live":
+            return web.json_response(
+                {"error": "record-only worker sends no orders — nothing to "
+                          "flatten"}, status=400)
+        if w.running:
+            await supervisor.stop(wid)
+        audit(f"flatten: wid={wid} profile={w.profile} {w.base}/{w.symbol}/"
+              f"{w.hedge}")
+        try:
+            r = await asyncio.wait_for(
+                ops.run_flatten(
+                    profile=w.profile, symbol=w.symbol, hedge=w.hedge,
+                    base=w.base, profiles_dir=supervisor.profiles_dir,
+                    env_file=secrets.env_path, go=True),
+                timeout=ops.FLATTEN_TIMEOUT_SEC + 30.0)
+        except asyncio.TimeoutError:
+            r = {"ok": False, "error": "flatten timed out — CHECK POSITIONS "
+                                       "MANUALLY", "log": []}
+        audit(f"flatten: wid={wid} ok={r.get('ok')}")
+        return web.json_response(r)
+
     async def api_venues(request):
         """Venue-dimension board: all running engines folded into per-
         exchange totals + position detail + per-strategy P&L."""
@@ -343,6 +412,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_post("/api/workers/{wid}/stop", worker_stop)
     app.router.add_post("/api/workers/{wid}/restart", worker_restart)
     app.router.add_delete("/api/workers/{wid}", worker_delete)
+    app.router.add_post("/api/diagnostics", diagnostics)
+    app.router.add_post("/api/flatten", flatten)
 
     # analysis + history are added by entropy_arb.console.analytics when the
     # console server is constructed with it (register_analytics(app, ...))

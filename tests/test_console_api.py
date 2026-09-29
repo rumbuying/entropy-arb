@@ -160,3 +160,121 @@ def test_console_api():
 if __name__ == "__main__":
     test_console_api()
     print("test_console_api OK")
+
+
+def test_console_ops_endpoints(monkeypatch):
+    """Diagnostics + flatten endpoints: auth, validation, confirm-gate, and
+    the stop-then-flatten flow (ops execution itself is stubbed — the real
+    venue calls are covered by the engine/offline venue tests)."""
+    import entropy_arb.console.ops as ops_mod
+
+    async def run():
+        tmp = tempfile.mkdtemp(prefix="console-ops-")
+        profiles = ProfilesManager(tmp, env_file=os.path.join(tmp, ".env"))
+        secrets = SecretsManager(os.path.join(tmp, ".env"))
+        sup = Supervisor(tmp, tmp)
+        sup.build_argv = lambda w: [sys.executable, "-c",
+                                    "import time; time.sleep(30)"]
+        app = create_app(sup, profiles, secrets, token="t0k")
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            async with aiohttp.ClientSession(
+                    headers={"Authorization": "Bearer t0k"}) as http:
+                url = server.make_url
+                async with http.post(url("/api/profiles"),
+                                     json={"name": "P1", "yaml": VALID_YAML,
+                                           "symbol": "SNDK",
+                                           "hedge": "lighter-rh"}) as r:
+                    assert r.status == 200
+
+                # ---- auth applies to the new endpoints too
+                async with aiohttp.ClientSession() as anon:
+                    async with anon.post(url("/api/diagnostics"),
+                                         json={}) as r:
+                        assert r.status == 401
+
+                # ---- diagnostics validation
+                async with http.post(url("/api/diagnostics"),
+                                     json={"venue": "binance",
+                                           "symbol": "BTC"}) as r:
+                    assert r.status == 400
+                async with http.post(url("/api/diagnostics"),
+                                     json={"venue": "backpack"}) as r:
+                    assert r.status == 400          # no symbol
+
+                # canned executor proves the handler wires params through
+                seen = {}
+
+                async def fake_diag(venue, symbol, *, env_file, role="hedge",
+                                    dex="", order_path=False):
+                    seen.update(venue=venue, symbol=symbol, role=role,
+                                dex=dex, order_path=order_path,
+                                env_file=env_file)
+                    return {"ok": True, "steps": [
+                        {"name": "market", "ok": True, "detail": "ok"}]}
+
+                monkeypatch.setattr(ops_mod, "run_diagnostics", fake_diag)
+                async with http.post(url("/api/diagnostics"),
+                                     json={"venue": "backpack",
+                                           "symbol": "hype",
+                                           "role": "hedge",
+                                           "order_path": True}) as r:
+                    assert r.status == 200
+                    out = await r.json()
+                assert out["ok"] is True
+                assert seen == {"venue": "backpack", "symbol": "HYPE",
+                                "role": "hedge", "dex": "",
+                                "order_path": True,
+                                "env_file": os.path.join(tmp, ".env")}
+
+                # ---- flatten: worker must exist, be live, confirm=symbol
+                async with http.post(url("/api/workers"),
+                                     json={"profile": "P1", "symbol": "SNDK",
+                                           "hedge": "lighter-rh",
+                                           "mode": "live",
+                                           "confirm": "SNDK"}) as r:
+                    assert r.status == 400          # creds incomplete → no w
+                async with http.post(url("/api/workers"),
+                                     json={"profile": "P1", "symbol": "SNDK",
+                                           "hedge": "lighter-rh",
+                                           "mode": "record"}) as r:
+                    assert r.status == 200
+                    wid = (await r.json())["id"]
+                async with http.post(url("/api/flatten"),
+                                     json={"wid": "nope",
+                                           "confirm": "SNDK"}) as r:
+                    assert r.status == 404
+                async with http.post(url("/api/flatten"),
+                                     json={"wid": wid,
+                                           "confirm": "WRONG"}) as r:
+                    assert r.status == 400          # confirm gate
+                async with http.post(url("/api/flatten"),
+                                     json={"wid": wid,
+                                           "confirm": "SNDK"}) as r:
+                    assert r.status == 400          # record worker: no orders
+                    assert "record-only" in (await r.json())["error"]
+
+                # make the worker live, then flatten must stop + run ops
+                sup.workers[wid].mode = "live"
+                calls = {}
+
+                async def fake_flatten(**kw):
+                    calls.update(kw)
+                    return {"ok": True, "go": True, "legs": {},
+                            "log": ["[X] flat"]}
+                monkeypatch.setattr(ops_mod, "run_flatten", fake_flatten)
+                async with http.post(url("/api/flatten"),
+                                     json={"wid": wid,
+                                           "confirm": "SNDK"}) as r:
+                    assert r.status == 200
+                    out = await r.json()
+                assert out["ok"] is True and out["log"] == ["[X] flat"]
+                assert calls["profile"] == "P1" and calls["symbol"] == "SNDK"
+                assert calls["hedge"] == "lighter-rh" and calls["base"] == "hl"
+                assert calls["go"] is True
+                assert sup.workers[wid].running is False   # stopped first
+        finally:
+            await server.close()
+
+    asyncio.run(run())

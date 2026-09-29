@@ -1,7 +1,7 @@
 thresholds:
-  midline_bps: -6.5
-  upper_bps: 6.15
-  lower_bps: 6.15
+  midline_bps: -5.77
+  upper_bps: 5
+  lower_bps: 5
 sizing:
   take_fraction: 0.5
   max_order_notional_usd: 40

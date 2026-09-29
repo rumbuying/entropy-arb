@@ -5,17 +5,21 @@ import { getJSON, postJSON } from "./api.js";
 import { t } from "./i18n.js";
 
 const GROUPS = [
-  { id: "entropy", title: "secrets.title.entropy",
+  { id: "entropy", title: "secrets.title.entropy", venue: "hl",
+    role: "base", dexInput: true,
     keys: ["HL_PRIVATE_KEY", "HL_ACCOUNT_ADDRESS"] },
-  { id: "xyz", title: "secrets.title.xyz",
-    keys: ["HL_PRIVATE_KEY_XYZ", "HL_ACCOUNT_ADDRESS_XYZ"] },
-  { id: "lighter", title: "secrets.title.lighter",
+  { id: "xyz", title: "secrets.title.xyz", venue: "hl",
+    role: "hedge", keys: ["HL_PRIVATE_KEY_XYZ", "HL_ACCOUNT_ADDRESS_XYZ"] },
+  { id: "lighter", title: "secrets.title.lighter", venue: "lighter",
+    role: "hedge",
     keys: ["LIGHTER_ACCOUNT_INDEX", "LIGHTER_API_KEY_INDEX",
            "LIGHTER_API_PRIVATE_KEY"] },
-  { id: "katana", title: "secrets.title.katana",
+  { id: "katana", title: "secrets.title.katana", venue: "katana",
+    role: "hedge",
     keys: ["KATANA_API_KEY", "KATANA_API_SECRET", "KATANA_PRIVATE_KEY",
            "KATANA_WALLET"] },
-  { id: "backpack", title: "secrets.title.backpack",
+  { id: "backpack", title: "secrets.title.backpack", venue: "backpack",
+    role: "hedge",
     keys: ["BACKPACK_API_KEY", "BACKPACK_API_SECRET"] },
 ];
 
@@ -108,6 +112,69 @@ export function initSecrets(pane, shell) {
       save.style.marginTop = "8px";
       save.addEventListener("click", () => saveKeys(g));
       card.appendChild(save);
+
+      // ---- diagnostics row (the 🩺 button replaces the CLI check tools)
+      const drow = document.createElement("div");
+      drow.className = "form-row";
+      drow.style.marginTop = "10px";
+      const dsym = document.createElement("input");
+      dsym.type = "text";
+      dsym.placeholder = t("diag.symbol_ph");
+      dsym.style.textTransform = "uppercase";
+      const dwrap = document.createElement("div");
+      dwrap.style.flex = "1";
+      const dline1 = document.createElement("div");
+      dline1.style.display = "flex";
+      dline1.style.gap = "6px";
+      dline1.style.alignItems = "center";
+      let ddex = null;
+      if (g.dexInput) {
+        ddex = document.createElement("input");
+        ddex.type = "text";
+        ddex.placeholder = t("diag.dex_ph");
+        ddex.style.maxWidth = "140px";
+        dline1.appendChild(ddex);
+      }
+      const dchk = document.createElement("input");
+      dchk.type = "checkbox";
+      dchk.id = "dchk-" + g.id;
+      const dlab = document.createElement("label");
+      dlab.htmlFor = dchk.id;
+      dlab.textContent = t("diag.order_path");
+      dlab.style.fontSize = "0.85em";
+      const dgo = document.createElement("button");
+      dgo.textContent = t("diag.run");
+      dgo.style.whiteSpace = "nowrap";
+      dline1.append(dsym, dchk, dlab, dgo);
+      const dout = document.createElement("div");
+      dout.className = "note";
+      dout.textContent = t("diag.note");
+      dwrap.append(dline1, dout);
+      drow.appendChild(dwrap);
+      card.appendChild(drow);
+      dgo.addEventListener("click", async () => {
+        const sym = dsym.value.trim().toUpperCase();
+        if (!sym) { dout.textContent = "⚠ " + t("diag.symbol_ph"); return; }
+        dgo.disabled = true;
+        dgo.textContent = t("diag.running");
+        dout.textContent = t("diag.running");
+        try {
+          const r = await postJSON("/api/diagnostics", {
+            venue: g.venue, symbol: sym, role: g.role,
+            dex: ddex ? ddex.value.trim() : "",
+            order_path: dchk.checked,
+          });
+          dout.textContent = (r.ok ? "✓ " : "✗ ") + r.steps.map(s =>
+            `${s.ok ? "✓" : "✗"} ${s.name}${s.detail ? ": " + s.detail : ""}`
+          ).join("\n");
+          dout.style.whiteSpace = "pre-wrap";
+          shell.toast((r.ok ? "✓ " : "✗ ") + g.venue, !r.ok);
+        } catch (e) {
+          dout.textContent = "✗ " + (e.message || String(e));
+        }
+        dgo.disabled = false;
+        dgo.textContent = t("diag.run");
+      });
       grid.appendChild(card);
     }
   }

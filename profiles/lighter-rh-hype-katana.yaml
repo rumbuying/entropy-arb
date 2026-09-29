@@ -13,9 +13,9 @@
 #   ⚠ 溢价波动是阵发性的（66h sd 7.15 vs 本窗口 2.76），大偏移多为单边薄盘造成
 thresholds:
   # 占位值，auto_band 每 5 分钟按 rh 数据校准（maker 模式不使用 midline）
-  midline_bps: 5.71
-  upper_bps: 9.41
-  lower_bps: 9.41
+  midline_bps: 6.09
+  upper_bps: 8.09
+  lower_bps: 8.09
 
 entropy:
   symbol: HYPE

@@ -244,6 +244,11 @@ openapi.json，实现时可当字段参考）。
 
 ## 9. 实现状态（2026-09-28 P0 完成）
 
+> **全网页化纪律（2026-09-29 起）**：一切操作以 console UI 为准——密钥（API
+> Keys 页）、诊断（🩺 按钮）、启停/重启（Runs 页）、一键平仓（Runs 页 ⚠ 平仓，
+> reduce-only + 确认门）、分析（Analyzer 页）。本文件的 CLI 步骤仅作为
+> 故障后备手段保留。
+
 | 项 | 状态 |
 |---|---|
 | `entropy_arb/venue_backpack.py`（Signer/Venue/OrdersFeed） | ✅ |
@@ -252,7 +257,7 @@ openapi.json，实现时可当字段参考）。
 | 契约测试 `BackpackMakerCase`（maker_contract 套件） | ✅ |
 | 单测 test_backpack.py（签名 golden 向量/订单形状/解析/两条 ws 流） | ✅ |
 | `tools/basis_probe.py` backpack 分支 | ✅ 实测解析 SOL/HYPE |
-| `tools/backpack_check.py`（只读体检 + `--order-path`） | ✅ 待真实密钥跑一次 |
+| `tools/backpack_check.py`（只读体检 + `--order-path`） | ✅ 已内置于 console：**API Keys 页每张卡片一个 🩺 诊断按钮**（`POST /api/diagnostics`，含挂撤单测试勾选）；CLI 版保留 |
 | profiles：`lighter-rh-hype-backpack`（BP 挂单）、`backpack-hype-katana`（BP 对冲） | ✅ 过严格校验 |
 | README/README.zh-CN/.env.example/config.example.yaml | ✅ |
 
@@ -272,7 +277,7 @@ openapi.json，实现时可当字段参考）。
 
 **仍未核实（需要 API 密钥/实盘，上线前必做）**：
 
-- [ ] `tools/backpack_check.py --order-path`：签名链路、would-cross 的实际
+- [ ] **API Keys 页 🩺 诊断按钮（勾选挂撤单测试）**：签名链路、would-cross 的实际
       响应形状（200+Expired 还是 400）、orderCancelAll 返回结构
 - [ ] 账户实际费率档位（两个 profile 的 `costs_bps`/`taker_fee_bps` 随之修正）
 - [ ] 下单/撤单限频实测
