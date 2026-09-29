@@ -247,6 +247,7 @@ entropy_arb/venue_hl.py  Hyperliquid dex 适配器（Entropy、tradexyz）
 entropy_arb/venue_lighter.py  zkLighter 适配器（主网、Robinhood 链）
 entropy_arb/venue_katana.py   Katana Perps 适配器（HMAC + EIP-712）
 entropy_arb/venue_backpack.py Backpack Exchange 适配器（Ed25519 签名 REST + ws）
+DEVOPS.zh-CN.md         开发运维手册（架构 / Runbook / 新增交易所清单）
 entropy_arb/engine.py    双交易所策略主循环
 entropy_arb/dashboard.py Rich 终端仪表盘
 entropy_arb/recorder.py  分钟级盘口数据采集

@@ -278,6 +278,7 @@ entropy_arb/venue_hl.py  Hyperliquid dex adapter (Entropy, tradexyz)
 entropy_arb/venue_lighter.py  zkLighter adapter (mainnet, Robinhood chain)
 entropy_arb/venue_katana.py   Katana Perps adapter (HMAC + EIP-712)
 entropy_arb/venue_backpack.py Backpack Exchange adapter (Ed25519-signed REST + ws)
+DEVOPS.zh-CN.md         dev & ops handbook (architecture, runbooks, venue checklist)
 entropy_arb/engine.py    the two-venue strategy loop
 entropy_arb/dashboard.py Rich terminal dashboard
 entropy_arb/recorder.py  1-minute orderbook bars

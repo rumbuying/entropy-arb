@@ -1,7 +1,8 @@
 # 运营手册：从密钥到策略启动 / OPERATIONS
 
 > 控制台地址：`https://taoli.coinfetcher.xyz/?token=<token>`（token 见 gitignored 的 deploy/console-token.env）
-> 适用：首次跑通 + 日常例行操作。服务器侧（常驻/告警/备份）见 DEPLOY.zh-CN.md。
+> 适用：首次跑通 + 日常例行操作。服务器侧（常驻/告警/备份）见 DEPLOY.zh-CN.md；
+> 开发/新增交易所/事故 Runbook 总览见 [DEVOPS.zh-CN.md](../DEVOPS.zh-CN.md)。
 
 ## 阶段 0：交易所侧准备（在各交易所网页上做，与服务器无关）
 
