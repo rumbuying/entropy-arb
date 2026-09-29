@@ -15,6 +15,8 @@ const GROUPS = [
   { id: "katana", title: "secrets.title.katana",
     keys: ["KATANA_API_KEY", "KATANA_API_SECRET", "KATANA_PRIVATE_KEY",
            "KATANA_WALLET"] },
+  { id: "backpack", title: "secrets.title.backpack",
+    keys: ["BACKPACK_API_KEY", "BACKPACK_API_SECRET"] },
 ];
 
 export function initSecrets(pane, shell) {
@@ -47,6 +49,7 @@ export function initSecrets(pane, shell) {
       const relevant = g.id === "entropy" ? ["entropy"]
         : g.id === "xyz" ? ["tradexyz"]
         : g.id === "katana" ? ["katana"]
+        : g.id === "backpack" ? ["backpack"]
         : ["lighter", "lighter-rh"];
       for (const v of relevant) {
         const c = document.createElement("span");
@@ -89,6 +92,13 @@ export function initSecrets(pane, shell) {
         const note = document.createElement("div");
         note.className = "note";
         note.textContent = t("secrets.deployment_note");
+        card.appendChild(note);
+      }
+
+      if (g.id === "backpack") {
+        const note = document.createElement("div");
+        note.className = "note";
+        note.textContent = t("secrets.backpack_note");
         card.appendChild(note);
       }
 

@@ -139,12 +139,12 @@ export function initRuns(pane, shell) {
     const sym = document.createElement("input"); sym.type = "text";
     sym.placeholder = t("profiles.symbol_ph");
     const base = document.createElement("select");
-    ["hl", "lighter", "lighter-rh", "katana"].forEach(v => {
+    ["hl", "lighter", "lighter-rh", "katana", "backpack"].forEach(v => {
       const o = document.createElement("option"); o.value = v; o.textContent = v;
       base.appendChild(o);
     });
     const hedge = document.createElement("select");
-    ["lighter", "lighter-rh", "tradexyz", "katana"].forEach(v => {
+    ["lighter", "lighter-rh", "tradexyz", "katana", "backpack"].forEach(v => {
       const o = document.createElement("option"); o.value = v; o.textContent = v;
       hedge.appendChild(o);
     });
