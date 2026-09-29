@@ -24,7 +24,7 @@
 | 项 | 值 |
 |---|---|
 | 正式入口 | `https://taoli.coinfetcher.xyz/?token=<token>`（token 在 gitignored 的 `deploy/console-token.env`） |
-| 本机入口 | `http://127.0.0.1:8788`（loopback 免 token） |
+| 本机入口 | `http://127.0.0.1:8788`（未显式传 `--token` 时 loopback 免 token；本部署 unit 始终带 token，本机访问同样需要） |
 | worker 状态端口 | 8801 起，每个 worker 一个（只读，console 反代） |
 | 仓库 / 分支 | `/root/code/entropy`，`main` → `github.com/rumbuying/entropy-arb` |
 | 测试 | `python3 -m pytest tests/`（当前 179 passed，推送前必须全绿） |
@@ -192,7 +192,7 @@
 | `entropy_arb/webui/*.js`（前端） | **浏览器刷新**即可（`/static/` 已禁缓存） |
 | profile 的 `thresholds` 三个 band 字段 | 引擎 **60s 内热加载**（autoband 5 分钟会按数据纠回） |
 | `entropy_arb/engine.py`、`venue_*.py`、`feeds.py` 等 | Runs 页 **restart 对应 worker** |
-| `entropy_arb/console/*`、`console.py`、`webui` 之外的服务端 | `systemctl restart entropy-console`（注意：会把所有 worker 一起优雅停掉，需 Runs 页重新拉起） |
+| `entropy_arb/console/*`、`console.py` | `systemctl restart entropy-console` —— **worker 不受影响**：unit 是 `KillMode=process`，只杀主进程，新 console 启动时自动收编（adopt）所有在跑 worker；要换引擎代码再用 Runs 页逐个 restart |
 | `deploy/*.timer` 单元 | `systemctl daemon-reload` + restart 对应 timer |
 
 ### 4.2 代码升级 SOP
