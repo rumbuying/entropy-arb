@@ -206,6 +206,40 @@ def test_error_shapes():
     assert r["unresolved"] is True
 
 
+# --------------------------------------------------------------- position
+
+def test_flat_symbol_404_reads_as_zero():
+    """Live-verified Backpack semantics: a symbol filter with no open
+    position answers 404 RESOURCE_NOT_FOUND — reconcile must read flat."""
+    s = FakeSession([FakeResponse(404, {"code": "RESOURCE_NOT_FOUND",
+                                        "message": "Not Found"})])
+    v = _venue(s)
+    assert asyncio.run(v.fetch_position()) == 0.0
+
+
+def test_position_sums_net_quantity_for_own_market():
+    s = FakeSession([FakeResponse(200, [
+        {"symbol": "BTC_USDC_PERP", "netQuantity": "9"},
+        {"symbol": MARKET, "netQuantity": "-1.5"}])])
+    v = _venue(s)
+    assert asyncio.run(v.fetch_position()) == -1.5
+
+
+def test_position_5xx_raises_never_reads_flat():
+    """Reconcile/flatten must see the failure — a timeout silently read
+    as 0.0 would tell flatten it is already flat."""
+    v = _venue(FakeSession([FakeResponse(500, "boom")]))
+    with pytest.raises(RuntimeError):
+        asyncio.run(v.fetch_position())
+
+
+def test_position_other_4xx_still_raises():
+    v = _venue(FakeSession([FakeResponse(401, {"code": "UNAUTHORIZED",
+                                               "message": "bad key"})]))
+    with pytest.raises(RuntimeError):
+        asyncio.run(v.fetch_position())
+
+
 # ------------------------------------------------------------- maker path
 
 def test_place_maker_rests_with_post_only():

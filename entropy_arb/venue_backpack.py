@@ -643,13 +643,23 @@ class BackpackVenue:
 
         Unlike some venue account endpoints, Backpack reports the sign
         directly (netQuantity) — but the first live reconcile still prints
-        both sides for eyeball verification (HANDOVER §5 discipline)."""
+        both sides for eyeball verification (HANDOVER §5 discipline).
+
+        A symbol filter with no open position answers 404 RESOURCE_NOT_FOUND
+        (never an empty list or a zero entry) — that exact code reads as
+        flat 0.0. Anything else non-2xx raises, so reconcile/flatten see a
+        problem instead of a silently flat account."""
         assert self.signer is not None
-        body, err, _ = await self._signed(
+        body, err, unresolved = await self._signed(
             "GET", "/api/v1/position", "positionQuery",
             {"symbol": self.market})
         if err is not None:
+            if err.startswith("RESOURCE_NOT_FOUND"):
+                return 0.0
             raise RuntimeError(f"[{self.name}] position fetch: {err}")
+        if unresolved:
+            raise RuntimeError(
+                f"[{self.name}] position fetch: unresolved (5xx/timeout)")
         total = 0.0
         for p in body if isinstance(body, list) else []:
             if str(p.get("symbol", "")).upper() != self.market.upper():
