@@ -632,6 +632,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         without a running engine get a console-side REST balance probe
         (cached 60s) so stopped-engine balances stay visible (§5.5)."""
         from entropy_arb.console import venues as venues_mod
+        from . import ops as ops_mod
         sts = [supervisor.status(wid) for wid in supervisor.workers]
         snaps = await asyncio.gather(
             *(supervisor.snapshot(s["id"]) for s in sts))
