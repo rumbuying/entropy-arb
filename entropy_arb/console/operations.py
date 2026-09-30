@@ -154,20 +154,38 @@ class OperationService:
     # --------------------------------------------------------------- preview
 
     def _current_conflicts(self, wid: str, target_keys: List[str]) \
-            -> List[dict]:
-        out = []
+            -> Tuple[List[dict], List[dict]]:
+        """(blocking conflicts, non-blocking observers).
+
+        Blocking = another RUNNING LIVE instance on the same account-market:
+        flatten closes the WHOLE account-market position, so a live sibling
+        would see its positions closed by someone else. A record-only
+        instance sends no orders and holds no positions — it is a passive
+        observer of the same market and must not block the operation
+        (reported as an observer instead). An unreadable profile keeps the
+        blocking behaviour (never claim "no conflict" on unknown scope)."""
+        out: List[dict] = []
+        observers: List[dict] = []
         for oid, w in self.supervisor.workers.items():
             if oid == wid or not w.running:
                 continue
             keys = leg_keys_for_worker(self.supervisor.profiles_dir,
                                        self.supervisor.status(oid))
-            for k in keys:
-                if k == "unknown" or k in target_keys:
-                    out.append({"worker": oid, "profile": w.profile,
-                                "leg_key": k,
-                                "reason": "shared_market" if k in target_keys
-                                else "scope_unresolved"})
-        return out
+            shared = [k for k in keys
+                      if k == "unknown" or k in target_keys]
+            if not shared:
+                continue
+            mode = self.supervisor.status(oid).get("mode")
+            if mode == "record" and "unknown" not in shared:
+                observers.append({"worker": oid, "profile": w.profile,
+                                  "leg_key": shared[0]})
+                continue
+            for k in shared:
+                out.append({"worker": oid, "profile": w.profile,
+                            "leg_key": k,
+                            "reason": "shared_market" if k in target_keys
+                            else "scope_unresolved"})
+        return out, observers
 
     async def _read_legs(self, w) -> List[dict]:
         """Read-only per-leg scan for the preview: position, equity, book.
@@ -240,7 +258,7 @@ class OperationService:
                 "nothing to flatten", status=400)
         st = self.supervisor.status(wid)
         target_keys = leg_keys_for_worker(self.supervisor.profiles_dir, st)
-        conflicts = self._current_conflicts(wid, target_keys)
+        conflicts, observers = self._current_conflicts(wid, target_keys)
         legs = await self._read_legs(w)
         preview_id = new_operation_id()
         now = time.time()
@@ -257,6 +275,7 @@ class OperationService:
             "leg_keys": target_keys,
             "legs": legs,
             "conflicts": conflicts,
+            "observers": observers,
             # explicit refusal beats a stale guess (§5.6)
             "allowed": not conflicts and all(
                 l["error"] is None for l in legs),
@@ -299,7 +318,7 @@ class OperationService:
                 f"live flatten requires confirm={p['symbol']}", status=400)
         # conflicts are re-checked now AND again inside the run
         target_keys = p["leg_keys"]
-        fresh_conflicts = self._current_conflicts(p["wid"], target_keys)
+        fresh_conflicts, _obs = self._current_conflicts(p["wid"], target_keys)
         if fresh_conflicts:
             raise OperationError(
                 "operation_conflict",
@@ -331,7 +350,7 @@ class OperationService:
         try:
             self._set(op_id, status="running", started=True)
             # re-check conflicts inside the lock (things may have changed)
-            fresh = self._current_conflicts(wid, p["leg_keys"])
+            fresh, _obs2 = self._current_conflicts(wid, p["leg_keys"])
             if fresh:
                 self._set(op_id, status="failed",
                           error="operation_conflict appeared after preview")

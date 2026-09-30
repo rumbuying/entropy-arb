@@ -111,7 +111,7 @@ def test_operations_lifecycle():
                 assert preview["legs"][1]["unrealized"] == -0.98
                 assert preview["expires_ts"] > preview["created_ts"]
 
-                # ---- shared-market conflict: a second live worker on the
+                # ---- shared-market conflict: a second LIVE worker on the
                 # same market (different profile — one profile cannot start
                 # twice) blocks both preview and execution
                 async with http.post(url("/api/profiles"),
@@ -139,6 +139,25 @@ def test_operations_lifecycle():
                                            "confirm": "SNDK"}) as r:
                     assert r.status == 409
                     assert (await r.json())["error"] == "operation_conflict"
+
+                # ---- a RECORD-ONLY sibling on the same market is an
+                # observer, not a conflict: it sends no orders and holds
+                # no positions, so it must not block the live flatten
+                sup.workers[wid2].mode = "record"
+                async with http.post(url(f"/api/workers/{rec_wid}/restart"))                         as r:
+                    assert r.status == 200
+                    rec_wid2 = (await r.json())["id"]
+                async with http.post(
+                        url("/api/operations/flatten-preview"),
+                        json={"wid": rec_wid2}) as r:
+                    assert r.status == 200
+                    p2b = await r.json()
+                assert p2b["allowed"] is True
+                assert p2b["conflicts"] == []
+                assert any(o["worker"] == wid2 for o in p2b["observers"])
+                # clean up the restarted live worker so later flows see
+                # no conflicts
+                await sup.stop(rec_wid2)
 
                 # stop the second worker so the first can flatten
                 await sup.stop(wid2)

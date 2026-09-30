@@ -296,6 +296,12 @@ export function mount(container) {
           preview.conflicts.map(cf =>
             `${cf.worker}(${cf.reason})`).join(", ")));
       }
+      if ((preview.observers || []).length) {
+        parts.push(el("div", { class: "note" },
+          t("v2.runs.preview_observers"), ": ",
+          preview.observers.map(o =>
+            `${o.worker}(${o.leg_key})`).join(", ")));
+      }
       if (!(preview.allowed)) {
         parts.push(el("div", { class: "note err" },
           t("v2.runs.preview_blocked")));

@@ -93,6 +93,7 @@ registerStrings({
     "v2.runs.preview_scope": "Flatten scope = these ACCOUNT-MARKET pairs (both legs, every position on them): {keys}",
     "v2.runs.preview_conflict": "OTHER running instances share this account-market",
     "v2.runs.preview_blocked": "Execution is blocked — resolve the conflicts / errors above, then regenerate the preview.",
+    "v2.runs.preview_observers": "record-only collectors observe the same market (no orders, no positions — not blocking)",
     "v2.runs.preview_ok": "No conflicts. Execution will stop this engine first, wait for fresh feeds, then send reduce-only IOC orders on both legs.",
     "v2.runs.note": "Operations run through the backend operation service: locks, request-id idempotency and persisted results. A timeout means UNKNOWN — check the exchange before any retry.",
 
@@ -359,6 +360,7 @@ registerStrings({
     "v2.runs.preview_scope": "平仓范围 = 以下账户-市场对（两条腿、其上的全部仓位）：{keys}",
     "v2.runs.preview_conflict": "其他运行中的实例共用该账户-市场",
     "v2.runs.preview_blocked": "执行被阻止 —— 先处置上方冲突 / 错误，再重新生成预检。",
+    "v2.runs.preview_observers": "仅采集实例在观察同一市场（不发单、无仓位 —— 不构成冲突）",
     "v2.runs.preview_ok": "无冲突。执行将先停本引擎、等行情就绪，再在两腿发送 reduce-only IOC 订单。",
     "v2.runs.note": "运维操作经后端操作服务执行：锁、request_id 幂等与持久化结果。超时 = 状态未知 —— 先核对交易所，再考虑下一步。",
 
