@@ -169,7 +169,9 @@ async def main() -> int:
     ap.add_argument("--b", required=True, choices=VENUES,
                     help="venue of the SECOND leg (CSV 'hedge_*' columns)")
     ap.add_argument("--symbols", required=True,
-                    help="comma-separated base symbols, e.g. BTC,ETH,SOL")
+                    help="comma-separated base symbols, e.g. BTC,ETH,SOL; "
+                         "venues that name it differently: A:B pairs, "
+                         "e.g. SNDK.US:SNDK (A-side name keys the CSV)")
     ap.add_argument("--out-dir", default="logs")
     ap.add_argument("--stale-sec", type=float, default=10.0)
     ap.add_argument("--interval", type=float, default=1.0)
@@ -184,7 +186,13 @@ async def main() -> int:
                     help="resolve and print markets/fees, then exit")
     args = ap.parse_args()
 
-    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    symbols = []
+    for s in args.symbols.split(","):
+        s = s.strip().upper()
+        if not s:
+            continue
+        a, _, b = s.partition(":")
+        symbols.append((a, b.strip() or a))
     if not symbols:
         print("no symbols", file=sys.stderr)
         return 2
@@ -208,15 +216,15 @@ async def main() -> int:
 
     async with aiohttp.ClientSession() as session:
         resolved = {}
-        for sym in symbols:
+        for sym_a, sym_b in symbols:
             try:
-                ra = await resolve(session, args.a, sym)
-                rb = await resolve(session, args.b, sym)
+                ra = await resolve(session, args.a, sym_a)
+                rb = await resolve(session, args.b, sym_b)
             except Exception as e:
-                log.error("skip %s: %s", sym, e)
+                log.error("skip %s: %s", sym_a, e)
                 continue
-            resolved[sym] = (ra, rb)
-            print(f"  {sym:6s} {args.a:10s} {ra.market:12s} [{ra.note}]  vs  "
+            resolved[sym_a] = (ra, rb)
+            print(f"  {sym_a:6s} {args.a:10s} {ra.market:12s} [{ra.note}]  vs  "
                   f"{args.b:10s} {rb.market:12s} [{rb.note}]")
         if not resolved:
             print("nothing resolved", file=sys.stderr)
