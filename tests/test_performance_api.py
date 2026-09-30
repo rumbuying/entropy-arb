@@ -138,7 +138,12 @@ def test_performance_and_accounts_api():
                 assert acct["schema_version"] == 1
                 for a in acct["accounts"]:
                     assert a["identity_status"] == "venue_scope"
-                    assert a["equity_method"].startswith("max")
+                    # live groups: engine snapshot (max within group);
+                    # uncovered groups: console REST probe fills the gap
+                    if a["source"] == "worker":
+                        assert a["equity_method"] == "worker max"
+                    else:
+                        assert a["equity_method"] == "console probe"
         finally:
             await sup.shutdown()
             await server.close()

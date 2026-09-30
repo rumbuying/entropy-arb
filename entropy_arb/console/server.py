@@ -628,7 +628,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
 
     async def api_venues(request):
         """Venue-dimension board: all running engines folded into per-
-        exchange totals + position detail + per-strategy P&L."""
+        exchange totals + position detail + per-strategy P&L. Venue groups
+        without a running engine get a console-side REST balance probe
+        (cached 60s) so stopped-engine balances stay visible (§5.5)."""
         from entropy_arb.console import venues as venues_mod
         sts = [supervisor.status(wid) for wid in supervisor.workers]
         snaps = await asyncio.gather(
@@ -644,7 +646,43 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                     (py.get("maker") or {}).get("enabled")),
                 "realized": venues_mod.realized_today(supervisor.root, s, py),
             })
-        return web.json_response(venues_mod.aggregate(recs))
+        agg = venues_mod.aggregate(recs)
+        # ---- probe groups the live workers do not cover
+        covered = {e["exchange"] for e in agg["exchanges"]
+                   if e.get("equity") is not None}
+        cands = _probe_candidates()
+        probed = []
+        for g, p in cands.items():
+            if g in covered:
+                continue
+            data = await ops_mod.probe_account_cached(
+                p["venue"], p["symbol"], env_file=secrets.env_path,
+                role=p["role"], dex=p["dex"])
+            if data.get("error") and data.get("equity") is None:
+                probed.append({
+                    "exchange": g, "equity": None, "free": None,
+                    "gross_usd": None, "net_usd": None, "engines": 0,
+                    "positions": [], "source": "console_probe",
+                    "probe_error": data["error"],
+                })
+                continue
+            probed.append({
+                "exchange": g, "equity": data.get("equity"),
+                "free": data.get("free"), "gross_usd": None,
+                "net_usd": None, "engines": 0, "positions": [],
+                "source": "console_probe", "probe_ts": time.time(),
+            })
+        agg["exchanges"].extend(probed)
+        # recompute cross-venue totals including probed balances
+        equities = [e["equity"] for e in agg["exchanges"]
+                    if e.get("equity") is not None]
+        frees = [e["free"] for e in agg["exchanges"]
+                 if e.get("free") is not None]
+        agg["total_equity"] = sum(equities) if equities else None
+        agg["total_free"] = sum(frees) if frees else None
+        agg["equity_groups_missing"] = len(
+            [e for e in agg["exchanges"] if e.get("equity") is None])
+        return web.json_response(agg)
 
     async def worker_logs(request):
         wid = request.match_info["wid"]
@@ -1182,11 +1220,49 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                     "账本；金额与 edge 为引擎记录值",
         })
 
+    def _probe_candidates() -> dict:
+        """group -> probe params, derived from every known worker record
+        (running or stopped — the profile declares the market). Backend-
+        managed paths/params only (§13.4)."""
+        cands: dict = {}
+        for oid in list(supervisor.workers):
+            try:
+                st = supervisor.status(oid)
+                from .venues import load_profile_yaml
+                raw = load_profile_yaml(supervisor.profiles_dir, st["profile"])
+                dex = ((raw.get("entropy") or {}).get("dex") or "").strip()
+                base, hedge = st.get("base") or "hl", st.get("hedge") or ""
+                sym = (st.get("symbol") or "").upper()
+                for venue, role, group in (
+                        (base, "base", None),
+                        (("hl" if hedge == "tradexyz" else hedge),
+                         "hedge", None)):
+                    gname = None
+                    if venue == "hl":
+                        gname = "HL(io)" if (dex or "io") == "io" else \
+                            f"HL({dex or 'io'})"
+                    elif venue == "katana":
+                        gname = "Katana"
+                    elif venue == "backpack":
+                        gname = "Backpack"
+                    elif venue == "lighter":
+                        gname = "Lighter"
+                    elif venue == "lighter-rh":
+                        gname = "Lighter-RH"
+                    if gname and gname not in cands:
+                        cands[gname] = {"venue": venue, "role": role,
+                                        "dex": dex if venue == "hl" else "",
+                                        "symbol": sym}
+            except Exception:
+                continue
+        return cands
+
     async def api_accounts(request):
-        """Deduped account view (spec §10.2 / §5.5): one row per running
-        engine leg, grouped per venue-deployment, equity via max (legacy
-        semantics, NOT proof of account identity). Real account_id dedupe
-        needs adapter-resolved identities — reported as identity_status."""
+        """Deduped account view (spec §10.2 / §5.5): live worker snapshots
+        first; venue groups without a live reporter are filled by a cached
+        console-side REST probe (stopped engines' balances stay visible).
+        Real account_id dedupe needs adapter-resolved identities —
+        reported as identity_status."""
         sts = [supervisor.status(wid) for wid in supervisor.workers]
         snaps = await asyncio.gather(
             *(supervisor.snapshot(s["id"]) for s in sts))
@@ -1194,18 +1270,15 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         for s, snap in zip(sts, snaps):
             if s["state"] != "running" or not snap:
                 continue
-            py = None
-            from .venues import load_profile_yaml
-            py = load_profile_yaml(supervisor.profiles_dir, s["profile"])
             for key, v in (snap.get("venues") or {}).items():
                 name = v.get("name") or key
-                # scope = venue deployment; account id unresolved here
-                scope = name
+                from .venues import exchange_of
+                scope = exchange_of(name)
                 rec = accounts.setdefault(scope, {
                     "scope": scope, "identity_status": "venue_scope",
                     "equity": None, "equities_seen": [], "free": None,
                     "engines": set(), "positions": [],
-                    "collateral_currency": None,
+                    "collateral_currency": None, "source": "worker",
                 })
                 rec["engines"].add(s["id"])
                 if v.get("equity") is not None:
@@ -1219,6 +1292,31 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                         "leg": v.get("key"), "side":
                             "long" if pos > 0 else "short", "size": pos,
                     })
+        # probe venue groups with no live reporter (shared 60s cache)
+        from . import ops as ops_mod
+        cands = _probe_candidates()
+        for g, p in cands.items():
+            if g in accounts:
+                continue                     # live reporter wins
+            try:
+                d = await ops_mod.probe_account_cached(
+                    p["venue"], p["symbol"], env_file=secrets.env_path,
+                    role=p["role"], dex=p["dex"])
+            except Exception as e:
+                d = {"error": repr(e), "equity": None}
+            accounts[g] = {
+                "scope": g, "identity_status": "venue_scope",
+                "equity": d.get("equity"), "equities_seen": [],
+                "free": d.get("free"), "engines": [],
+                "positions": ([{"symbol": p["symbol"],
+                                "side": "long" if (d.get("position") or 0)
+                                > 0 else "short",
+                                "size": abs(d.get("position") or 0)}]
+                              if d.get("position") else []),
+                "collateral_currency": None,
+                "source": "console_probe",
+                "probe_error": d.get("error"),
+            }
         out = []
         for scope in sorted(accounts):
             rec = accounts[scope]
@@ -1226,18 +1324,24 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 "scope": scope,
                 "identity_status": rec["identity_status"],
                 "equity": max(rec["equities_seen"])
-                if rec["equities_seen"] else None,
-                "equity_method": "max (legacy — not account dedupe)",
+                if rec["equities_seen"] else rec.get("equity"),
+                "equity_method": "worker max" if rec["source"] == "worker"
+                else "console probe",
                 "free": rec["free"],
                 "engines": sorted(rec["engines"]),
                 "positions": rec["positions"],
                 "collateral_currency": rec["collateral_currency"],
+                "source": rec["source"],
+                "probe_ts": rec.get("probe_ts"),
+                "probe_error": rec.get("probe_error"),
             })
         return web.json_response({"schema_version": 1, "as_of": time.time(),
                                   "accounts": out,
-                                  "note": "venue-scope only: true account "
-                                          "identity needs adapter resolution"
-                                          " (see source limitations)"})
+                                  "note": "live-worker groups report via "
+                                          "engine snapshots; groups without "
+                                          "a running engine are probed "
+                                          "read-only by the console (60s "
+                                          "cache)"})
 
     async def api_strategy_detail(request):
         sid = request.match_info["sid"]

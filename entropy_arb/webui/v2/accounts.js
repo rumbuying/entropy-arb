@@ -67,19 +67,31 @@ export function mount(container) {
         { t: new Date((data.asof || 0) * 1000).toLocaleTimeString() });
       exTbl.tbody.replaceChildren();
       for (const ex of data.exchanges || []) {
+        const probed = ex.source === "console_probe";
+        const probeTag = probed
+          ? el("span", { class: "muted" }, ` ${t("v2.acct.probe_tag")}`)
+          : null;
+        const errTag = ex.probe_error
+          ? el("span", { class: "err",
+              title: String(ex.probe_error).slice(0, 200) }, " ⚠")
+          : null;
         const tr = el("tr");
-        tr.appendChild(el("td", { text: ex.exchange }));
+        tr.appendChild(el("td", {}, ex.exchange, probeTag, errTag));
         tr.appendChild(el("td", { class: "num" },
           ex.equity === null || ex.equity === undefined
-            ? "—" : fmtUsd0(ex.equity)));
+            ? (ex.probe_error ? el("span", { class: "err" }, "⚠") : "—")
+            : fmtNum(Number(ex.equity), 2)));
         tr.appendChild(el("td", { class: "num" },
           ex.free === null || ex.free === undefined
-            ? "—" : fmtUsd0(ex.free)));
-        tr.appendChild(el("td", { class: "num" }, fmtUsd0(ex.gross_usd || 0)));
+            ? "—" : fmtNum(Number(ex.free), 2)));
+        tr.appendChild(el("td", { class: "num" },
+          ex.gross_usd === null || ex.gross_usd === undefined
+            ? "—" : fmtUsd0(ex.gross_usd)));
         tr.appendChild(el("td", {
           class: "num " + ((ex.net_usd || 0) > 0 ? "pos"
                 : (ex.net_usd || 0) < 0 ? "neg" : "zero"),
-          text: fmtUsd0(ex.net_usd || 0),
+          text: ex.net_usd === null || ex.net_usd === undefined
+            ? "—" : fmtUsd0(ex.net_usd),
         }));
         tr.appendChild(el("td", { class: "num", text: String(ex.engines) }));
         exTbl.tbody.appendChild(tr);

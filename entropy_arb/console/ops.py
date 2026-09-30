@@ -103,6 +103,71 @@ def _diag_conf(venue: str, symbol: str, role: str, dex: str, env_file: str) \
     raise ValueError(f"unknown venue {venue!r}")
 
 
+# console-side balance probe cache: (venue, role, dex, symbol-upper) ->
+# {ts, data}; shared by every endpoint that needs account visibility for
+# venue groups no running engine reports on
+PROBE_TTL_SEC = 60.0
+_probe_cache: dict = {}
+_probe_locks: set = set()
+
+
+def probe_cached(key) -> Optional[dict]:
+    entry = _probe_cache.get(key)
+    if entry and time.time() - entry["ts"] <= PROBE_TTL_SEC:
+        return entry
+    return None
+
+
+async def probe_account_cached(venue: str, symbol: str, *, env_file: str,
+                               role: str = "hedge", dex: str = "") -> dict:
+    key = (venue, role, dex, (symbol or "").upper())
+    fresh = probe_cached(key)
+    if fresh:
+        return fresh["data"]
+    if key in _probe_locks:                    # another refresh in flight
+        entry = _probe_cache.get(key)
+        return entry["data"] if entry else {"error": "probe in flight",
+                                            "equity": None}
+    _probe_locks.add(key)
+    try:
+        data = await probe_account(venue, symbol, env_file=env_file,
+                                   role=role, dex=dex)
+        _probe_cache[key] = {"ts": time.time(), "data": data}
+        return data
+    finally:
+        _probe_locks.discard(key)
+
+
+async def probe_account(venue: str, symbol: str, *, env_file: str,
+                        role: str = "hedge", dex: str = "") -> dict:
+    """Read-only REST balance probe for a venue account (no engine, no ws).
+
+    Used by the accounts view when no running engine covers a venue group:
+    the balance exists at the venue even with the engine stopped (§5.5 —
+    stopped-engine money must stay visible). REST only: load_market,
+    signer, fetch_equity, fetch_position; never sends orders."""
+    _load_dotenv(env_file)
+    out: dict = {"equity": None, "free": None, "position": None,
+                 "error": None, "symbol": (symbol or "").upper()}
+    session = aiohttp.ClientSession()
+    try:
+        v = _make_venue(_diag_conf(venue, symbol, role, dex, env_file),
+                        session, 5.0)
+        await asyncio.wait_for(v.load_market(), 15)
+        v.init_signer()
+        eq = await asyncio.wait_for(v.fetch_equity(), 15)
+        if eq:
+            out["equity"] = eq[0]
+            out["free"] = eq[1]
+        out["position"] = await asyncio.wait_for(v.fetch_position(), 15)
+        return out
+    except Exception as e:
+        out["error"] = repr(e)
+        return out
+    finally:
+        await session.close()
+
+
 async def _await_books(venues, wait: float) -> bool:
     deadline = time.time() + wait
     while time.time() < deadline:
