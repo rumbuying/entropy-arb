@@ -53,7 +53,10 @@ def _make_venue(vc: VenueConf, session: aiohttp.ClientSession,
         return KatanaVenue(vc, session, settle_timeout)
     if vc.kind == "backpack":
         return BackpackVenue(vc, session, settle_timeout)
-    return HLVenue(vc, "", "", session, settle_timeout)
+    # HL endpoints come from the config module (the engine reads them off
+    # the loaded Config; ops builds VenueConfs directly)
+    from ..config import HL_API_URL, HL_WS_URL
+    return HLVenue(vc, HL_API_URL, HL_WS_URL, session, settle_timeout)
 
 
 # ------------------------------------------------------------- diagnostics

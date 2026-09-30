@@ -315,3 +315,27 @@ def test_operations_lifecycle():
             storage.close()
 
     asyncio.run(run())
+
+
+def test_make_venue_hl_has_real_api_url():
+    """Regression (found live): ops._make_venue passed EMPTY endpoint URLs
+    to HLVenue, so every diagnostics/preview request against an HL leg
+    died with InvalidUrlClientError('/info')."""
+    from entropy_arb.config import HL_API_URL, VenueConf, HLCreds
+    from entropy_arb.console.ops import _make_venue
+
+    async def run():
+        import aiohttp
+        vc = VenueConf(label="ENTROPY", kind="hl", hl_dex="io",
+                       hl_creds=HLCreds(None, None), key="entropy",
+                       symbol="ANTH", fee_bps=0.0, cap_usd=1000.0,
+                       orders_per_min=120)
+        session = aiohttp.ClientSession()
+        try:
+            v = _make_venue(vc, session, 5.0)
+            assert v.api_url == HL_API_URL
+            assert v.api_url.startswith("https://")
+        finally:
+            await session.close()
+
+    asyncio.run(run())
