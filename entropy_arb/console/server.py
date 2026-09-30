@@ -22,6 +22,7 @@ from aiohttp import WSMsgType, web
 
 from ..config import BASE_VENUES, HEDGE_VENUES, MAKER_VENUES
 from . import ops
+from .operations import OperationError, OperationService
 from .profiles import ProfilesManager
 from .secrets import SecretsManager, mask_updates_for_audit
 from .supervisor import Supervisor
@@ -34,7 +35,8 @@ DIAG_VENUES = tuple(sorted(set(BASE_VENUES) | set(HEDGE_VENUES)))
 
 def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                secrets: SecretsManager, *, token: Optional[str] = None,
-               storage=None) -> web.Application:
+               storage=None, ops_service: Optional[OperationService] = None) \
+        -> web.Application:
     app = web.Application()
     app["token"] = token
     webui_dir = os.path.join(os.path.dirname(os.path.dirname(
@@ -68,6 +70,18 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
 
     app.middlewares.append(auth)
     app.middlewares.append(no_static_cache)
+
+    # operations service: locks / previews / background flatten (spec §10.4)
+    ops_service = ops_service or OperationService(
+        supervisor, profiles, secrets, storage)
+    app["ops_service"] = ops_service
+
+    def error_payload(e: OperationError, request_id=None) -> dict:
+        out = {"error": e.code, "message": e.message,
+               "details": e.details or {}}
+        if request_id:
+            out["request_id"] = request_id
+        return out
 
     # ------------------------------------------------------------- helpers
 
@@ -404,38 +418,96 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         return web.json_response(r)
 
     async def flatten(request):
-        """Stop a worker (if running) and close its residual on both legs
-        with reduce-only IOC. Two mistakes to fire: confirm=<SYMBOL>."""
+        """Legacy-compatible flatten: same sync response shape, but routed
+        through the operation service — server-side preview, conflict
+        checks and locks always apply (an old client never skips them)."""
         b = await body(request)
         wid = b.get("wid") or ""
         confirm = (b.get("confirm") or "").strip().upper()
+        request_id = b.get("request_id")
         w = supervisor.workers.get(wid)
         if w is None:
             return web.json_response({"error": "unknown worker"}, status=404)
-        if confirm != w.symbol:
-            return web.json_response(
-                {"error": f"live flatten requires confirm={w.symbol}"},
-                status=400)
         if w.mode != "live":
             return web.json_response(
                 {"error": "record-only worker sends no orders — nothing to "
                           "flatten"}, status=400)
-        if w.running:
-            await supervisor.stop(wid)
+        if confirm != w.symbol:
+            return web.json_response(
+                {"error": f"live flatten requires confirm={w.symbol}"},
+                status=400)
+        try:
+            preview = await ops_service.flatten_preview(wid)
+        except OperationError as e:
+            return web.json_response(error_payload(e, request_id),
+                                     status=e.status)
+        if not preview["allowed"]:
+            return web.json_response(
+                error_payload(OperationError(
+                    "operation_conflict",
+                    "same account-market is used by other running "
+                    "instances — resolve them first",
+                    details={"conflicts": preview["conflicts"]}),
+                    request_id), status=409)
         audit(f"flatten: wid={wid} profile={w.profile} {w.base}/{w.symbol}/"
               f"{w.hedge}")
         try:
-            r = await asyncio.wait_for(
-                ops.run_flatten(
-                    profile=w.profile, symbol=w.symbol, hedge=w.hedge,
-                    base=w.base, profiles_dir=supervisor.profiles_dir,
-                    env_file=secrets.env_path, go=True),
-                timeout=ops.FLATTEN_TIMEOUT_SEC + 30.0)
-        except asyncio.TimeoutError:
-            r = {"ok": False, "error": "flatten timed out — CHECK POSITIONS "
-                                       "MANUALLY", "log": []}
-        audit(f"flatten: wid={wid} ok={r.get('ok')}")
-        return web.json_response(r)
+            started = await ops_service.flatten_start(
+                preview_id=preview["preview_id"], confirm=confirm,
+                request_id=request_id)
+        except OperationError as e:
+            return web.json_response(error_payload(e, request_id),
+                                     status=e.status)
+        op_id = started["operation_id"]
+        # legacy clients expect the final result synchronously — wait bounded
+        deadline = time.time() + ops.FLATTEN_TIMEOUT_SEC + 40.0
+        while time.time() < deadline:
+            st = ops_service.status(op_id)
+            if st and st["status"] in ("succeeded", "partial", "failed",
+                                       "unknown"):
+                legs = st.get("legs") or {}
+                return web.json_response({
+                    "ok": st["status"] == "succeeded",
+                    "go": True, "legs": legs, "log": st.get("log") or [],
+                    "error": st.get("error"),
+                    "operation_id": op_id,
+                })
+            await asyncio.sleep(0.5)
+        return web.json_response({
+            "ok": False, "go": True, "legs": {}, "log": [],
+            "error": "still running — poll /api/operations/" + op_id,
+            "operation_id": op_id,
+        })
+
+    async def operations_flatten_preview(request):
+        b = await body(request)
+        request_id = b.get("request_id")
+        try:
+            preview = await ops_service.flatten_preview(b.get("wid") or "")
+        except OperationError as e:
+            return web.json_response(error_payload(e, request_id),
+                                     status=e.status)
+        return web.json_response(preview)
+
+    async def operations_flatten(request):
+        b = await body(request)
+        request_id = b.get("request_id")
+        try:
+            r = await ops_service.flatten_start(
+                preview_id=b.get("preview_id") or "",
+                confirm=b.get("confirm") or "", request_id=request_id)
+        except OperationError as e:
+            return web.json_response(error_payload(e, request_id),
+                                     status=e.status)
+        return web.json_response(r, status=202)
+
+    async def operations_status(request):
+        st = ops_service.status(request.match_info["op_id"])
+        if st is None:
+            return web.json_response(
+                {"error": "not_found",
+                 "message": "unknown operation"}, status=404)
+        return web.json_response(st)
 
     async def api_venues(request):
         """Venue-dimension board: all running engines folded into per-
@@ -523,6 +595,10 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_delete("/api/workers/{wid}", worker_delete)
     app.router.add_post("/api/diagnostics", diagnostics)
     app.router.add_post("/api/flatten", flatten)
+    app.router.add_post("/api/operations/flatten-preview",
+                        operations_flatten_preview)
+    app.router.add_post("/api/operations/flatten", operations_flatten)
+    app.router.add_get("/api/operations/{op_id}", operations_status)
 
     # analysis + history are added by entropy_arb.console.analytics when the
     # console server is constructed with it (register_analytics(app, ...))

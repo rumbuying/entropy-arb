@@ -108,6 +108,7 @@ async def amain(args) -> None:
     try:
         await asyncio.Event().wait()
     finally:
+        app["ops_service"].shutdown()
         await supervisor.shutdown()
         await runner.cleanup()
 

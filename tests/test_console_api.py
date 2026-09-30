@@ -255,8 +255,22 @@ def test_console_ops_endpoints(monkeypatch):
                     assert r.status == 400          # record worker: no orders
                     assert "record-only" in (await r.json())["error"]
 
-                # make the worker live, then flatten must stop + run ops
+                # make the worker live, then flatten must stop + run ops.
+                # The operation service is real; its leg reader (network)
+                # and the flatten executor are stubbed — spec §14.3.8.
                 sup.workers[wid].mode = "live"
+                svc = app["ops_service"]
+
+                async def fake_read_legs(w):
+                    return [{"leg": "entropy", "venue": "ENTROPY",
+                             "symbol": w.symbol, "position": 0.5,
+                             "equity": 100.0, "book_ready": True,
+                             "error": None},
+                            {"leg": "hedge", "venue": "RH",
+                             "symbol": w.symbol, "position": -0.5,
+                             "equity": 90.0, "book_ready": True,
+                             "error": None}]
+                monkeypatch.setattr(svc, "_read_legs", fake_read_legs)
                 calls = {}
 
                 async def fake_flatten(**kw):
@@ -274,6 +288,13 @@ def test_console_ops_endpoints(monkeypatch):
                 assert calls["hedge"] == "lighter-rh" and calls["base"] == "hl"
                 assert calls["go"] is True
                 assert sup.workers[wid].running is False   # stopped first
+
+                # the persisted operation is queryable
+                async with http.get(url(f"/api/operations/"
+                                        f"{out['operation_id']}")) as r:
+                    assert r.status == 200
+                    op = await r.json()
+                assert op["status"] == "succeeded"
         finally:
             await server.close()
 
