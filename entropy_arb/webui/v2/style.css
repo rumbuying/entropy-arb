@@ -113,3 +113,12 @@
   .v2-keyedit { flex: 1 1 100%; }
   .v2-keyrow label { padding-top: 0; }
 }
+
+/* ---------------- V2-004 profiles ---------------- */
+.v2-prof-layout { display: grid; grid-template-columns: 240px 1fr; gap: 14px; }
+.v2-prof-modes { display: flex; gap: 6px; margin-bottom: 10px; }
+.v2-prof-modes button.active { border-color: var(--accent); color: var(--accent); }
+
+@media (max-width: 767px) {
+  .v2-prof-layout { grid-template-columns: 1fr; }
+}

@@ -214,15 +214,22 @@ def patch_thresholds(text: str, midline: float, upper: float,
 
 def write_band(path: str, midline: float, upper: float, lower: float,
                min_mid_delta: float = 0.25,
-               min_width_delta: float = 1.0) -> bool:
-    """Patch the profile's band in place (atomic). Returns True when the
-    file changed. Refuses to touch a profile without a thresholds block.
+               min_width_delta: float = 1.0,
+               journal: Optional[str] = None) -> bool:
+    """Patch the profile's band in place (atomic, lock-protected). Returns
+    True when the file changed. Refuses to touch a profile without a
+    thresholds block.
 
     The anti-flap guard skips only when BOTH the midline moved less than
     min_mid_delta AND the width moved less than min_width_delta: a width
     correction must never be blocked by a quiet midline (sndk-rh 2026-09-22
     regression — a stale 22.95 width was immune to recalibration because
-    the midline sat still)."""
+    the midline sat still).
+
+    `journal` (spec §13.1): when given, every actual change appends one JSON
+    line {ts, path, before, after} so the console's version history can
+    attribute the write to auto-band with real before/after values. The
+    journal never contains secrets — bands are public config."""
     with open(path) as fh:
         text = fh.read()
     if not re.search(r"^thresholds:", text, re.M):
@@ -237,9 +244,28 @@ def write_band(path: str, midline: float, upper: float, lower: float,
                            and abs(float(m_lo.group(1)) - lower) < min_width_delta)
     if quiet:
         return False
+    before = {"midline_bps": cur_mid,
+              "upper_bps": float(m_up.group(1)) if m_up else None,
+              "lower_bps": float(m_lo.group(1)) if m_lo else None}
     new_text = patch_thresholds(text, midline, upper, lower)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
-        fh.write(new_text)
-    os.replace(tmp, path)
+    from .filelock import file_lock
+    with file_lock(path):
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            fh.write(new_text)
+        os.replace(tmp, path)
+    if journal:
+        try:
+            import json
+            d = os.path.dirname(os.path.abspath(journal))
+            os.makedirs(d, exist_ok=True)
+            with open(journal, "a") as fh:
+                fh.write(json.dumps({
+                    "ts": time.time(), "path": os.path.abspath(path),
+                    "source": "autoband", "before": before,
+                    "after": {"midline_bps": midline, "upper_bps": upper,
+                              "lower_bps": lower},
+                }) + "\n")
+        except OSError:
+            pass                   # journal failure must not block trading
     return True

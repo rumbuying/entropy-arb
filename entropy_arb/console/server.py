@@ -131,21 +131,100 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     async def profile_get(request):
         name = request.match_info["name"]
         try:
-            return web.json_response(profiles.read(name))
+            r = profiles.read(name)
         except FileNotFoundError:
             return web.json_response({"error": "not found"}, status=404)
+        # external-change detection (spec §13.1): an uncontrolled write
+        # (auto-band or a hand edit) shows up as a new content hash on the
+        # next read — record it as its own version, never silently assume
+        # it was the user typing.
+        if storage is not None:
+            latest = storage.latest_config_version(name)
+            if latest is None:
+                storage.record_config_version(
+                    profile=name, content_hash=r["version"],
+                    yaml_text=r["yaml"],
+                    sidecar={"symbol": r["symbol"], "hedge": r["hedge"],
+                             "base": r["base"]},
+                    source="import", changed_by="console")
+            elif latest["content_hash"] != r["version"]:
+                storage.record_config_version(
+                    profile=name, content_hash=r["version"],
+                    yaml_text=r["yaml"],
+                    sidecar={"symbol": r["symbol"], "hedge": r["hedge"],
+                             "base": r["base"]},
+                    source="external", changed_by="file-change")
+                audit(f"profile {name}: external change recorded "
+                      f"({latest['content_hash']} -> {r['version']})")
+        return web.json_response(r)
 
     async def profile_new_text(request):
         q = request.query
         return web.json_response({"yaml": profiles.new_text(
             q.get("symbol"), q.get("hedge"))})
 
+    def _record_version(name: str, source: str, changed_by: str = "console") \
+            -> None:
+        if storage is None:
+            return
+        r = profiles.read(name)
+        prev = storage.latest_config_version(name)
+        if prev is not None and prev["content_hash"] == r["version"]:
+            return                        # identical content — no new version
+        storage.record_config_version(
+            profile=name, content_hash=r["version"], yaml_text=r["yaml"],
+            sidecar={"symbol": r["symbol"], "hedge": r["hedge"],
+                     "base": r["base"]},
+            source=source, changed_by=changed_by,
+            parent_version=prev["version"] if prev else None)
+
+    def _save_effect(name: str, old_yaml: Optional[str]) -> dict:
+        """Effect method for a saved profile (spec §5.7): a thresholds-only
+        change hot-reloads (~60 s) on running workers; anything else needs a
+        restart. No running worker → restart is simply not needed yet."""
+        running = [s["id"] for s in supervisor.list()
+                   if s["profile"] == name and s["state"] == "running"]
+        try:
+            import yaml as _y
+            old = _y.safe_load(old_yaml or "") or {}
+            new = _y.safe_load(profiles.read(name)["yaml"]) or {}
+        except Exception:
+            old, new = {}, {}
+        changed = {k for k in set(old) | set(new)
+                   if old.get(k) != new.get(k)}
+        if not running:
+            effect = "saved_no_worker"
+        elif changed and changed <= {"thresholds"}:
+            effect = "thresholds_hot_reload"
+        else:
+            effect = "restart_required"
+        return {"effect": effect, "affected_runs": running}
+
     async def profile_save(request):
         name = request.match_info["name"]
         b = await body(request)
+        old_yaml = None
+        if profiles.exists(name):
+            try:
+                old_yaml = profiles.read(name)["yaml"]
+            except FileNotFoundError:
+                old_yaml = None
         r = profiles.save(name, b.get("yaml", ""), b.get("symbol"),
-                          b.get("hedge"), base=b.get("base"))
-        return web.json_response(r, status=200 if r["ok"] else 400)
+                          b.get("hedge"), base=b.get("base"),
+                          expected_version=b.get("expected_version"))
+        if r.get("conflict"):
+            return web.json_response(
+                {"error": "config_conflict",
+                 "message": "the profile changed since you read it — "
+                            "reload and re-apply your diff",
+                 "details": {"current_version": r.get("current_version")}},
+                status=409)
+        if not r["ok"]:
+            return web.json_response(r, status=400)
+        _record_version(name, str(b.get("source") or "manual"))
+        out = {"ok": True, "version": r.get("version")}
+        out.update(_save_effect(name, old_yaml))
+        return web.json_response(out)
 
     async def profile_create(request):
         b = await body(request)
@@ -153,7 +232,38 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         r = profiles.save(name, b.get("yaml") or profiles.new_text(
             b.get("symbol"), b.get("hedge")), b.get("symbol"),
             b.get("hedge"), create=True, base=b.get("base"))
-        return web.json_response(r, status=200 if r["ok"] else 400)
+        if not r["ok"]:
+            return web.json_response(r, status=400)
+        _record_version(name, str(b.get("source") or "manual"))
+        return web.json_response({"ok": True, "version": r.get("version")})
+
+    async def profile_versions(request):
+        name = request.match_info["name"]
+        if not profiles.exists(name):
+            return web.json_response({"error": "not found"}, status=404)
+        if storage is None:
+            return web.json_response({"versions": [], "note": "no storage"})
+        rows = storage.list_config_versions(name, limit=50)
+        out = []
+        prev_yaml = None
+        for row in reversed(rows):        # oldest first to build diffs
+            diff = None
+            if prev_yaml is not None and prev_yaml != row["yaml_text"]:
+                import difflib
+                d = list(difflib.unified_diff(
+                    prev_yaml.splitlines(),
+                    (row["yaml_text"] or "").splitlines(),
+                    lineterm=""))
+                diff = "\n".join(d[:400])
+            out.append({
+                "version": row["version"], "content_hash": row["content_hash"],
+                "source": row["source"], "changed_by": row["changed_by"],
+                "created_ts": row["created_ts"],
+                "parent_version": row["parent_version"], "diff": diff,
+            })
+            prev_yaml = row["yaml_text"]
+        out.reverse()
+        return web.json_response({"versions": out})
 
     async def profile_validate(request):
         b = await body(request)
@@ -341,6 +451,13 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         w = await supervisor.start(profile, symbol, hedge, mode, base=base)
         audit(f"worker start: {w.id} profile={profile} {base}/{symbol}/{hedge} "
               f"mode={mode}")
+        # pin the config version this run actually started with (§7.2)
+        if storage is not None and w.run_id:
+            try:
+                storage.set_run_config_version(w.run_id,
+                                               profiles.content_version(profile))
+            except Exception:
+                log.exception("config version pin failed")
         return web.json_response(supervisor.status(w.id))
 
     async def worker_stop(request):
@@ -578,6 +695,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_post("/api/profiles", profile_create)
     app.router.add_get("/api/profiles/new", profile_new_text)
     app.router.add_get("/api/profiles/{name}", profile_get)
+    app.router.add_get("/api/profiles/{name}/versions", profile_versions)
     app.router.add_post("/api/profiles/{name}", profile_save)
     app.router.add_post("/api/profiles/{name}/validate", profile_validate)
     app.router.add_delete("/api/profiles/{name}", profile_delete)

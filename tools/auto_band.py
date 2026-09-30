@@ -106,7 +106,8 @@ def process_profile(path: str, dry_run: bool) -> None:
               f" (dry-run)")
         return
     try:
-        changed = write_band(path, mid, up, lo)
+        changed = write_band(path, mid, up, lo,
+                             journal=os.path.join("logs", "band-history.jsonl"))
     except ValueError as e:
         print(f"[{name}] skip: {e}")
         return

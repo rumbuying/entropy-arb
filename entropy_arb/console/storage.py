@@ -230,24 +230,39 @@ class Storage:
                               yaml_text: str, sidecar: Optional[dict],
                               source: str, changed_by: str = "console",
                               parent_version: Optional[str] = None,
-                              created_ts: Optional[float] = None) -> str:
-        version = new_version_id(content_hash)
+                              created_ts: Optional[float] = None,
+                              version: Optional[str] = None) -> str:
+        """version defaults to the content hash itself — one content, one
+        version id, so every API surface compares the same identifier."""
+        vid = version or content_hash
         self.db.execute(
-            "INSERT INTO config_versions(version, profile, content_hash,"
-            " yaml_text, sidecar_json, source, changed_by, parent_version,"
-            " created_ts) VALUES(?,?,?,?,?,?,?,?,?)",
-            (version, profile, content_hash, yaml_text,
+            "INSERT OR IGNORE INTO config_versions(version, profile,"
+            " content_hash, yaml_text, sidecar_json, source, changed_by,"
+            " parent_version, created_ts) VALUES(?,?,?,?,?,?,?,?,?)",
+            (vid, profile, content_hash, yaml_text,
              json.dumps(sidecar) if sidecar is not None else None,
              source, changed_by, parent_version,
              created_ts if created_ts is not None else time.time()))
         self.db.commit()
-        return version
+        return vid
 
     def latest_config_version(self, profile: str) -> Optional[Dict[str, Any]]:
         r = self.db.execute(
             "SELECT * FROM config_versions WHERE profile=?"
             " ORDER BY created_ts DESC, id DESC LIMIT 1", (profile,)).fetchone()
         return dict(r) if r else None
+
+    def list_config_versions(self, profile: str,
+                             limit: int = 50) -> List[Dict[str, Any]]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT * FROM config_versions WHERE profile=?"
+            " ORDER BY created_ts DESC, id DESC LIMIT ?", (profile, limit))]
+
+    def set_run_config_version(self, run_id: str,
+                               config_version: Optional[str]) -> None:
+        self.db.execute("UPDATE runs SET config_version=? WHERE run_id=?",
+                        (config_version, run_id))
+        self.db.commit()
 
     # ------------------------------------------------------------------ meta
 

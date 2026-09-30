@@ -10,6 +10,7 @@ Every save is validated through the REAL load_config() against the current
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -19,6 +20,7 @@ from typing import Dict, Optional
 import yaml
 
 from ..config import BASE_VENUES, HEDGE_VENUES, ConfigError, load_config
+from ..filelock import file_lock
 
 NEW_PROFILE_TEMPLATE = """\
 # entropy-arb strategy profile (edited via the web console)
@@ -92,6 +94,17 @@ def _safe_name(name: str) -> bool:
     return bool(re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", name))
 
 
+def content_hash(yaml_text: str, meta: Optional[dict] = None) -> str:
+    """Content-derived profile version (spec §13.1): the full normalized
+    yaml text plus the sidecar market choice — never just mtime, whose
+    resolution is too coarse to detect a real change."""
+    h = hashlib.sha256()
+    h.update((yaml_text or "").encode())
+    h.update(b"\x00")
+    h.update(json.dumps(meta or {}, sort_keys=True).encode())
+    return "cfg-" + h.hexdigest()[:16]
+
+
 class ProfilesManager:
     def __init__(self, profiles_dir: str, env_file: str = ".env",
                  audit_log=None) -> None:
@@ -158,6 +171,7 @@ class ProfilesManager:
         return {"name": name, "yaml": text,
                 "symbol": meta.get("symbol"), "hedge": meta.get("hedge"),
                 "base": meta.get("base", "hl"),
+                "version": content_hash(text, meta),
                 "updated_ts": os.path.getmtime(self._yaml_path(name))}
 
     # -------------------------------------------------------------- validate
@@ -195,13 +209,25 @@ class ProfilesManager:
 
     def save(self, name: str, yaml_text: str, symbol: Optional[str],
              hedge: Optional[str], create: bool = False,
-             base: Optional[str] = None) -> dict:
+             base: Optional[str] = None,
+             expected_version: Optional[str] = None) -> dict:
         if not _safe_name(name):
             return {"ok": False, "error": f"invalid profile name {name!r}"}
         # an omitted base preserves the stored one (editors that predate
         # --base must not silently flip a lighter-base profile back to hl)
         if base is None:
             base = self._meta(name).get("base", "hl")
+        # expected_version guards read-modify-write editors (spec §10.3):
+        # compare against the CURRENT content, not mtime. Old clients that
+        # omit it keep working; the server still validates the content.
+        if expected_version is not None:
+            current = (self.content_version(name)
+                       if self.exists(name) else None)
+            if current != expected_version:
+                return {"ok": False, "conflict": True,
+                        "error": "config_conflict: the profile was changed "
+                                 "by someone else — reload and re-apply",
+                        "current_version": current}
         v = self.validate(yaml_text, symbol, hedge, base)
         if not v["ok"]:
             return v
@@ -215,19 +241,49 @@ class ProfilesManager:
             yaml_text = yaml_text.replace("{symbol}", symbol.upper()) \
                                  .replace("{hedge}", hedge) \
                                  .replace("{base}", base or "hl")
-        with open(self._yaml_path(name), "w") as fh:
-            fh.write(yaml_text)
-        meta = self._meta(name)
-        meta.update({"symbol": symbol, "hedge": hedge,
-                     "base": base or "hl",
-                     "updated_ts": time.time(),
-                     "created_ts": meta.get("created_ts", time.time())})
-        with open(self._meta_path(name), "w") as fh:
-            json.dump(meta, fh, indent=2)
+        # atomic + locked write: auto-band may patch the same file (§13.1)
+        with file_lock(self._yaml_path(name)):
+            fd, tmp = tempfile.mkstemp(suffix=".yaml.tmp",
+                                       dir=self.dir or None)
+            try:
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(yaml_text)
+                os.replace(tmp, self._yaml_path(name))
+            finally:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+            meta = self._meta(name)
+            meta.update({"symbol": symbol, "hedge": hedge,
+                         "base": base or "hl",
+                         "updated_ts": time.time(),
+                         "created_ts": meta.get("created_ts", time.time())})
+            fd, tmp = tempfile.mkstemp(suffix=".json.tmp",
+                                       dir=self.dir or None)
+            try:
+                with os.fdopen(fd, "w") as fh:
+                    json.dump(meta, fh, indent=2)
+                os.replace(tmp, self._meta_path(name))
+            finally:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
         if self._audit:
             self._audit(f"profile {'created' if not existed else 'saved'}: "
                         f"{name} ({symbol or '?'}/{hedge or '?'})")
-        return {"ok": True, "error": None}
+        return {"ok": True, "error": None,
+                "version": content_hash(yaml_text, meta)}
+
+    def content_version(self, name: str) -> Optional[str]:
+        """Current content-derived version, or None when absent."""
+        try:
+            with open(self._yaml_path(name)) as fh:
+                text = fh.read()
+            return content_hash(text, self._meta(name))
+        except (FileNotFoundError, NotADirectoryError):
+            return None
 
     def new_text(self, symbol: Optional[str] = None,
                  hedge: Optional[str] = None) -> str:

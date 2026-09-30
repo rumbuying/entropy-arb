@@ -146,6 +146,18 @@ registerStrings({
     "v2.prof.none": "no profiles",
     "v2.prof.note": "Read-only stage: create / edit / validate / versions land in V2-004.",
     "v2.prof.running": "running",
+    "v2.prof.mode_form": "visual form",
+    "v2.prof.mode_yaml": "advanced YAML",
+    "v2.prof.versions": "versions",
+    "v2.prof.yaml_note": "Full-schema YAML, saved verbatim (comments kept). Market fields (symbol / hedge / base) live in the sidecar next to the file and are edited in the form mode.",
+    "v2.prof.effect_hot": "thresholds hot-reload (~60 s) — shown as effective once the running engine snapshot confirms them",
+    "v2.prof.effect_restart": "saved — a worker restart is required for these changes to apply",
+    "v2.prof.effect_saved": "saved — no running worker on this profile",
+    "v2.prof.affected_runs": "affected runs",
+    "v2.prof.conflict": "config_conflict: the profile changed since you read it (auto-band or another editor) — reload to see the diff, then re-apply",
+    "v2.prof.leave_dirty": "This editor has unsaved changes. Leave anyway?",
+    "v2.prof.pending_thresholds": "thresholds suggested by the Analyzer were filled into the form — they are a DRAFT until saved",
+
 
     // research
     "v2.res.title": "Data research",
@@ -303,6 +315,18 @@ registerStrings({
     "v2.prof.none": "暂无配置",
     "v2.prof.note": "只读阶段：新建 / 编辑 / 校验 / 版本在 V2-004 交付。",
     "v2.prof.running": "运行中",
+    "v2.prof.mode_form": "可视化表单",
+    "v2.prof.mode_yaml": "高级 YAML",
+    "v2.prof.versions": "版本历史",
+    "v2.prof.yaml_note": "完整 schema 的 YAML，按原文保存（保留注释）。市场字段（品种 / 对冲腿 / 基准腿）存于配置旁的 sidecar，请在表单模式中修改。",
+    "v2.prof.effect_hot": "阈值将热加载（约 60 秒）—— 待运行中引擎 snapshot 确认后才显示生效",
+    "v2.prof.effect_restart": "已保存 —— 这些修改需要重启 worker 才生效",
+    "v2.prof.effect_saved": "已保存 —— 该配置当前没有运行中的实例",
+    "v2.prof.affected_runs": "受影响的运行",
+    "v2.prof.conflict": "配置冲突：读取后该文件已被其他人修改（auto-band 或其他编辑器）—— 先重新加载查看差异，再重新应用",
+    "v2.prof.leave_dirty": "编辑器有未保存的修改。仍要离开吗？",
+    "v2.prof.pending_thresholds": "分析工作台建议的阈值已填入表单 —— 保存前只是草稿",
+
 
     "v2.res.title": "数据研究",
     "v2.res.note": "分析工作台、带宽回测、分钟历史与绝对日期筛选在 V2-005 迁移 —— 包括旧版相对小时视图所缺的后端 start/end 支持。",

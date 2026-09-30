@@ -68,6 +68,12 @@ async function navigate() {
   }
   const { route, params, query } = parsed;
   if (currentPage && currentPage.destroy) {
+    // a dirty editor may hold the navigation (spec §4.3)
+    if (currentPage.beforeLeave) {
+      try {
+        if (!currentPage.beforeLeave()) return;
+      } catch (_) {}
+    }
     try { currentPage.destroy(); } catch (_) {}
   }
   currentPage = null;
