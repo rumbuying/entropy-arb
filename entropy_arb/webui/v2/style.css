@@ -92,3 +92,24 @@
     display: block; overflow-x: auto; -webkit-overflow-scrolling: touch;
   }
 }
+
+/* ---------------- V2-002 connections ---------------- */
+.v2-keyrow {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin-bottom: 8px;
+}
+.v2-keyname { flex: 0 0 230px; font-size: 12px; padding-top: 8px; }
+.v2-keyedit { flex: 1; }
+.v2-keyedit .note, .v2-keyedit span { display: block; margin-top: 2px; }
+.v2-keyrow label { flex: 0 0 auto; white-space: nowrap; padding-top: 8px;
+                   cursor: pointer; }
+.v2-diag { margin-top: 12px; border-top: 1px dashed #22303d; padding-top: 8px; }
+.v2-diag-line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.v2-diag-line input[type=text] { max-width: 180px; }
+
+@media (max-width: 767px) {
+  .v2-keyrow { flex-wrap: wrap; }
+  .v2-keyname { flex: 1 1 100%; padding-top: 0; }
+  .v2-keyedit { flex: 1 1 100%; }
+  .v2-keyrow label { padding-top: 0; }
+}

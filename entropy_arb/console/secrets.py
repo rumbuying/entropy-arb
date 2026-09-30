@@ -286,8 +286,10 @@ class SecretsManager:
         except OSError:
             pass
         for key, val in applied:
-            self._audit(f"secrets: {key} "
-                        + ("cleared" if not val else f"set ····{val[-4:]}"))
+            if self._audit:
+                self._audit(f"secrets: {key} "
+                            + ("cleared" if not val
+                               else f"set ····{val[-4:]}"))
         return {"ok": True, "errors": {}, "status": self.status()}
 
 

@@ -175,7 +175,90 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         if not r["ok"]:
             # error strings describe the value's shape only, never its content
             log.warning("secrets update rejected: %s", r.get("errors"))
+        else:
+            # diagnostics caches key on this revision — any successful write
+            # invalidates them (spec §5.3)
+            if storage is not None:
+                rev = storage.bump_credential_revision()
+                audit(f"credential_revision -> {rev}")
         return web.json_response(r, status=200 if r["ok"] else 400)
+
+    async def api_connections(request):
+        """V2 access view (spec §10.3): masked status + the credential
+        source each deployment/role actually resolves to + per-target
+        diagnostics history keyed by credential revision. Never returns
+        secret values; creating keys stays with POST /api/secrets."""
+        st = secrets.status()
+        out = {
+            "schema_version": 1,
+            "as_of": time.time(),
+            "exists": st["exists"],
+            "keys": st["keys"],
+            "venues": st["venues"],
+            "credential_revision": (storage.credential_revision()
+                                    if storage is not None else 0),
+            "credential_sources": _credential_sources(secrets),
+            "diagnostics": [],
+        }
+        if storage is not None:
+            for op in storage.list_operations(op_type="diagnostics", limit=20):
+                req = {}
+                try:
+                    req = json.loads(op["request_json"] or "{}")
+                except Exception:
+                    pass
+                res = {}
+                try:
+                    res = json.loads(op["result_json"] or "{}")
+                except Exception:
+                    pass
+                out["diagnostics"].append({
+                    "operation_id": op["operation_id"],
+                    "ts": op["created_ts"],
+                    "venue": req.get("venue"), "role": req.get("role"),
+                    "dex": req.get("dex"), "symbol": req.get("symbol"),
+                    "order_path": req.get("order_path"),
+                    "credential_revision": req.get("credential_revision"),
+                    "ok": res.get("ok"), "steps": res.get("steps") or [],
+                    "status": op["status"], "error": op["error"],
+                })
+        return web.json_response(out)
+
+    def _credential_sources(secrets_mgr):
+        """Which stored triple each deployment/role actually resolves to —
+        mirrors config.lighter_creds / HLCreds fallback order."""
+        values = secrets_mgr._raw()
+        parsed = secrets_mgr._parse(values) if values else {}
+
+        def has(*keys):
+            return any(parsed.get(k) for k in keys)
+
+        def src(own, shared):
+            if has(*own):
+                return "override"
+            return "shared" if has(*shared) else "unset"
+
+        return {
+            "entropy": "set" if has("HL_PRIVATE_KEY") else "unset",
+            "tradexyz": ("override" if has("HL_PRIVATE_KEY_XYZ")
+                         else "shared" if has("HL_PRIVATE_KEY") else "unset"),
+            "lighter-base": src(("LIGHTER_BASE_ACCOUNT_INDEX",
+                                 "LIGHTER_BASE_API_KEY_INDEX",
+                                 "LIGHTER_BASE_API_PRIVATE_KEY"),
+                                ("LIGHTER_ACCOUNT_INDEX",
+                                 "LIGHTER_API_KEY_INDEX",
+                                 "LIGHTER_API_PRIVATE_KEY")),
+            "lighter-hedge": src(("LIGHTER_HEDGE_ACCOUNT_INDEX",
+                                  "LIGHTER_HEDGE_API_KEY_INDEX",
+                                  "LIGHTER_HEDGE_API_PRIVATE_KEY"),
+                                 ("LIGHTER_ACCOUNT_INDEX",
+                                  "LIGHTER_API_KEY_INDEX",
+                                  "LIGHTER_API_PRIVATE_KEY")),
+            "lighter": ("set" if has("LIGHTER_ACCOUNT_INDEX",
+                                     "LIGHTER_API_KEY_INDEX",
+                                     "LIGHTER_API_PRIVATE_KEY")
+                        else "unset"),
+        }
 
     # ------------------------------------------------------------- workers
 
@@ -295,6 +378,16 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         order_path = bool(b.get("order_path"))
         audit(f"diagnostics: venue={venue} symbol={symbol} role={role} "
               f"order_path={order_path}")
+        op_id = None
+        if storage is not None:
+            op_id = storage.record_operation(
+                op_type="diagnostics", target=f"{venue}:{role}",
+                request={"venue": venue, "symbol": symbol, "role": role,
+                         "dex": str(b.get("dex") or ""),
+                         "order_path": order_path,
+                         "credential_revision":
+                             storage.credential_revision()})
+            storage.update_operation(op_id, status="running", started=True)
         try:
             r = await asyncio.wait_for(
                 ops.run_diagnostics(
@@ -304,6 +397,10 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         except asyncio.TimeoutError:
             r = {"ok": False, "steps": [{"name": "timeout", "ok": False,
                                          "detail": "diagnostics timed out"}]}
+        if storage is not None and op_id is not None:
+            storage.update_operation(
+                op_id, status="succeeded" if r.get("ok") else "failed",
+                result=r)
         return web.json_response(r)
 
     async def flatten(request):
@@ -414,6 +511,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_delete("/api/profiles/{name}", profile_delete)
     app.router.add_get("/api/secrets", secrets_status)
     app.router.add_post("/api/secrets", secrets_update)
+    app.router.add_get("/api/connections", api_connections)
     app.router.add_get("/api/workers", workers_list)
     app.router.add_get("/api/venues", api_venues)
     app.router.add_post("/api/workers", worker_start)

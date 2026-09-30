@@ -229,3 +229,149 @@ def test_console_v2_entry_and_run_persistence():
             storage.close()
 
     asyncio.run(run())
+
+
+# ================================================================ V2-002
+
+LH = "0x" + "aa" * 32          # well-formed Lighter private key
+
+
+def test_connections_api_and_revision():
+    async def run():
+        tmp = tempfile.mkdtemp(prefix="console-v2-conn-")
+        env = os.path.join(tmp, ".env")
+        storage = Storage(os.path.join(tmp, "v2.sqlite3"))
+        profiles = ProfilesManager(tmp, env_file=env)
+        secrets = SecretsManager(env)
+        sup = Supervisor(tmp, tmp, storage=storage)
+        sup.build_argv = lambda w: [sys.executable, "-c",
+                                    "import time; time.sleep(30)"]
+        app = create_app(sup, profiles, secrets, token="t0k", storage=storage)
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            async with aiohttp.ClientSession(
+                    headers={"Authorization": "Bearer t0k"}) as http:
+                url = server.make_url
+
+                # auth applies to the new endpoint
+                async with aiohttp.ClientSession() as anon:
+                    async with anon.get(url("/api/connections")) as r:
+                        assert r.status == 401
+
+                async with http.get(url("/api/connections")) as r:
+                    assert r.status == 200
+                    conn = await r.json()
+                assert conn["schema_version"] == 1
+                assert conn["credential_revision"] == 0
+                assert conn["credential_sources"]["lighter"] == "unset"
+                assert conn["diagnostics"] == []
+
+                # --- batch semantics: one invalid value rejects the WHOLE
+                # batch, the valid value in the same batch is not written
+                async with http.post(url("/api/secrets"), json={
+                        "updates": {
+                            "LIGHTER_ACCOUNT_INDEX": "5",
+                            "LIGHTER_API_PRIVATE_KEY": "not-a-key"}}) as r:
+                    assert r.status == 400
+                    body = await r.json()
+                assert "LIGHTER_API_PRIVATE_KEY" in body["errors"]
+                async with http.get(url("/api/secrets")) as r:
+                    st = await r.json()
+                assert st["keys"]["LIGHTER_ACCOUNT_INDEX"]["set"] is False
+                assert storage.credential_revision() == 0   # failed → no bump
+
+                # --- valid write bumps the revision
+                async with http.post(url("/api/secrets"), json={
+                        "updates": {
+                            "LIGHTER_ACCOUNT_INDEX": "5",
+                            "LIGHTER_API_KEY_INDEX": "1",
+                            "LIGHTER_API_PRIVATE_KEY": LH}}) as r:
+                    assert r.status == 200
+                assert storage.credential_revision() == 1
+
+                # --- keep-vs-delete is server-side truth: omitting a key
+                # keeps it; only an explicit "" deletes it
+                async with http.post(url("/api/secrets"), json={
+                        "updates": {"LIGHTER_API_KEY_INDEX": "31337"}}) as r:
+                    assert r.status == 200
+                async with http.get(url("/api/secrets")) as r:
+                    st = await r.json()
+                assert st["keys"]["LIGHTER_ACCOUNT_INDEX"]["set"] is True
+                assert st["keys"]["LIGHTER_API_KEY_INDEX"]["tail"] == "1337"
+                async with http.post(url("/api/secrets"), json={
+                        "updates": {"LIGHTER_API_KEY_INDEX": ""}}) as r:
+                    assert r.status == 200
+                async with http.get(url("/api/secrets")) as r:
+                    st = await r.json()
+                assert st["keys"]["LIGHTER_API_KEY_INDEX"]["set"] is False
+                # restore the triple so later completeness asserts hold
+                async with http.post(url("/api/secrets"), json={
+                        "updates":
+                            {"LIGHTER_API_KEY_INDEX": "31337"}}) as r:
+                    assert r.status == 200
+
+                # --- resolved credential sources: override wins per leg;
+                # any override field filled demands the full triple
+                async with http.post(url("/api/secrets"), json={
+                        "updates":
+                            {"LIGHTER_BASE_ACCOUNT_INDEX": "7"}}) as r:
+                    assert r.status == 200
+                async with http.get(url("/api/connections")) as r:
+                    conn = await r.json()
+                src = conn["credential_sources"]
+                assert src["lighter"] == "set"
+                assert src["lighter-base"] == "override"
+                async with http.get(url("/api/secrets")) as r:
+                    st = await r.json()
+                assert st["venues"]["lighter-base"] is False   # incomplete
+                assert st["venues"]["lighter-hedge"] is True   # shared wins
+
+                # --- zero is a legal value, not "unset" (spec §13.4)
+                async with http.post(url("/api/secrets"), json={
+                        "updates": {"LIGHTER_HEDGE_ACCOUNT_INDEX": "0"}}) as r:
+                    assert r.status == 200
+                async with http.get(url("/api/secrets")) as r:
+                    st = await r.json()
+                assert st["keys"]["LIGHTER_HEDGE_ACCOUNT_INDEX"]["set"] is True
+
+                # --- diagnostics runs persist with their revision
+                import entropy_arb.console.ops as ops_mod
+
+                async def fake_diag(venue, symbol, *, env_file,
+                                    role="hedge", dex="", order_path=False):
+                    return {"ok": True, "steps": [
+                        {"name": "market", "ok": True, "detail": "ok"}]}
+                monkeypatch_diag = fake_diag
+                orig = ops_mod.run_diagnostics
+                ops_mod.run_diagnostics = monkeypatch_diag
+                try:
+                    async with http.post(url("/api/diagnostics"),
+                                         json={"venue": "lighter",
+                                               "symbol": "btc",
+                                               "role": "hedge",
+                                               "order_path": False}) as r:
+                        assert r.status == 200
+                        assert (await r.json())["ok"] is True
+                finally:
+                    ops_mod.run_diagnostics = orig
+                async with http.get(url("/api/connections")) as r:
+                    conn = await r.json()
+                assert len(conn["diagnostics"]) == 1
+                d = conn["diagnostics"][0]
+                assert d["venue"] == "lighter" and d["symbol"] == "BTC"
+                assert d["role"] == "hedge" and d["order_path"] is False
+                assert d["credential_revision"] == \
+                    conn["credential_revision"]
+                assert d["ok"] is True
+
+                # --- the response never contains a stored secret value
+                blob = repr(conn) + repr(st)
+                assert LH not in blob
+                assert "0x" + "aa" * 30 not in blob
+        finally:
+            await sup.shutdown()
+            await server.close()
+            storage.close()
+
+    asyncio.run(run())

@@ -249,6 +249,32 @@ class Storage:
             " ORDER BY created_ts DESC, id DESC LIMIT 1", (profile,)).fetchone()
         return dict(r) if r else None
 
+    # ------------------------------------------------------------------ meta
+
+    def meta_get(self, key: str, default=None):
+        r = self.db.execute("SELECT value FROM meta WHERE key=?",
+                            (key,)).fetchone()
+        return r["value"] if r else default
+
+    def meta_set(self, key: str, value: str) -> None:
+        self.db.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES(?,?)",
+            (key, str(value)))
+        self.db.commit()
+
+    # -------------------------------------------------- credential revision
+    # Internal, non-secret counter bumped on every successful secrets write.
+    # Diagnostics cache entries record the revision they ran at, so the UI
+    # can show "stale — credentials changed" without ever seeing a key.
+
+    def credential_revision(self) -> int:
+        return int(self.meta_get("credential_revision", "0"))
+
+    def bump_credential_revision(self) -> int:
+        rev = self.credential_revision() + 1
+        self.meta_set("credential_revision", rev)
+        return rev
+
     # ------------------------------------------------------------- operations
 
     def record_operation(self, *, op_type: str, target: str,
@@ -289,6 +315,23 @@ class Storage:
         r = self.db.execute("SELECT * FROM operations WHERE operation_id=?",
                             (operation_id,)).fetchone()
         return dict(r) if r else None
+
+    def list_operations(self, *, op_type: Optional[str] = None,
+                        target: Optional[str] = None,
+                        limit: int = 20) -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM operations"
+        conds, args = [], []
+        if op_type is not None:
+            conds.append("op_type=?")
+            args.append(op_type)
+        if target is not None:
+            conds.append("target=?")
+            args.append(target)
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        sql += " ORDER BY created_ts DESC, operation_id LIMIT ?"
+        args.append(limit)
+        return [dict(r) for r in self.db.execute(sql, args).fetchall()]
 
     # ------------------------------------------------------------------ audit
 
