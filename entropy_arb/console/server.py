@@ -673,7 +673,19 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 "net_usd": None, "engines": 0, "positions": [],
                 "source": "console_probe", "probe_ts": time.time(),
             })
-        agg["exchanges"].extend(probed)
+        # fill EXISTING rows whose live workers report no equity, then
+        # append groups no live worker covers at all
+        for p in probed:
+            row = next((e for e in agg["exchanges"]
+                        if e["exchange"] == p["exchange"]), None)
+            if row is not None:
+                if row.get("equity") is None:
+                    row["equity"] = p["equity"]
+                    row["free"] = p["free"]
+                    row["source"] = p["source"]
+                    row["probe_error"] = p.get("probe_error")
+                continue
+            agg["exchanges"].append(p)
         # recompute cross-venue totals including probed balances
         equities = [e["equity"] for e in agg["exchanges"]
                     if e.get("equity") is not None]
