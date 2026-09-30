@@ -202,6 +202,36 @@ CREATE TABLE IF NOT EXISTS reconciliations (
 CREATE INDEX IF NOT EXISTS idx_recons ON reconciliations(strategy_id,
                                                          created_ts);
 """),
+    # Migration 5 (V2-014, phase D): experiment drafts and their state
+    # machine (draft → ready → pending_activation → observing → review_due
+    # → retained / rollback_pending → rolled_back; cancelled anytime).
+    (5, """
+CREATE TABLE IF NOT EXISTS experiments (
+  id              TEXT PRIMARY KEY,
+  strategy_id     TEXT NOT NULL,
+  profile         TEXT NOT NULL,
+  version         INTEGER NOT NULL DEFAULT 1,
+  state           TEXT NOT NULL DEFAULT 'draft',
+  question        TEXT,
+  hypothesis      TEXT,
+  source_refs_json TEXT,
+  from_config_version TEXT,
+  candidate_yaml  TEXT,
+  candidate_hash  TEXT,
+  params_diff_json TEXT,
+  observe_start   TEXT,
+  observe_end     TEXT,
+  sample_target_json TEXT,
+  metrics_json    TEXT,
+  applied_config_version TEXT,
+  activated_ts    REAL,
+  error           TEXT,
+  created_ts      REAL NOT NULL,
+  updated_ts      REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_experiments_strategy
+  ON experiments(strategy_id, created_ts);
+"""),
 ]
 
 
@@ -560,6 +590,69 @@ class Storage:
             (strategy_id, boundary, ts, mark_source,
              json.dumps(payload, ensure_ascii=False)))
         self.db.commit()
+
+    # ---------------------------------------------------------- experiments
+
+    def create_experiment(self, *, strategy_id: str, profile: str,
+                          question: str = "", hypothesis: str = "",
+                          from_config_version: Optional[str] = None,
+                          candidate_yaml: str = "",
+                          observe_start: Optional[str] = None,
+                          observe_end: Optional[str] = None) \
+            -> Dict[str, Any]:
+        import uuid as _uuid
+        eid = f"exp-{_uuid.uuid4().hex}"
+        now = time.time()
+        self.db.execute(
+            "INSERT INTO experiments(id, strategy_id, profile, version,"
+            " state, question, hypothesis, from_config_version,"
+            " candidate_yaml, observe_start, observe_end, created_ts,"
+            " updated_ts) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (eid, strategy_id, profile, 1, "draft", question, hypothesis,
+             from_config_version, candidate_yaml, observe_start, observe_end,
+             now, now))
+        self.db.commit()
+        return self.get_experiment(eid)
+
+    def get_experiment(self, exp_id: str) -> Optional[Dict[str, Any]]:
+        r = self.db.execute("SELECT * FROM experiments WHERE id=?",
+                            (exp_id,)).fetchone()
+        return dict(r) if r else None
+
+    def list_experiments(self, strategy_id: Optional[str] = None,
+                         limit: int = 50) -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM experiments"
+        args: list = []
+        if strategy_id:
+            sql += " WHERE strategy_id=?"
+            args.append(strategy_id)
+        sql += " ORDER BY created_ts DESC, id LIMIT ?"
+        args.append(limit)
+        return [dict(r) for r in self.db.execute(sql, args)]
+
+    def update_experiment(self, exp_id: str, *, fields: Dict[str, Any],
+                          bump_version: bool = True,
+                          expect_version: Optional[int] = None) \
+            -> Optional[Dict[str, Any]]:
+        row = self.get_experiment(exp_id)
+        if row is None:
+            return None
+        if expect_version is not None and row["version"] != expect_version:
+            return row                       # conflict: caller checks version
+        sets, args = [], []
+        for k, v in fields.items():
+            sets.append(f"{k}=?")
+            args.append(v)
+        new_version = row["version"] + 1 if bump_version else row["version"]
+        sets.append("version=?")
+        args.append(new_version)
+        sets.append("updated_ts=?")
+        args.append(time.time())
+        args.append(exp_id)
+        self.db.execute(f"UPDATE experiments SET {', '.join(sets)}"
+                        " WHERE id=?", args)
+        self.db.commit()
+        return self.get_experiment(exp_id)
 
     # ------------------------------------------------------------------ meta
 

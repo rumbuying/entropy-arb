@@ -954,6 +954,171 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             provisional_runs=provisional)
         return web.json_response(envelope(sid, recs))
 
+    async def api_experiments(request):
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        sid = request.query.get("strategy_id")
+        rows = storage.list_experiments(strategy_id=sid or None)
+        return web.json_response({"schema_version": 1, "as_of": time.time(),
+                                  "experiments": [_exp_view(r) for r in rows]})
+
+    async def api_experiments_create(request):
+        b = await body(request)
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        sid = b.get("strategy_id") or ""
+        profile = b.get("profile") or ""
+        if storage.get_strategy(sid) is None:
+            return web.json_response({"error": "not_found",
+                "message": "unknown strategy"}, status=404)
+        if not profiles.exists(profile):
+            return web.json_response({"error": "not_found",
+                "message": "unknown profile"}, status=404)
+        row = storage.create_experiment(
+            strategy_id=sid, profile=profile,
+            question=str(b.get("question") or ""),
+            hypothesis=str(b.get("hypothesis") or ""),
+            from_config_version=b.get("from_config_version"),
+            candidate_yaml=str(b.get("candidate_yaml") or ""),
+            observe_start=b.get("observe_start"),
+            observe_end=b.get("observe_end"))
+        audit(f"experiment created: {row['id']} strategy={sid}")
+        return web.json_response({"schema_version": 1,
+                                  "experiment": _exp_view(row)}, status=201)
+
+    async def api_experiment_get(request):
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        row = storage.get_experiment(request.match_info["eid"])
+        if row is None:
+            return web.json_response({"error": "not_found",
+                "message": "unknown experiment"}, status=404)
+        return web.json_response({"schema_version": 1,
+                                  "experiment": _exp_view(row)})
+
+    async def api_experiment_patch(request):
+        b = await body(request)
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        eid = request.match_info["eid"]
+        row = storage.get_experiment(eid)
+        if row is None:
+            return web.json_response({"error": "not_found",
+                "message": "unknown experiment"}, status=404)
+        expect = b.get("expected_version")
+        if expect is None:
+            return web.json_response({"error": "invalid_range",
+                "message": "expected_version is required"}, status=400)
+        fields = {}
+        for k in ("question", "hypothesis", "candidate_yaml",
+                  "observe_start", "observe_end"):
+            if k in b:
+                fields[k] = b.get(k)
+        updated = storage.update_experiment(
+            eid, fields=fields, expect_version=expect)
+        if updated is None:
+            return web.json_response({"error": "not_found"}, status=404)
+        if updated["version"] == row["version"] and fields:
+            return web.json_response(
+                {"error": "config_conflict",
+                 "message": "experiment was modified concurrently",
+                 "details": {"current_version": updated["version"]}},
+                status=409)
+        return web.json_response({"schema_version": 1,
+                                  "experiment": _exp_view(updated)})
+
+    async def api_experiment_transition(request):
+        b = await body(request)
+        from .experiments import ExperimentError, transition
+        try:
+            updated = transition(storage, profiles,
+                                 request.match_info["eid"],
+                                 str(b.get("state") or ""))
+        except ExperimentError as e:
+            return web.json_response(
+                {"error": e.code, "message": e.message,
+                 "details": e.details}, status=e.status)
+        return web.json_response({"schema_version": 1,
+                                  "experiment": _exp_view(updated)})
+
+    async def api_experiment_apply(request):
+        b = await body(request)
+        from .experiments import ExperimentError, apply_experiment
+        try:
+            out = apply_experiment(storage, profiles,
+                                   request.match_info["eid"],
+                                   expected_profile_version=
+                                   b.get("expected_profile_version"))
+        except ExperimentError as e:
+            return web.json_response(
+                {"error": e.code, "message": e.message,
+                 "details": e.details}, status=e.status)
+        audit(f"experiment apply: {request.match_info['eid']} -> "
+              f"{out['applied_config_version']}")
+        return web.json_response({"schema_version": 1, **out})
+
+    async def api_experiment_rollback(request):
+        b = await body(request)
+        from .experiments import ExperimentError, rollback_experiment
+        try:
+            out = rollback_experiment(storage, profiles,
+                                      request.match_info["eid"],
+                                      expected_profile_version=
+                                      b.get("expected_profile_version"))
+        except ExperimentError as e:
+            return web.json_response(
+                {"error": e.code, "message": e.message,
+                 "details": e.details}, status=e.status)
+        audit(f"experiment rollback: {request.match_info['eid']} from "
+              f"{out['restored_from']}")
+        return web.json_response({"schema_version": 1, **out})
+
+    async def api_experiment_comparison(request):
+        eid = request.match_info["eid"]
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        try:
+            start_ts, end_ts, tzname = _abs_range_or_400(request)
+            if start_ts is None:
+                raise web.HTTPBadRequest(text=json.dumps(
+                    {"error": "invalid_range",
+                     "message": "start/end/timezone required"}),
+                    content_type="application/json")
+        except web.HTTPBadRequest as e:
+            return web.Response(status=400, text=e.text,
+                                content_type=e.content_type)
+        from .experiments import ExperimentError, comparison
+        from . import performance as performance_mod
+        try:
+            out = comparison(storage, performance_mod, eid,
+                             start_ts=start_ts, end_ts=end_ts,
+                             timezone=tzname or "Asia/Shanghai")
+        except ExperimentError as e:
+            return web.json_response(
+                {"error": e.code, "message": e.message,
+                 "details": e.details}, status=e.status)
+        return web.json_response(out)
+
+    def _exp_view(r: dict) -> dict:
+        return {
+            "experiment_id": r["id"], "strategy_id": r["strategy_id"],
+            "profile": r["profile"], "version": r["version"],
+            "state": r["state"], "question": r["question"],
+            "hypothesis": r["hypothesis"],
+            "from_config_version": r["from_config_version"],
+            "candidate_hash": r["candidate_hash"],
+            "applied_config_version": r["applied_config_version"],
+            "observe_start": r["observe_start"],
+            "observe_end": r["observe_end"],
+            "error": r["error"],
+            "created_ts": r["created_ts"], "updated_ts": r["updated_ts"],
+        }
+
     async def api_accounts(request):
         """Deduped account view (spec §10.2 / §5.5): one row per running
         engine leg, grouped per venue-deployment, equity via max (legacy
@@ -1080,6 +1245,17 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                        api_strategy_executions)
     app.router.add_get("/api/strategies/{sid}/recommendations",
                        api_strategy_recommendations)
+    app.router.add_get("/api/experiments", api_experiments)
+    app.router.add_post("/api/experiments", api_experiments_create)
+    app.router.add_get("/api/experiments/{eid}", api_experiment_get)
+    app.router.add_patch("/api/experiments/{eid}", api_experiment_patch)
+    app.router.add_post("/api/experiments/{eid}/transition",
+                        api_experiment_transition)
+    app.router.add_post("/api/experiments/{eid}/apply", api_experiment_apply)
+    app.router.add_post("/api/experiments/{eid}/rollback",
+                        api_experiment_rollback)
+    app.router.add_get("/api/experiments/{eid}/comparison",
+                       api_experiment_comparison)
     app.router.add_get("/api/accounts", api_accounts)
     app.router.add_post("/api/import/scan", api_import_scan)
     app.router.add_post("/api/import/run", api_import_run)
