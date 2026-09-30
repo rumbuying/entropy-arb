@@ -26,6 +26,9 @@ export const store = {
   },
 };
 
+// debug/QA hook: lets the browser console (and tests) inspect the store
+if (typeof window !== "undefined") window.__v2store = store;
+
 /* Time helpers: build UTC [start, end) ISO strings for the shared quick
    ranges in a target IANA timezone (spec §4.2). "today" = the local natural
    day so far; it stays open-ended until the user switches range. */

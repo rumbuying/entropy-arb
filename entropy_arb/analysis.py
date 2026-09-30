@@ -30,18 +30,29 @@ def pctl(sorted_vals: list, q: float) -> float:
     return sorted_vals[lo] * (hi - k) + sorted_vals[hi] * (k - lo)
 
 
-def _read_csv(path: str, hours: float, min_samples: int) -> list:
-    cutoff = time.time() - hours * 3600 if hours > 0 else 0.0
+def _read_csv(path: str, hours: float, min_samples: int,
+              start_ts: Optional[float] = None,
+              end_ts: Optional[float] = None) -> list:
+    """Relative window (hours) or absolute UTC range [start_ts, end_ts) —
+    never both; filtering happens BEFORE any statistics (spec §10.6)."""
+    cutoff = None
+    if start_ts is not None:
+        cutoff = start_ts
+    elif hours > 0:
+        cutoff = time.time() - hours * 3600
     rows = []
     with open(path, newline="") as fh:
         for r in csv.DictReader(fh):
             try:
-                if float(r["minute_ts"]) < cutoff:
+                ts = float(r["minute_ts"])
+                if cutoff is not None and ts < cutoff:
                     continue
+                if end_ts is not None and ts >= end_ts:
+                    continue                 # end is exclusive
                 if min_samples and int(r["samples"]) < min_samples:
                     continue
                 rows.append({
-                    "ts": float(r["minute_ts"]),
+                    "ts": ts,
                     "prem": float(r["premium_close_bps"]),
                     "sell_max": float(r["sell_edge_max_bps"]),
                     "sell_mean": float(r["sell_edge_mean_bps"]),
@@ -53,8 +64,27 @@ def _read_csv(path: str, hours: float, min_samples: int) -> list:
     return rows
 
 
-def load_rows(path: str, hours: float = 0.0, min_samples: int = 0) -> list:
-    return _read_csv(path, hours, min_samples)
+def load_rows(path: str, hours: float = 0.0, min_samples: int = 0,
+              start_ts: Optional[float] = None,
+              end_ts: Optional[float] = None) -> list:
+    return _read_csv(path, hours, min_samples, start_ts, end_ts)
+
+
+def coverage(rows: List[dict], start_ts: Optional[float],
+             end_ts: Optional[float], gap_sec: float = 300.0) -> dict:
+    """Actual data coverage over the requested window, with the gaps —
+    an analyst must see where the recording is silent (spec §10.6)."""
+    if not rows:
+        return {"n_rows": 0, "first_ts": None, "last_ts": None, "gaps": []}
+    gaps = []
+    for a, b in zip(rows, rows[1:]):
+        if b["ts"] - a["ts"] > gap_sec:
+            gaps.append({"start": a["ts"], "end": b["ts"],
+                         "sec": round(b["ts"] - a["ts"])})
+        if len(gaps) >= 50:
+            break
+    return {"n_rows": len(rows), "first_ts": rows[0]["ts"],
+            "last_ts": rows[-1]["ts"], "gaps": gaps}
 
 
 # ------------------------------------------------------------------ analyze

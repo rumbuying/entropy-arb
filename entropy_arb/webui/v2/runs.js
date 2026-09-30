@@ -121,6 +121,10 @@ export function mount(container) {
       return b;
     };
     acts.appendChild(mk(t("runs.logs_btn"), "", () => logsDialog(w)));
+    if (w.state === "running") {
+      acts.appendChild(mk(t("v2.runs.live_view"), "",
+        () => { location.hash = `#/runtime/${w.id}`; }));
+    }
     // stopped instances can also be restarted (§3.2: the old UI disabled
     // this wrongly); the backend re-validates
     acts.appendChild(mk(t("runs.restart_btn"), "", () => restartDialog(w)));

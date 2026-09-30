@@ -266,9 +266,17 @@ export function mount(container) {
       if (v === undefined || v === null) continue;
       input.value = String(v);
     }
+    if (store.pendingThresholds) {
+      pendingThresholds = store.pendingThresholds;
+      store.set({ pendingThresholds: null });
+    }
     if (pendingThresholds) {
-      applyThresholds(pendingThresholds.mid, pendingThresholds.up,
-                      pendingThresholds.low);
+      // the analyzer's suggestion is {midline_bps, upper_bps, lower_bps}
+      const s = pendingThresholds;
+      const mid = s.midline_bps !== undefined ? s.midline_bps : s.mid;
+      const up = s.upper_bps !== undefined ? s.upper_bps : s.up;
+      const low = s.lower_bps !== undefined ? s.lower_bps : s.low;
+      applyThresholds(mid, up, low);
       pendingThresholds = null;
     }
     nav.querySelectorAll("button").forEach(b =>
@@ -467,9 +475,11 @@ export function mount(container) {
   return {
     refresh,
     applyThresholds,
+    // async guard: the router awaits the in-page keep/leave dialog
     beforeLeave() {
       if (!dirty) return true;
-      return confirm(t("v2.prof.leave_dirty"));
+      return import("./app.js").then(({ leaveGuard }) => leaveGuard())
+        .catch(() => true);
     },
     destroy() { clearInterval(timer); },
   };

@@ -9,8 +9,7 @@ import { t, setLang, getLang, applyStatic } from "/static/i18n.js";
 import { getJSON } from "/static/api.js";
 import { store } from "./store.js";
 
-const ROUTES = [
-  { name: "strategies", re: /^#\/strategies$/i,
+const ROUTES = [  { name: "strategies", re: /^#\/strategies$/i,
     mod: () => import("./strategies.js"), title: () => t("v2.nav.strategies") },
   { name: "detail", re: /^#\/strategies\/([^/?]+)/i,
     mod: () => import("./detail.js"), title: () => t("v2.nav.detail"),
@@ -33,6 +32,9 @@ const ROUTES = [
     mod: () => import("./profiles.js"), title: () => t("v2.nav.profiles") },
   { name: "research", re: /^#\/research$/i,
     mod: () => import("./research.js"), title: () => t("v2.nav.research") },
+  { name: "runtime", re: /^#\/runtime\/([^/?]+)/i,
+    mod: () => import("./runtime.js"), title: () => t("v2.rt.title"),
+    params: m => ({ wid: decodeURIComponent(m[1]) }), nav: "runs" },
 ];
 
 const content = document.getElementById("v2-content");
@@ -40,6 +42,35 @@ const titleNode = document.getElementById("v2-title");
 const apiBadge = document.getElementById("api-badge");
 let currentPage = null;                     // {destroy?} of the live page
 let navSeq = 0;
+let currentHash = location.hash || "#/strategies";
+
+/* In-page leave guard (spec §4.3): keeps / gives up the dirty form. A
+   promise-based page dialog, not a native confirm — the router can await
+   it and roll the hash back when the user stays. Pages import it for their
+   beforeLeave implementations. */
+export function leaveGuard() {
+  return new Promise(resolve => {
+    const mask = document.createElement("div");
+    mask.className = "modal-mask";
+    const box = document.createElement("div");
+    box.className = "modal";
+    const msg = document.createElement("div");
+    msg.textContent = t("v2.prof.leave_dirty");
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const stay = document.createElement("button");
+    stay.textContent = t("v2.prof.stay");
+    const leave = document.createElement("button");
+    leave.className = "danger";
+    leave.textContent = t("v2.prof.leave");
+    actions.append(stay, leave);
+    box.append(msg, actions);
+    mask.appendChild(box);
+    document.body.appendChild(mask);
+    stay.onclick = () => { mask.remove(); resolve(false); };
+    leave.onclick = () => { mask.remove(); resolve(true); };
+  });
+}
 
 function parseHash() {
   const h = location.hash || "#/strategies";
@@ -67,17 +98,23 @@ async function navigate() {
     return;
   }
   const { route, params, query } = parsed;
-  if (currentPage && currentPage.destroy) {
-    // a dirty editor may hold the navigation (spec §4.3)
+  if (currentPage) {
     if (currentPage.beforeLeave) {
       try {
-        if (!currentPage.beforeLeave()) return;
+        if (!(await currentPage.beforeLeave())) {
+          // user keeps the draft: roll the URL back to the shown page
+          history.replaceState(null, "", currentHash);
+          return;
+        }
       } catch (_) {}
     }
-    try { currentPage.destroy(); } catch (_) {}
+    if (currentPage.destroy) {
+      try { currentPage.destroy(); } catch (_) {}
+    }
   }
   currentPage = null;
   content.replaceChildren();
+  currentHash = location.hash || currentHash;
   document.querySelectorAll(".v2-nav a[data-nav]").forEach(a => {
     a.classList.toggle("active",
       a.dataset.nav === (route.nav || route.name));
