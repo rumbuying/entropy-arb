@@ -842,6 +842,70 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             timezone=tzname or "Asia/Shanghai")
         return web.json_response(out)
 
+    async def api_strategy_executions(request):
+        """Paginated execution evidence (spec §10.2): events for one
+        strategy, stable (ts,id) order, opaque cursor, cap 200. Legacy CSV
+        rows appear flagged unresolved — they are evidence, not trades."""
+        sid = request.match_info["sid"]
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        if storage.get_strategy(sid) is None:
+            return web.json_response(
+                {"error": "not_found", "message": "unknown strategy"},
+                status=404)
+        try:
+            start_ts, end_ts, _tz = _abs_range_or_400(request)
+        except web.HTTPBadRequest as e:
+            return web.Response(status=400, text=e.text,
+                                content_type=e.content_type)
+        try:
+            limit = min(int(request.query.get("limit", "50")), 200)
+        except ValueError:
+            limit = 50
+        cursor = request.query.get("cursor") or ""
+        cursor_ts = cursor_id = None
+        if cursor:
+            try:
+                raw = json.loads(__import__("base64")
+                                 .b64decode(cursor).decode())
+                cursor_ts, cursor_id = float(raw[0]), str(raw[1])
+            except Exception:
+                return web.json_response({"error": "invalid_range",
+                    "message": "bad cursor"}, status=400)
+        rows, has_more = storage.events_page(
+            sid, start_ts=start_ts, end_ts=end_ts, cursor_ts=cursor_ts,
+            cursor_id=cursor_id, limit=limit)
+        out = []
+        for r in rows:
+            try:
+                payload = json.loads(r["payload_json"] or "{}")
+            except Exception:
+                payload = {}
+            out.append({
+                "event_id": r["event_id"],
+                "event_type": r["event_type"],
+                "event_ts": r["event_ts"],
+                "unresolved": bool(r["unresolved"]),
+                "dedupe_key": r["dedupe_key"],
+                "run_id": r["run_id"],
+                "payload": payload,
+                "source": {"import_source": r["source_id"],
+                           "line": r["source_line"]},
+            })
+        next_cursor = None
+        if has_more and out:
+            last = out[-1]
+            next_cursor = __import__("base64").b64encode(json.dumps(
+                [last["event_ts"], last["event_id"]]).encode()).decode()
+        return web.json_response({
+            "schema_version": 1, "as_of": time.time(),
+            "strategy_id": sid, "executions": out,
+            "next_cursor": next_cursor,
+            "note": "legacy rows carry no per-leg fill prices or fees — "
+                    "evidence only, not a reconciled execution ledger",
+        })
+
     async def api_accounts(request):
         """Deduped account view (spec §10.2 / §5.5): one row per running
         engine leg, grouped per venue-deployment, equity via max (legacy
@@ -964,6 +1028,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_get("/api/strategies/{sid}", api_strategy_detail)
     app.router.add_get("/api/strategies/{sid}/performance",
                        api_strategy_performance)
+    app.router.add_get("/api/strategies/{sid}/executions",
+                       api_strategy_executions)
     app.router.add_get("/api/accounts", api_accounts)
     app.router.add_post("/api/import/scan", api_import_scan)
     app.router.add_post("/api/import/run", api_import_run)

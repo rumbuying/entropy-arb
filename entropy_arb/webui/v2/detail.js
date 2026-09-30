@@ -112,6 +112,8 @@ export function mount(container, ctx) {
     container.appendChild(card(t("v2.det.runs"), runsTbl.node));
     // performance panel with the shared time ranges (V2-011)
     container.appendChild(buildPerfPanel(id));
+    // execution evidence list (V2-012, paginated)
+    container.appendChild(buildExecPanel(id));
     // evidence / import
     const impBox = el("div");
     const impBtn = el("button", { class: "primary",
@@ -230,6 +232,71 @@ export function mount(container, ctx) {
     }
     loadPerf().catch(() => {});
     return box;
+  }
+
+  function buildExecPanel(id) {
+    const tbl = table([t("v2.det.exec_time"), t("v2.det.exec_type"),
+                       t("v2.det.exec_detail"), t("v2.det.exec_src")]);
+    const moreBtn = el("button", { text: t("v2.det.exec_more"),
+      style: "display:none", onclick: () => load(next) });
+    const note = el("div", { class: "note" }, t("v2.det.exec_note"));
+    const box = card(t("v2.det.exec_title"), note, tbl.node, moreBtn);
+    let next = null;
+
+    async function load(cursor) {
+      try {
+        const q = new URLSearchParams({ limit: "50",
+                                        ...(cursor ? { cursor } : {}) });
+        const data = await getJSON(
+          `/api/strategies/${encodeURIComponent(id)}/executions?${q}`);
+        if (!cursor) tbl.tbody.replaceChildren();
+        next = data.next_cursor;
+        moreBtn.style.display = next ? "" : "none";
+        for (const ex of data.executions || []) {
+          const tr = el("tr");
+          tr.appendChild(el("td", { class: "num muted" },
+            new Date(ex.event_ts * 1000).toLocaleString()));
+          tr.appendChild(el("td", {}, ex.event_type +
+            (ex.unresolved ? " ⚠" : "")));
+          tr.appendChild(el("td", { class: "num muted" },
+            summarize(ex.payload)));
+          tr.appendChild(el("td", { class: "num muted" },
+            `src:${ex.source.import_source}·L${ex.source.line}`));
+          tbl.tbody.appendChild(tr);
+        }
+        if (!(data.executions || []).length && !cursor) {
+          tbl.tbody.appendChild(el("tr", {},
+            el("td", { colspan: "4", class: "muted",
+                       text: t("v2.det.exec_none") })));
+        }
+      } catch (e) {
+        tbl.tbody.replaceChildren(el("tr", {},
+          el("td", { colspan: "4", class: "err",
+                     text: String(e.message || e) })));
+      }
+    }
+    load(null);
+    return box;
+  }
+
+  function summarize(p) {
+    if (!p) return "—";
+    const bits = [];
+    if (p.side) bits.push(p.side);
+    if (p.qty_delta !== undefined && p.qty_delta !== null) {
+      bits.push(`qty ${p.qty_delta}`);
+    }
+    if (p.qty !== undefined && p.qty !== null) bits.push(`qty ${p.qty}`);
+    if (p.price !== undefined && p.price !== null) bits.push(`@ ${p.price}`);
+    if (p.hedge_qty !== undefined && p.hedge_qty !== null) {
+      bits.push(`hedge ${p.hedge_qty}@${p.hedge_px}`);
+    }
+    if (p.fee && p.fee.amount !== null && p.fee.amount !== undefined) {
+      bits.push(`fee ${p.fee.amount}`);
+    } else if (p.fee && p.fee.source === "missing") {
+      bits.push("fee:—");
+    }
+    return bits.join(" · ") || "—";
   }
 
   async function runImport(id, box) {

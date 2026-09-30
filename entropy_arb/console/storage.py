@@ -501,6 +501,31 @@ class Storage:
         args.append(limit)
         return [dict(r) for r in self.db.execute(sql, args)]
 
+    def events_page(self, strategy_id: str, *,
+                    start_ts: Optional[float] = None,
+                    end_ts: Optional[float] = None,
+                    cursor_ts: Optional[float] = None,
+                    cursor_id: Optional[str] = None,
+                    limit: int = 50) -> Tuple[List[Dict[str, Any]], bool]:
+        """Stable pagination (§10.1): ORDER BY event_ts, event_id with the
+        opaque cursor (ts,id); returns (rows, has_more)."""
+        sql = "SELECT * FROM normalized_events WHERE strategy_id=?"
+        args: list = [strategy_id]
+        if start_ts is not None:
+            sql += " AND event_ts >= ?"
+            args.append(start_ts)
+        if end_ts is not None:
+            sql += " AND event_ts < ?"
+            args.append(end_ts)
+        if cursor_ts is not None and cursor_id:
+            sql += " AND (event_ts > ? OR (event_ts = ? AND event_id > ?))"
+            args.extend([cursor_ts, cursor_ts, cursor_id])
+        sql += " ORDER BY event_ts, event_id LIMIT ?"
+        args.append(limit + 1)
+        rows = [dict(r) for r in self.db.execute(sql, args)]
+        has_more = len(rows) > limit
+        return rows[:limit], has_more
+
     # -------------------------------------------------------------- ledger
 
     def save_reconciliation(self, *, strategy_id: str, scope: dict,
