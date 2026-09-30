@@ -328,6 +328,19 @@ class Supervisor:
             log.exception("strategy resolution failed for %s", w.id)
             return None
 
+    def _worker_env(self, w: Worker, strategy_id: Optional[str]) -> dict:
+        """Spawn environment, including the V2 event-collection identity.
+        MUST be built after w.run_id is assigned — the run id travels to the
+        worker via env (an adopted worker has none of these and keeps
+        CSV-only collection, shown as not upgraded; spec §8.2)."""
+        env = dict(os.environ)
+        env["PYTHONUNBUFFERED"] = "1"
+        env["EVENTS_RUN_ID"] = w.run_id or ""
+        env["EVENTS_STRATEGY_ID"] = strategy_id or ""
+        env["EVENTS_PATH"] = os.path.join(self.root, "logs", "events",
+                                          f"{w.run_id}.jsonl")
+        return env
+
     async def start(self, profile: str, symbol: str, hedge: str,
                     mode: str, base: str = "hl") -> Worker:
         if mode not in ("live", "record"):
@@ -335,31 +348,21 @@ class Supervisor:
         self._seq += 1
         w = Worker(f"w{self._seq}", profile, symbol, hedge, mode,
                    self._alloc_port(), base=base)
-        env = dict(os.environ)
-        env["PYTHONUNBUFFERED"] = "1"
-        # V2 event collection: the worker's run identity travels via env —
-        # an adopted worker (no env of ours) keeps CSV-only collection and
-        # is shown as not upgraded (spec §8.2)
-        env["EVENTS_RUN_ID"] = w.run_id or ""
-        if self.storage is not None and w.run_id:
-            row = self.storage.get_run(w.run_id)
-            env["EVENTS_STRATEGY_ID"] = (row or {}).get("strategy_id") or ""
-        else:
-            env["EVENTS_STRATEGY_ID"] = ""
-        env["EVENTS_PATH"] = os.path.join(self.root, "logs", "events",
-                                          f"{w.run_id}.jsonl")
-        w.proc = await asyncio.create_subprocess_exec(
-            *self.build_argv(w),
-            cwd=self.root, env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT)
+        # identity first: run id + strategy must exist BEFORE the spawn so
+        # the event-collection env carries real values
+        w.cmdline_hash = cmdline_hash(w.profile, w.symbol, w.hedge,
+                                      w.base, w.mode)
+        w.run_id = new_run_id()
+        strategy_id = self._resolve_strategy_id(w)
         w.started_ts = time.time()
         w.exit_code = None
         w.stopped_ts = None
         w.log_tail.clear()
-        w.cmdline_hash = cmdline_hash(w.profile, w.symbol, w.hedge,
-                                      w.base, w.mode)
-        w.run_id = new_run_id()
+        w.proc = await asyncio.create_subprocess_exec(
+            *self.build_argv(w),
+            cwd=self.root, env=self._worker_env(w, strategy_id),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT)
         if self.storage is not None:
             self.storage.create_run(
                 run_id=w.run_id, worker_id=w.id, profile=w.profile,
@@ -367,7 +370,7 @@ class Supervisor:
                 pid=w.proc.pid, cmdline_hash=w.cmdline_hash,
                 started_ts=w.started_ts,
                 proc_start_ts=_proc_start_time(w.proc.pid),
-                strategy_id=self._resolve_strategy_id(w))
+                strategy_id=strategy_id)
         self.workers[w.id] = w
         w._reader_task = asyncio.create_task(self._pump(w),
                                              name=f"worker-{w.id}-log")

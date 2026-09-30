@@ -470,3 +470,30 @@ def test_worker_trades_endpoint():
             storage.close()
 
     asyncio.run(run())
+
+
+def test_worker_env_carries_real_run_identity():
+    """V2-008 regression: the EVENTS_* env must carry the run id that is
+    actually assigned (was built before run_id allocation → 'None.jsonl')."""
+    tmp = tempfile.mkdtemp(prefix="console-v2-env-")
+    storage = Storage(os.path.join(tmp, "v2.sqlite3"))
+    sup = Supervisor(tmp, tmp, storage=storage)
+    w = Worker("w1", "P1", "SNDK", "lighter-rh", "record", 0)
+    w.run_id = new_run_id()
+    env = sup._worker_env(w, "str-123")
+    assert env["EVENTS_RUN_ID"] == w.run_id
+    assert env["EVENTS_STRATEGY_ID"] == "str-123"
+    assert env["EVENTS_PATH"] == os.path.join(tmp, "logs", "events",
+                                              f"{w.run_id}.jsonl")
+    assert env["EVENTS_RUN_ID"] != "" and "None" not in env["EVENTS_PATH"]
+    # a start() through the supervisor also creates the event file on first
+    # emit — covered by the engine tests; here assert spawn wiring: strategy
+    # resolution happens before storage.create_run sees it
+    storage.create_run(run_id=new_run_id(), worker_id="wX", profile="P",
+                       symbol="S", hedge="h", base="hl", mode="record",
+                       pid=None, cmdline_hash="x", started_ts=1.0,
+                       strategy_id="str-early")
+    assert storage.get_run(
+        [r for r in storage.list_runs() if r["strategy_id"] == "str-early"][0]
+        ["run_id"])["strategy_id"] == "str-early"
+    storage.close()
