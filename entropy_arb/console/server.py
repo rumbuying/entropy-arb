@@ -766,6 +766,18 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         for f in files:
             reports.append(importer.import_csv(
                 storage, path=f["path"], strategy_id=strategy_id))
+        # V2-008: this console's own run event files (backend-managed dir)
+        events_dir = os.path.join(supervisor.root, "logs", "events")
+        if os.path.isdir(events_dir):
+            for fn in sorted(os.listdir(events_dir)):
+                if not fn.endswith(".jsonl"):
+                    continue
+                run_id = fn[:-6]
+                row = storage.get_run(run_id)
+                sid = (row or {}).get("strategy_id") or strategy_id
+                reports.append(importer.import_events_jsonl(
+                    storage, path=os.path.join(events_dir, fn),
+                    run_id=run_id, strategy_id=sid))
         audit(f"import: profile={profile} strategy={strategy_id} "
               f"files={len(reports)}")
         return web.json_response({"schema_version": 1, "as_of": time.time(),

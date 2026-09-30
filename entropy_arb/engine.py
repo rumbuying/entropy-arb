@@ -122,6 +122,27 @@ class Engine:
         self._mk_prem: deque = deque(maxlen=1440)
         self._mk_prem_bucket = None
         self._mk_widen = 0.0
+        # ---- V2 event collection (pure bystander, spec CONSOLE-V2 §8):
+        # enabled only when the console spawned us with a run identity in
+        # the env; every failure stays inside EventLogger counters and can
+        # never influence order decisions. Adopted pre-V2 workers have no
+        # env and keep the CSV-only collection (shown as "not upgraded").
+        self._events = None
+        try:
+            run_id = os.getenv("EVENTS_RUN_ID")
+            if run_id:
+                from .eventlog import EventLogger
+                self._events = EventLogger(
+                    os.getenv("EVENTS_PATH")
+                    or os.path.join("logs", "events", f"{run_id}.jsonl"),
+                    run_id=run_id,
+                    strategy_id=os.getenv("EVENTS_STRATEGY_ID") or None)
+        except Exception:
+            self._events = None
+
+    def _emit_event(self, event_type: str, **fields) -> None:
+        if self._events is not None:
+            self._events.emit(event_type, **fields)
 
     # ------------------------------------------------------------- utilities
 
@@ -269,6 +290,24 @@ class Engine:
                  self.hedge.conf.symbol, cfg.midline_bps, cfg.lower_bps,
                  cfg.upper_bps, self.entropy.fee_bps, self.hedge.fee_bps,
                  self._step, self._min_notional)
+
+        # V2: run identity + secret-free config echo as the first events,
+        # so an event file is always attributable (spec §8.2)
+        if self._events is not None:
+            try:
+                self._events.start()
+            except Exception:
+                pass
+            self._emit_event(
+                "run_started",
+                symbol=cfg.symbol,
+                record_only=self.record_only,
+                config_echo={
+                    "midline_bps": cfg.midline_bps,
+                    "upper_bps": cfg.upper_bps,
+                    "lower_bps": cfg.lower_bps,
+                    "maker_enabled": bool((cfg.maker and cfg.maker.enabled)),
+                })          # no secrets: thresholds/mode only
 
         if self.record_only:
             log.warning("RECORD-ONLY — collecting minute data, no strategy, "
@@ -1010,6 +1049,28 @@ class Engine:
         q = max(ev.qty_delta, 0.0)
         if q <= 0:
             return
+        # V2 event: the raw fill as the venue reported it — the qty is the
+        # INCREMENTAL delta, the fee is the venue-reported per-fill fee
+        # (unlike mk.cash below, which still uses the configured fee for
+        # session bookkeeping; the ledger must not read this cash)
+        self._emit_event(
+            "maker_fill",
+            order_id=ev.order_id,
+            client_order_id=ev.client_order_id,
+            venue_fill_id=getattr(ev, "venue_fill_id", None),
+            side=ev.side,
+            symbol=self.cfg.symbol,
+            venue=mk.name if mk else None,
+            qty_delta=q,
+            price=ev.px,
+            fee={"amount": ev.fee if ev.fee is not None else None,
+                 "currency": None,
+                 "source": "venue_fill" if ev.fee is not None else "missing",
+                 "reason": None if ev.fee is not None
+                 else "adapter did not report a per-fill fee"},
+            order_status=ev.status, update=ev.update,
+            error_code=ev.error_code,
+            liquidity="maker")
         fee = mk.fee_bps / 1e4
         mk.position += q if buy else -q
         if buy:
@@ -1197,6 +1258,18 @@ class Engine:
                          f"{net:.3f}" if net is not None else "",
                          f"{f2h}" if f2h is not None else "",
                          self._mk_batch_fills, self._mk_hedge_failures])
+        # V2 event: the hedge batch — net aggregation across one window
+        self._emit_event(
+            "hedge_batch",
+            hedge_dir="BUY" if is_buy else "SELL",
+            hedge_qty=hedge_qty,
+            maker_px=maker_px,
+            hedge_px=hedge_px,
+            gross_edge_bps=gross,
+            net_edge_bps=net,               # cost-model value, NOT realized
+            fill_to_hedge_ms=f2h,
+            n_fills=self._mk_batch_fills,   # untrusted (may miss fills)
+            hedge_failures_total=self._mk_hedge_failures)
         self._mk_batch_fills = 0
 
     def _maker_selection_step(self) -> None:
@@ -1429,6 +1502,29 @@ class Engine:
 
     def _log_csv(self, direction, buy, sell, plan: ArbPlan, ok: bool, bfill,
                  sfill, bstatus, sstatus, fill_edge, inv_bps) -> None:
+        # V2 event: one attempt record per taker execution — same facts as
+        # the CSV row, emitted BEFORE the file write; a logging failure
+        # must not affect either
+        self._emit_event(
+            "taker_attempt",
+            order_id=None,                      # engine has no order ids here
+            venue_fill_id=None,
+            side=direction,
+            symbol=self.cfg.symbol,
+            buy_venue=buy.name, sell_venue=sell.name,
+            qty=plan.qty,
+            buy_limit=plan.buy_limit, sell_limit=plan.sell_limit,
+            buy_fill=bfill, sell_fill=sfill,
+            buy_status=bstatus, sell_status=sstatus,
+            ok=bool(ok),
+            exp_edge_usd=plan.exp_edge_usd,
+            gross_edge_usd=plan.gross_edge_usd,
+            fill_edge_usd=fill_edge,
+            fee={"amount": None, "currency": None,
+                 "source": "missing",
+                 "reason": "taker path has no per-fill fee feed (V2-008 "
+                           "adapter review pending)"},
+            liquidity="taker")
         try:
             path = self.cfg.trades_csv
             d = os.path.dirname(path)

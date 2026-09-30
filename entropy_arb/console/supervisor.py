@@ -337,6 +337,17 @@ class Supervisor:
                    self._alloc_port(), base=base)
         env = dict(os.environ)
         env["PYTHONUNBUFFERED"] = "1"
+        # V2 event collection: the worker's run identity travels via env —
+        # an adopted worker (no env of ours) keeps CSV-only collection and
+        # is shown as not upgraded (spec §8.2)
+        env["EVENTS_RUN_ID"] = w.run_id or ""
+        if self.storage is not None and w.run_id:
+            row = self.storage.get_run(w.run_id)
+            env["EVENTS_STRATEGY_ID"] = (row or {}).get("strategy_id") or ""
+        else:
+            env["EVENTS_STRATEGY_ID"] = ""
+        env["EVENTS_PATH"] = os.path.join(self.root, "logs", "events",
+                                          f"{w.run_id}.jsonl")
         w.proc = await asyncio.create_subprocess_exec(
             *self.build_argv(w),
             cwd=self.root, env=env,

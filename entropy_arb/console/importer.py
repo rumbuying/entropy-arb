@@ -243,6 +243,75 @@ def _parse_row(kind: str, header: List[str], row: List[str]) \
     }
 
 
+def import_events_jsonl(storage, *, path: str, run_id: str,
+                        strategy_id: Optional[str],
+                        batch: Optional[str] = None) -> ImportReport:
+    """Import one worker's events JSONL (V2-008) into normalized_events.
+
+    event_id = evjsonl:{source}:line:{n} keeps import idempotence; events
+    carry their own event_ts. Real fills keep the venue fill id (dedupe_key
+    = f:{venue_fill_id} when present) — unlike the legacy CSVs these CAN be
+    trade-deduped. A torn tail (crash mid-write) is reported as a gap."""
+    from ..eventlog import read_events
+    batch = batch or f"ev-{int(time.time())}-{os.getpid()}"
+    events, torn_tail, bad = read_events(path)
+    hh = _header_hash(["jsonl"])
+    ident = file_identity(path, hh)
+    prior = [s for s in storage.list_import_sources(limit=500)
+             if s["path"] == path and s["status"] == "active"]
+    prior.sort(key=lambda s: s["id"], reverse=True)
+    src = prior[0] if prior else None
+    if src is not None and len(events) < src["offset_line"]:
+        src = None                        # truncated / rotated
+    start = src["offset_line"] if src else 0
+    src_id = (src["id"] if src is not None else
+              storage.upsert_import_source(
+                  path=path, file_identity=ident, header_hash=hh,
+                  offset_line=0, rows_total=0, rows_bad=0, bad=None))
+    imported = 0
+    for i, ev in enumerate(events, start=1):
+        if i <= start:
+            continue
+        if not isinstance(ev, dict):
+            bad.append({"line": i, "reason": "not an object"})
+            continue
+        fee = ev.get("fee")
+        payload = {k: v for k, v in ev.items()
+                   if k not in ("schema_version",)}
+        ok = storage.insert_event(
+            event_id=f"evjsonl:{src_id}:line:{i}",
+            event_type=str(ev.get("event_type") or "unknown"),
+            import_batch=batch, source_id=src_id, source_line=i,
+            event_ts=ev.get("event_ts"),
+            payload=payload,
+            strategy_id=ev.get("strategy_id") or strategy_id,
+            run_id=ev.get("run_id") or run_id,
+            venue=ev.get("venue"),
+            instrument=ev.get("symbol") or ev.get("instrument"),
+            dedupe_key=(f"f:{ev.get('venue_fill_id')}"
+                        if ev.get("venue_fill_id") else None),
+            unresolved=(ev.get("venue_fill_id") is None
+                        and ev.get("event_type") in
+                        ("maker_fill", "taker_attempt")))
+        if ok:
+            imported += 1
+    notes = ["jsonl events carry venue fill ids when the adapter reports "
+             "them; fills without ids stay unresolved"]
+    if torn_tail:
+        notes.append("torn tail line (writer crashed mid-write) — gap "
+                     "recorded, line not imported")
+    storage.upsert_import_source(
+        path=path, file_identity=ident, header_hash=hh,
+        offset_line=len(events),
+        rows_total=(src["rows_total"] if src else 0) + imported,
+        rows_bad=(src["rows_bad"] if src else 0) + len(bad),
+        bad=bad[:50])
+    return ImportReport(path=path, status="ok", kind="events", source_id=src_id,
+                        rows=len(events) - start, imported=imported,
+                        bad=bad[:50], torn_tail=torn_tail,
+                        unresolved=imported, note="; ".join(notes))
+
+
 def discover_csvs(profiles, profile: str, root: str) -> List[dict]:
     """Backend-managed discovery (spec §13.4): the paths the profile itself
     declares, plus the .old rotation beside them. Never client paths."""
