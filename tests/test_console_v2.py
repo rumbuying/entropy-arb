@@ -375,3 +375,98 @@ def test_connections_api_and_revision():
             storage.close()
 
     asyncio.run(run())
+
+
+def test_worker_trades_endpoint():
+    async def run():
+        import aiohttp
+        import csv as _csv
+        from aiohttp.test_utils import TestServer
+        TAKER_HEADER = ["ts", "direction", "qty", "buy_fill", "sell_fill",
+                        "ok", "fill_edge_usd"]
+
+        tmp = tempfile.mkdtemp(prefix="console-v2-trades-")
+        csv_path = os.path.join(tmp, "trades-SNDK-lighter-rh.csv")
+        with open(csv_path, "w", newline="") as fh:
+            w = _csv.writer(fh)
+            w.writerow(TAKER_HEADER)
+            for i in range(30):
+                w.writerow([f"{1700000000 + i}", "buy_entropy", "1.0",
+                            "1.0", "1.0", "1", "2.10"])
+
+        storage = Storage(os.path.join(tmp, "v2.sqlite3"))
+        yaml_text = (f"thresholds:\n  midline_bps: 0.0\n  upper_bps: 3.0\n"
+                     f"  lower_bps: 3.0\nlogging:\n"
+                     f"  trades_csv: {csv_path}\n")
+        profiles = ProfilesManager(tmp, env_file=os.path.join(tmp, ".env"))
+        secrets = SecretsManager(os.path.join(tmp, ".env"))
+        sup = Supervisor(tmp, tmp, storage=storage)
+        sup.build_argv = lambda w: [sys.executable, "-c",
+                                    "import time; time.sleep(30)"]
+        app = create_app(sup, profiles, secrets, token="t0k", storage=storage)
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            async with aiohttp.ClientSession(
+                    headers={"Authorization": "Bearer t0k"}) as http:
+                url = server.make_url
+                await http.post(url("/api/profiles"),
+                                json={"name": "P1", "yaml": yaml_text,
+                                      "symbol": "SNDK",
+                                      "hedge": "lighter-rh"})
+                async with http.post(url("/api/workers"),
+                                     json={"profile": "P1", "symbol": "SNDK",
+                                           "hedge": "lighter-rh",
+                                           "mode": "record"}) as r:
+                    assert r.status == 200
+                    wid = (await r.json())["id"]
+
+                # auth
+                async with aiohttp.ClientSession() as anon:
+                    async with anon.get(url(f"/api/workers/{wid}/trades")) as r:
+                        assert r.status == 401
+
+                async with http.get(url(f"/api/workers/{wid}/trades"
+                                        "?limit=10")) as r:
+                    assert r.status == 200
+                    out = await r.json()
+                assert out["schema"] == "taker"
+                assert out["exists"] is True
+                assert out["source_file"] == \
+                    "trades-SNDK-lighter-rh.csv"
+                assert len(out["rows"]) == 10
+                assert out["rows"][0]["direction"] == "buy_entropy"
+                # newest first
+                assert float(out["rows"][0]["ts"]) > \
+                    float(out["rows"][-1]["ts"])
+                assert "原始" in out["note"] or "evidence" in out["note"]
+
+                # unknown worker
+                async with http.get(url("/api/workers/nope/trades")) as r:
+                    assert r.status == 404
+
+                # a line that never traded (its profile declares a CSV
+                # that does not exist): honest missing-file, empty rows
+                await http.post(url("/api/profiles"), json={
+                    "name": "P2",
+                    "yaml": yaml_text.replace(csv_path,
+                                              os.path.join(tmp, "nope.csv")),
+                    "symbol": "HYPE", "hedge": "lighter-rh"})
+                async with http.post(url(f"/api/workers/{wid}/stop")) as r:
+                    assert r.status == 200
+                async with http.post(url("/api/workers"),
+                                     json={"profile": "P2",
+                                           "symbol": "HYPE",
+                                           "hedge": "lighter-rh",
+                                           "mode": "record"}) as r:
+                    assert r.status == 200
+                    wid2 = (await r.json())["id"]
+                async with http.get(url(f"/api/workers/{wid2}/trades")) as r:
+                    out2 = await r.json()
+                assert out2["exists"] is False and out2["rows"] == []
+        finally:
+            await sup.shutdown()
+            await server.close()
+            storage.close()
+
+    asyncio.run(run())

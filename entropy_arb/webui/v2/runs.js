@@ -121,6 +121,7 @@ export function mount(container) {
       return b;
     };
     acts.appendChild(mk(t("runs.logs_btn"), "", () => logsDialog(w)));
+    acts.appendChild(mk(t("v2.runs.trades_btn"), "", () => tradesDialog(w)));
     if (w.state === "running") {
       acts.appendChild(mk(t("v2.runs.live_view"), "",
         () => { location.hash = `#/runtime/${w.id}`; }));
@@ -357,6 +358,73 @@ export function mount(container) {
       if (!document.body.contains(box)) { alive = false; obs.disconnect(); }
     });
     obs.observe(document.body, { childList: true });
+  }
+
+  function tradesDialog(w) {
+    closing = true;
+    const box = el("div", {},
+      el("h2", {}, `${t("v2.runs.trades_title")} — ${w.id} (${w.profile})`));
+    const meta = el("div", { class: "note", style: "margin-bottom:6px" });
+    const scroll = el("div", { style: "overflow-x:auto;max-height:460px" });
+    const tbl = table([]);
+    scroll.appendChild(tbl.node);
+    const actions = el("div", { class: "actions" });
+    const close = el("button", { text: "✕" });
+    const reload = el("button", { text: "⟳ " + t("v2.state.retry") });
+    actions.append(reload, close);
+    box.append(meta, scroll, actions);
+    const mask = modal(box, () => { closing = false; });
+    close.onclick = () => mask.close();
+    reload.onclick = () => load();
+
+    const TIME_KEYS = ["ts"];
+    async function load() {
+      tbl.tbody.replaceChildren();
+      meta.textContent = t("v2.state.loading");
+      try {
+        const r = await getJSON(`/api/workers/${w.id}/trades?limit=200`);
+        if (!r.exists) {
+          meta.textContent = t("v2.runs.trades_missing",
+            { file: r.source_file });
+          return;
+        }
+        meta.textContent = `${t("v2.runs.trades_source")}: ${r.source_file}`
+          + ` · ${r.schema} · ${r.rows.length}`
+          + (r.tail_truncated ? ` · ${t("v2.runs.trades_tail")}` : "");
+        const header = r.header || [];
+        // rebuild the header row for this schema
+        tbl.node.querySelector("thead")?.remove();
+        const thead = el("thead");
+        const htr = el("tr");
+        header.forEach(h => htr.appendChild(el("th", { text: h })));
+        thead.appendChild(htr);
+        tbl.node.prepend(thead);
+        for (const row of r.rows || []) {
+          const tr = el("tr");
+          header.forEach(h => {
+            let v = row[h] ?? "";
+            if (TIME_KEYS.includes(h) && v) {
+              const n = Number(v);
+              if (Number.isFinite(n) && n > 1e9) {
+                v = new Date(n * 1000).toLocaleString();
+              }
+            }
+            const cls = /status|ok/i.test(h) && v && !/filled|^1$|true/i.test(v)
+              ? "err" : (/edge|net|gross/i.test(h) ? "num" : "num muted");
+            tr.appendChild(el("td", { class: cls, text: String(v) }));
+          });
+          tbl.tbody.appendChild(tr);
+        }
+        if (!r.rows.length) {
+          tbl.tbody.appendChild(el("tr", {},
+            el("td", { colspan: String(header.length || 1),
+                       class: "muted", text: t("v2.state.no_data") })));
+        }
+      } catch (e) {
+        meta.textContent = "✗ " + (e.message || String(e));
+      }
+    }
+    load();
   }
 
   function modal(node, onClose) {

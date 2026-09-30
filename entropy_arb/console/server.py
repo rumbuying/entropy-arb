@@ -1119,6 +1119,69 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             "created_ts": r["created_ts"], "updated_ts": r["updated_ts"],
         }
 
+    async def worker_trades(request):
+        """Recent trade rows for one worker (spec §3.1 Runs 迁移)：reads the
+        trades CSV the worker's profile declares (maker or taker schema) —
+        a backend-managed path, never a client-supplied one. Raw evidence
+        with its source named: NOT a reconciled ledger, and unlike the
+        engine's session view these rows survive restarts."""
+        wid = request.match_info["wid"]
+        w = supervisor.workers.get(wid)
+        if w is None:
+            return web.json_response({"error": "not found"}, status=404)
+        try:
+            limit = min(int(request.query.get("limit", "100")), 500)
+        except ValueError:
+            limit = 100
+        import csv as _csv
+        from .venues import load_profile_yaml
+        py = load_profile_yaml(supervisor.profiles_dir, w.profile)
+        maker_on = bool((py.get("maker") or {}).get("enabled"))
+        path = None
+        if maker_on:
+            path = (py.get("maker") or {}).get("trades_csv")
+        if not path:
+            path = (py.get("logging") or {}).get("trades_csv")
+        if not path:
+            path = os.path.join("logs",
+                                f"trades-{w.symbol}-{w.hedge}.csv")
+        if not os.path.isabs(path):
+            path = os.path.join(supervisor.root, path)
+        rows, header, truncated = [], None, False
+        if os.path.exists(path):
+            with open(path, newline="", errors="replace") as fh:
+                first = fh.readline()
+                if first.strip():
+                    header = next(_csv.reader([first]), None)
+                # tail-read bounded: last ~512KB is plenty for 500 rows
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                fh.seek(max(0, size - 512 * 1024))
+                chunk = fh.read()
+            lines = chunk.splitlines()
+            if size > 512 * 1024 and lines:
+                lines = lines[1:]          # drop the partial first line
+                truncated = True
+            data_lines = [ln for ln in lines if ln.strip()]
+            for ln in data_lines[-limit:][::-1]:    # newest first
+                try:
+                    values = next(_csv.reader([ln]))
+                    rows.append(dict(zip(header or [], values)))
+                except Exception:
+                    continue
+        return web.json_response({
+            "schema_version": 1, "as_of": time.time(),
+            "worker": wid, "profile": w.profile,
+            "schema": "maker" if maker_on else "taker",
+            "source_file": os.path.basename(path),
+            "exists": os.path.exists(path),
+            "tail_truncated": truncated,
+            "header": header or [],
+            "rows": rows,
+            "note": "原始成交日志（含未成交/失败行）——是证据，不是已核对"
+                    "账本；金额与 edge 为引擎记录值",
+        })
+
     async def api_accounts(request):
         """Deduped account view (spec §10.2 / §5.5): one row per running
         engine leg, grouped per venue-deployment, equity via max (legacy
@@ -1228,6 +1291,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_get("/api/workers/{wid}/state", worker_state)
     app.router.add_get("/api/workers/{wid}/ws", worker_ws)
     app.router.add_get("/api/workers/{wid}/logs", worker_logs)
+    app.router.add_get("/api/workers/{wid}/trades", worker_trades)
     app.router.add_post("/api/workers/{wid}/stop", worker_stop)
     app.router.add_post("/api/workers/{wid}/restart", worker_restart)
     app.router.add_delete("/api/workers/{wid}", worker_delete)
