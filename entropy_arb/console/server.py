@@ -33,8 +33,8 @@ DIAG_VENUES = tuple(sorted(set(BASE_VENUES) | set(HEDGE_VENUES)))
 
 
 def create_app(supervisor: Supervisor, profiles: ProfilesManager,
-               secrets: SecretsManager, *, token: Optional[str] = None) \
-        -> web.Application:
+               secrets: SecretsManager, *, token: Optional[str] = None,
+               storage=None) -> web.Application:
     app = web.Application()
     app["token"] = token
     webui_dir = os.path.join(os.path.dirname(os.path.dirname(
@@ -73,6 +73,11 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
 
     def audit(msg: str) -> None:
         log.info("AUDIT %s", msg)
+        if storage is not None:
+            try:
+                storage.audit("console", "op", msg)
+            except Exception:
+                log.exception("audit persist failed")
 
     async def body(request: web.Request) -> dict:
         try:
@@ -84,6 +89,11 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
 
     async def index(request):
         return web.FileResponse(os.path.join(webui_dir, "console.html"))
+
+    async def index_v2(request):
+        """Console V2 shell (spec §2.2.1) — parallel entry; the legacy page
+        at / stays the fallback until the full migration is accepted."""
+        return web.FileResponse(os.path.join(webui_dir, "console-v2.html"))
 
     async def api_meta(request):
         return web.json_response({
@@ -393,6 +403,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     # ------------------------------------------------------------- routes
 
     app.router.add_get("/", index)
+    app.router.add_get("/console-v2", index_v2)
     app.router.add_get("/api/meta", api_meta)
     app.router.add_get("/api/profiles", profiles_list)
     app.router.add_post("/api/profiles", profile_create)

@@ -75,8 +75,11 @@ def resolve_token(args) -> str:
 async def amain(args) -> None:
     root = os.path.dirname(os.path.abspath(__file__))
     audit = audit_writer("logs/console.log")
+    from entropy_arb.console.storage import Storage
+    storage = Storage(os.path.join(root, "data", "console-v2.sqlite3"))
     supervisor = Supervisor(root, args.profiles_dir,
-                            port_range=(args.base_port, args.base_port + 198))
+                            port_range=(args.base_port, args.base_port + 198),
+                            storage=storage)
     adopted = supervisor.adopt_running()
     if adopted:
         print(f"re-adopted {adopted} running worker(s) from the previous "
@@ -84,7 +87,8 @@ async def amain(args) -> None:
     profiles = ProfilesManager(args.profiles_dir, args.env_file, audit_log=audit)
     secrets = SecretsManager(args.env_file, audit_log=audit)
     token = resolve_token(args)
-    app = create_app(supervisor, profiles, secrets, token=token)
+    app = create_app(supervisor, profiles, secrets, token=token,
+                     storage=storage)
     try:
         from entropy_arb.console.analytics import register_analytics
         register_analytics(app, profiles)

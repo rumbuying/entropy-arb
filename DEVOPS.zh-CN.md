@@ -103,6 +103,9 @@
 
 - 正式地址带 `?token=`；token 存 sessionStorage，换浏览器需重带完整链接。
 - 控制台只绑 127.0.0.1，外网经 nginx 443 反代；所有 `/api/*` 无/错 token 一律 401。
+- Console V2 并行入口：`/console-v2`（与旧页同 token 机制；旧页 `/` 保留为后备）。
+  V2 引入 `data/console-v2.sqlite3`（gitignored）：持久 run 身份 / 操作 / 配置版本 /
+  审计记录，仅 console 进程写。开发进度见 `CONSOLE-V2-DEVELOPMENT-SPEC.zh-CN.md`。
 
 ### 2.2 SOP：新上一条线（以 backpack 为例，全程 ≤ 7 步）
 

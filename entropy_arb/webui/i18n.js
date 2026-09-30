@@ -463,6 +463,13 @@ export function t(key, params) {
   return s;
 }
 
+/* Page modules (webui/v2/) register their own tables at import time so the
+   shared translator stays the single source of language selection. */
+export function registerStrings(extra) {
+  if (extra.en) Object.assign(STRINGS.en, extra.en);
+  if (extra.zh) Object.assign(STRINGS.zh, extra.zh);
+}
+
 // Re-translate all elements carrying data-i18n (params not supported there).
 export function applyStatic(root = document) {
   root.querySelectorAll("[data-i18n]").forEach(el => {

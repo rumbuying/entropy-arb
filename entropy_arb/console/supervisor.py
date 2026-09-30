@@ -15,10 +15,13 @@ import os
 import socket
 import sys
 import time
+import uuid
 from collections import deque
 from typing import Dict, Optional
 
 import aiohttp
+
+from .storage import Storage, cmdline_hash, new_run_id
 
 log = logging.getLogger("supervisor")
 
@@ -110,6 +113,8 @@ class Worker:
         self.exit_code: Optional[int] = None
         self.stopped_ts: Optional[float] = None
         self.restarts = 0
+        self.run_id: Optional[str] = None   # persisted lifecycle id (storage)
+        self.cmdline_hash = ""              # spawn identity for adopt match
         self.log_tail: deque = deque(maxlen=LOG_TAIL)
         self._reader_task: Optional[asyncio.Task] = None
 
@@ -138,7 +143,8 @@ class Worker:
 
 class Supervisor:
     def __init__(self, project_root: str, profiles_dir: str,
-                 port_range=(8801, 8899)) -> None:
+                 port_range=(8801, 8899),
+                 storage: Optional[Storage] = None) -> None:
         self.root = project_root
         self.profiles_dir = profiles_dir
         self.port_lo, self.port_hi = port_range
@@ -146,6 +152,9 @@ class Supervisor:
         self._seq = 0
         self._reserved: set = set()   # ports handed out this session
         self._session: Optional[aiohttp.ClientSession] = None
+        # optional persistent store: run identities outlive this process.
+        # None (as in unit tests) keeps everything in-memory.
+        self.storage: Optional[Storage] = storage
 
     # ------------------------------------------------------------------ ports
 
@@ -216,11 +225,14 @@ class Supervisor:
                        base=info.get("base", "hl"))
             w.adopted_pid = pid
             w.started_ts = _proc_start_time(pid) or time.time()
+            w.cmdline_hash = cmdline_hash(w.profile, w.symbol, w.hedge,
+                                          w.base, w.mode)
+            self._claim_run(w, pid)
             self.workers[w.id] = w
             self._seed_log_tail(w)
             adopted += 1
-            log.info("adopted worker %s: pid=%d %s/%s (%s)", w.id, pid,
-                     w.symbol, w.hedge, w.mode)
+            log.info("adopted worker %s: pid=%d %s/%s (%s) run=%s", w.id, pid,
+                     w.symbol, w.hedge, w.mode, w.run_id)
         if adopted:
             log.info("adopted %d running worker(s) from a previous console",
                      adopted)
@@ -244,6 +256,36 @@ class Supervisor:
         except Exception as e:
             log.debug("log seed failed for %s: %r", w.id, e)
 
+    def _claim_run(self, w: Worker, pid: Optional[int]) -> None:
+        """Attach a run_id to a live worker, persisting or resuming it.
+
+        Adopt must not duplicate history: a worker that survived a console
+        restart resumes its persisted run when pid + full spawn identity
+        (and /proc start time where available) match. A worker from a
+        pre-persistence console gets a provisional run marked with the gap."""
+        if self.storage is None:
+            w.run_id = w.run_id or f"run-{uuid.uuid4().hex}"
+            return
+        proc_start = _proc_start_time(pid) if pid else None
+        row = self.storage.find_resumable_run(
+            profile=w.profile, symbol=w.symbol, hedge=w.hedge, base=w.base,
+            mode=w.mode, pid=pid, cmdline_hash=w.cmdline_hash,
+            proc_start_ts=proc_start)
+        if row is not None:
+            w.run_id = row["run_id"]
+            self.storage.resume_run(w.run_id, worker_id=w.id, pid=pid,
+                                    proc_start_ts=proc_start)
+            return
+        w.run_id = new_run_id()
+        note = ("adopted worker without a persisted run — identity not "
+                "traceable to a console-started record"
+                if w.adopted_pid is not None else "")
+        self.storage.create_run(
+            run_id=w.run_id, worker_id=w.id, profile=w.profile,
+            symbol=w.symbol, hedge=w.hedge, base=w.base, mode=w.mode,
+            pid=pid, cmdline_hash=w.cmdline_hash, started_ts=w.started_ts,
+            provisional=w.adopted_pid is not None, identity_note=note)
+
     async def start(self, profile: str, symbol: str, hedge: str,
                     mode: str, base: str = "hl") -> Worker:
         if mode not in ("live", "record"):
@@ -262,6 +304,16 @@ class Supervisor:
         w.exit_code = None
         w.stopped_ts = None
         w.log_tail.clear()
+        w.cmdline_hash = cmdline_hash(w.profile, w.symbol, w.hedge,
+                                      w.base, w.mode)
+        w.run_id = new_run_id()
+        if self.storage is not None:
+            self.storage.create_run(
+                run_id=w.run_id, worker_id=w.id, profile=w.profile,
+                symbol=w.symbol, hedge=w.hedge, base=w.base, mode=w.mode,
+                pid=w.proc.pid, cmdline_hash=w.cmdline_hash,
+                started_ts=w.started_ts,
+                proc_start_ts=_proc_start_time(w.proc.pid))
         self.workers[w.id] = w
         w._reader_task = asyncio.create_task(self._pump(w),
                                              name=f"worker-{w.id}-log")
@@ -287,6 +339,11 @@ class Supervisor:
                 pass
         w.exit_code = proc.returncode
         w.stopped_ts = time.time()
+        if self.storage is not None and w.run_id:
+            state = ("stopped" if w.exit_code in (0, -15, -2)
+                     else "errored")
+            self.storage.finish_run(w.run_id, ended_ts=w.stopped_ts,
+                                    state=state, exit_code=w.exit_code)
         log.info("worker %s exited with %s", w.id,
                  w.exit_code if w.exit_code is not None else "signal")
 
@@ -344,6 +401,9 @@ class Supervisor:
         w.exit_code = -15                   # graceful TERM
         w.stopped_ts = time.time()
         w.adopted_pid = None
+        if self.storage is not None and w.run_id:
+            self.storage.finish_run(w.run_id, ended_ts=w.stopped_ts,
+                                    state="stopped", exit_code=-15)
         w.log_tail.append(f"[console] adopted worker stopped (SIGTERM)")
         log.info("adopted worker %s stopped", w.id)
         return True
@@ -374,7 +434,8 @@ class Supervisor:
     def status(self, wid: str) -> dict:
         w = self.workers[wid]
         return {
-            "id": w.id, "profile": w.profile, "symbol": w.symbol,
+            "id": w.id, "run_id": w.run_id, "profile": w.profile,
+            "symbol": w.symbol,
             "hedge": w.hedge, "base": w.base, "mode": w.mode,
             "web_port": w.web_port,
             "state": w.ui_state(),

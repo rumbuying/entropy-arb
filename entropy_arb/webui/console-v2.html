@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>entropy-arb — strategy workbench</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/v2/style.css">
+</head>
+<body>
+<div class="v2-shell">
+  <nav class="v2-nav">
+    <div class="v2-brand">entropy-arb <span class="pair" data-i18n="v2.brand">strategy workbench</span></div>
+    <div class="v2-navgroup" data-i18n="v2.nav.decisions">Strategy judgement</div>
+    <a href="#/strategies" data-nav="strategies" data-i18n="v2.nav.strategies">Overview</a>
+    <a href="#/detail" data-nav="detail" data-i18n="v2.nav.detail">Strategy review</a>
+    <a href="#/experiments" data-nav="experiments" data-i18n="v2.nav.experiments">Adjust &amp; verify</a>
+    <a href="#/accounts" data-nav="accounts" data-i18n="v2.nav.accounts">Accounts &amp; risk</a>
+    <div class="v2-navgroup" data-i18n="v2.nav.ops">Operations &amp; access</div>
+    <a href="#/runs" data-nav="runs" data-i18n="v2.nav.runs">Runs</a>
+    <a href="#/connections" data-nav="connections" data-i18n="v2.nav.connections">Exchange access / API Keys</a>
+    <a href="#/profiles" data-nav="profiles" data-i18n="v2.nav.profiles">Strategy config</a>
+    <a href="#/research" data-nav="research" data-i18n="v2.nav.research">Data research</a>
+    <div class="spacer"></div>
+    <div class="v2-navfoot">
+      <a href="/" title="legacy console" data-i18n="v2.legacy">Legacy console</a>
+      <button id="lang-btn">中文</button>
+    </div>
+  </nav>
+  <div class="v2-main">
+    <div class="v2-topbar">
+      <span class="title" id="v2-title"></span>
+      <span class="spacer"></span>
+      <span id="api-badge" class="badge dim">API …</span>
+    </div>
+    <div class="v2-content" id="v2-content"></div>
+  </div>
+</div>
+
+<script type="module" src="/static/v2/app.js"></script>
+</body>
+</html>

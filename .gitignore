@@ -6,6 +6,9 @@ config.yaml
 logs/
 *.log
 
+# console v2 persistent storage / 控制台 V2 持久化数据库
+data/
+
 # python
 __pycache__/
 *.pyc
