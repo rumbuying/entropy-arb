@@ -158,6 +158,50 @@ CREATE INDEX IF NOT EXISTS idx_events_strategy_ts
 CREATE INDEX IF NOT EXISTS idx_events_source
   ON normalized_events(source_id, source_line);
 """),
+    # Migration 4 (V2-009): inventory sub-ledger, boundary valuations and
+    # reconciliation runs. The ledger is Decimal-exact; lots persist so a
+    # recomputation never revises an old reconciliation silently.
+    (4, """
+CREATE TABLE IF NOT EXISTS inventory_lots (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  strategy_id   TEXT NOT NULL,
+  account_id    TEXT NOT NULL,
+  instrument    TEXT NOT NULL,
+  side          TEXT NOT NULL,             -- long | short
+  qty           TEXT NOT NULL,             -- Decimal string, remaining
+  open_px       TEXT NOT NULL,
+  multiplier    TEXT NOT NULL DEFAULT '1',
+  opened_event  TEXT,
+  method_version TEXT NOT NULL DEFAULT 'fifo-v1',
+  created_ts    REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lots_scope
+  ON inventory_lots(strategy_id, account_id, instrument);
+CREATE TABLE IF NOT EXISTS valuations (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  strategy_id   TEXT NOT NULL,
+  boundary      TEXT NOT NULL,             -- start | end
+  ts            REAL NOT NULL,
+  mark_source   TEXT,
+  payload_json  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_valuations ON valuations(strategy_id, ts);
+CREATE TABLE IF NOT EXISTS reconciliations (
+  id            TEXT PRIMARY KEY,
+  strategy_id   TEXT NOT NULL,
+  scope_json    TEXT NOT NULL,             -- period, accounts, instruments
+  rule_version  TEXT NOT NULL,
+  status        TEXT NOT NULL,             -- reconciled | estimated |
+                                           -- incomplete | no_data
+  net_pnl       TEXT,
+  components_json TEXT,
+  missing_json  TEXT,
+  residual_json TEXT,
+  created_ts    REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_recons ON reconciliations(strategy_id,
+                                                         created_ts);
+"""),
 ]
 
 
@@ -456,6 +500,41 @@ class Storage:
         sql += " ORDER BY event_ts, event_id LIMIT ?"
         args.append(limit)
         return [dict(r) for r in self.db.execute(sql, args)]
+
+    # -------------------------------------------------------------- ledger
+
+    def save_reconciliation(self, *, strategy_id: str, scope: dict,
+                            rule_version: str, status: str,
+                            net_pnl: Optional[str],
+                            components: dict, missing: list,
+                            residual: dict) -> str:
+        import uuid as _uuid
+        rid = f"rec-{_uuid.uuid4().hex}"
+        self.db.execute(
+            "INSERT INTO reconciliations(id, strategy_id, scope_json,"
+            " rule_version, status, net_pnl, components_json, missing_json,"
+            " residual_json, created_ts) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (rid, strategy_id, json.dumps(scope), rule_version, status,
+             net_pnl, json.dumps(components, ensure_ascii=False),
+             json.dumps(missing, ensure_ascii=False),
+             json.dumps(residual, ensure_ascii=False), time.time()))
+        self.db.commit()
+        return rid
+
+    def list_reconciliations(self, strategy_id: str,
+                             limit: int = 20) -> List[Dict[str, Any]]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT * FROM reconciliations WHERE strategy_id=?"
+            " ORDER BY created_ts DESC, id LIMIT ?", (strategy_id, limit))]
+
+    def save_valuation(self, *, strategy_id: str, boundary: str, ts: float,
+                       mark_source: Optional[str], payload: dict) -> None:
+        self.db.execute(
+            "INSERT INTO valuations(strategy_id, boundary, ts, mark_source,"
+            " payload_json) VALUES(?,?,?,?,?)",
+            (strategy_id, boundary, ts, mark_source,
+             json.dumps(payload, ensure_ascii=False)))
+        self.db.commit()
 
     # ------------------------------------------------------------------ meta
 

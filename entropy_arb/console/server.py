@@ -804,6 +804,101 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             return strategy["id"]
         return None
 
+    def _abs_range_or_400(request) -> tuple:
+        from .analytics import RangeError, abs_range
+        try:
+            start_ts, end_ts, tzname = abs_range(request.query.get)
+            return start_ts, end_ts, tzname
+        except RangeError as e:
+            raise web.HTTPBadRequest(
+                text=json.dumps({"error": "invalid_range",
+                                 "message": str(e)}),
+                content_type="application/json")
+
+    async def api_strategy_performance(request):
+        sid = request.match_info["sid"]
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        if storage.get_strategy(sid) is None:
+            return web.json_response(
+                {"error": "not_found", "message": "unknown strategy"},
+                status=404)
+        try:
+            start_ts, end_ts, tzname = _abs_range_or_400(request)
+            if start_ts is None:
+                # §10.1: range queries require start&end&timezone — no
+                # silent server-midnight defaults
+                return web.json_response(
+                    {"error": "invalid_range",
+                     "message": "start, end and timezone are required"},
+                    status=400)
+        except web.HTTPBadRequest as e:
+            return web.Response(status=400, text=e.text,
+                                content_type=e.content_type)
+        from .performance import performance_for_strategy
+        out = performance_for_strategy(
+            storage, strategy_id=sid, start_ts=start_ts, end_ts=end_ts,
+            timezone=tzname or "Asia/Shanghai")
+        return web.json_response(out)
+
+    async def api_accounts(request):
+        """Deduped account view (spec §10.2 / §5.5): one row per running
+        engine leg, grouped per venue-deployment, equity via max (legacy
+        semantics, NOT proof of account identity). Real account_id dedupe
+        needs adapter-resolved identities — reported as identity_status."""
+        sts = [supervisor.status(wid) for wid in supervisor.workers]
+        snaps = await asyncio.gather(
+            *(supervisor.snapshot(s["id"]) for s in sts))
+        accounts = {}
+        for s, snap in zip(sts, snaps):
+            if s["state"] != "running" or not snap:
+                continue
+            py = None
+            from .venues import load_profile_yaml
+            py = load_profile_yaml(supervisor.profiles_dir, s["profile"])
+            for key, v in (snap.get("venues") or {}).items():
+                name = v.get("name") or key
+                # scope = venue deployment; account id unresolved here
+                scope = name
+                rec = accounts.setdefault(scope, {
+                    "scope": scope, "identity_status": "venue_scope",
+                    "equity": None, "equities_seen": [], "free": None,
+                    "engines": set(), "positions": [],
+                    "collateral_currency": None,
+                })
+                rec["engines"].add(s["id"])
+                if v.get("equity") is not None:
+                    rec["equities_seen"].append(float(v["equity"]))
+                if v.get("free") is not None:
+                    rec["free"] = max(rec["free"] or 0, float(v["free"]))
+                pos = float(v.get("position") or 0.0)
+                if pos:
+                    rec["positions"].append({
+                        "worker": s["id"], "symbol": s["symbol"],
+                        "leg": v.get("key"), "side":
+                            "long" if pos > 0 else "short", "size": pos,
+                    })
+        out = []
+        for scope in sorted(accounts):
+            rec = accounts[scope]
+            out.append({
+                "scope": scope,
+                "identity_status": rec["identity_status"],
+                "equity": max(rec["equities_seen"])
+                if rec["equities_seen"] else None,
+                "equity_method": "max (legacy — not account dedupe)",
+                "free": rec["free"],
+                "engines": sorted(rec["engines"]),
+                "positions": rec["positions"],
+                "collateral_currency": rec["collateral_currency"],
+            })
+        return web.json_response({"schema_version": 1, "as_of": time.time(),
+                                  "accounts": out,
+                                  "note": "venue-scope only: true account "
+                                          "identity needs adapter resolution"
+                                          " (see source limitations)"})
+
     async def api_strategy_detail(request):
         sid = request.match_info["sid"]
         if storage is None:
@@ -867,6 +962,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_get("/api/operations/{op_id}", operations_status)
     app.router.add_get("/api/strategies", api_strategies)
     app.router.add_get("/api/strategies/{sid}", api_strategy_detail)
+    app.router.add_get("/api/strategies/{sid}/performance",
+                       api_strategy_performance)
+    app.router.add_get("/api/accounts", api_accounts)
     app.router.add_post("/api/import/scan", api_import_scan)
     app.router.add_post("/api/import/run", api_import_run)
 
