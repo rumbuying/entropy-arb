@@ -720,6 +720,78 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         return web.json_response({
             "schema_version": 1, "as_of": time.time(), "strategies": out})
 
+    async def api_import_scan(request):
+        """Discover the profile's own trade CSVs (plus .old rotations) —
+        backend-managed paths only, never a client-supplied path (§13.4)."""
+        from . import importer
+        b = await body(request)
+        profile = b.get("profile") or ""
+        if not profiles.exists(profile):
+            return web.json_response({"error": "not_found",
+                "message": "unknown profile"}, status=404)
+        files = importer.discover_csvs(profiles, profile,
+                                       supervisor.profiles_dir)
+        return web.json_response({"schema_version": 1, "as_of": time.time(),
+                                  "files": files})
+
+    async def api_import_run(request):
+        """Incrementally import the profile's CSVs into normalized_events.
+        Returns coverage + bad rows; legacy evidence stays 'unresolved' —
+        this is NOT a reconciled ledger."""
+        from . import importer
+        b = await body(request)
+        profile = b.get("profile") or ""
+        if not profiles.exists(profile):
+            return web.json_response({"error": "not_found",
+                "message": "unknown profile"}, status=404)
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        # explicit mapping: the strategy the profile launches into right now
+        strategy_id = None
+        try:
+            from . import identity as ident_mod
+            import yaml as _y
+            with open(os.path.join(supervisor.profiles_dir,
+                                   f"{profile}.yaml")) as fh:
+                raw = _y.safe_load(fh) or {}
+            stype = "maker_hedge" if (raw.get("maker") or {}).get("enabled") \
+                else "taker_basis"
+            strategy_id = sup_strategy_id(profile, raw, stype)
+        except Exception:
+            log.exception("import mapping failed")
+        files = importer.discover_csvs(profiles, profile,
+                                       supervisor.profiles_dir)
+        reports = []
+        for f in files:
+            reports.append(importer.import_csv(
+                storage, path=f["path"], strategy_id=strategy_id))
+        audit(f"import: profile={profile} strategy={strategy_id} "
+              f"files={len(reports)}")
+        return web.json_response({"schema_version": 1, "as_of": time.time(),
+                                  "profile": profile,
+                                  "strategy_id": strategy_id,
+                                  "mapping": "explicit-by-launch-identity"
+                                  if strategy_id else "unresolved",
+                                  "reports": reports})
+
+    def sup_strategy_id(profile: str, raw: dict, stype: str) -> Optional[str]:
+        from .identity import resolve_strategy
+        dex = ((raw.get("entropy") or {}).get("dex") or "").strip()
+        # the market a historical CSV belongs to is only provable via a
+        # run that used this profile — the latest run wins; no run means
+        # the current sidecar choice, marked unresolved if never launched
+        rows = [r for r in storage.list_runs(limit=500)
+                if r["profile"] == profile]
+        if rows:
+            latest = rows[0]
+            strategy, _ = resolve_strategy(
+                storage, profile=profile, symbol=latest["symbol"],
+                base=latest["base"], base_dex=dex, hedge=latest["hedge"],
+                strategy_type=stype)
+            return strategy["id"]
+        return None
+
     async def api_strategy_detail(request):
         sid = request.match_info["sid"]
         if storage is None:
@@ -783,6 +855,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_get("/api/operations/{op_id}", operations_status)
     app.router.add_get("/api/strategies", api_strategies)
     app.router.add_get("/api/strategies/{sid}", api_strategy_detail)
+    app.router.add_post("/api/import/scan", api_import_scan)
+    app.router.add_post("/api/import/run", api_import_run)
 
     # analysis + history are added by entropy_arb.console.analytics when the
     # console server is constructed with it (register_analytics(app, ...))

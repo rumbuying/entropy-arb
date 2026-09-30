@@ -121,6 +121,43 @@ CREATE TABLE IF NOT EXISTS profile_links (
 CREATE INDEX IF NOT EXISTS idx_profile_links_strategy
   ON profile_links(strategy_id);
 """),
+    # Migration 3 (V2-007): historical CSV import — per-file incremental
+    # state and the normalized event log the ledger will build on.
+    (3, """
+CREATE TABLE IF NOT EXISTS import_sources (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  path          TEXT NOT NULL,
+  file_identity TEXT NOT NULL,           -- size+mtime+header hash class
+  header_hash   TEXT NOT NULL,
+  offset_line   INTEGER NOT NULL DEFAULT 0,
+  rows_total    INTEGER NOT NULL DEFAULT 0,
+  rows_bad      INTEGER NOT NULL DEFAULT 0,
+  bad_json      TEXT,
+  last_import_ts REAL,
+  status        TEXT NOT NULL DEFAULT 'active',
+  UNIQUE(path, file_identity)
+);
+CREATE TABLE IF NOT EXISTS normalized_events (
+  event_id      TEXT PRIMARY KEY,        -- src:{source_id}:line:{n}
+  dedupe_key    TEXT,                    -- real-trade dedupe, may be null
+  event_type    TEXT NOT NULL,
+  strategy_id   TEXT,
+  run_id        TEXT,
+  account_id    TEXT,
+  venue         TEXT,
+  instrument    TEXT,
+  event_ts      REAL,
+  payload_json  TEXT NOT NULL,
+  source_id     INTEGER NOT NULL,
+  source_line   INTEGER NOT NULL,
+  unresolved    INTEGER NOT NULL DEFAULT 1,
+  import_batch  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_events_strategy_ts
+  ON normalized_events(strategy_id, event_ts);
+CREATE INDEX IF NOT EXISTS idx_events_source
+  ON normalized_events(source_id, source_line);
+"""),
 ]
 
 
@@ -344,6 +381,81 @@ class Storage:
             "SELECT * FROM runs WHERE strategy_id=?"
             " ORDER BY started_ts DESC, run_id LIMIT ?",
             (strategy_id, limit))]
+
+    # ------------------------------------------------------------ import
+
+    def get_import_source(self, path: str, file_identity: str) \
+            -> Optional[Dict[str, Any]]:
+        r = self.db.execute(
+            "SELECT * FROM import_sources WHERE path=? AND file_identity=?",
+            (path, file_identity)).fetchone()
+        return dict(r) if r else None
+
+    def upsert_import_source(self, *, path: str, file_identity: str,
+                             header_hash: str, offset_line: int,
+                             rows_total: int, rows_bad: int,
+                             bad: Optional[list],
+                             status: str = "active") -> int:
+        self.db.execute(
+            "INSERT INTO import_sources(path, file_identity, header_hash,"
+            " offset_line, rows_total, rows_bad, bad_json, last_import_ts,"
+            " status) VALUES(?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(path, file_identity) DO UPDATE SET"
+            " offset_line=excluded.offset_line,"
+            " rows_total=excluded.rows_total,"
+            " rows_bad=excluded.rows_bad,"
+            " bad_json=excluded.bad_json,"
+            " last_import_ts=excluded.last_import_ts,"
+            " status=excluded.status",
+            (path, file_identity, header_hash, offset_line, rows_total,
+             rows_bad, json.dumps(bad) if bad else None, time.time(),
+             status))
+        self.db.commit()
+        return self.get_import_source(path, file_identity)["id"]
+
+    def list_import_sources(self, limit: int = 100) -> List[Dict[str, Any]]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT * FROM import_sources ORDER BY last_import_ts DESC,"
+            " id LIMIT ?", (limit,))]
+
+    def insert_event(self, *, event_id: str, event_type: str,
+                     import_batch: str, source_id: int, source_line: int,
+                     event_ts: Optional[float], payload: dict,
+                     strategy_id: Optional[str] = None,
+                     run_id: Optional[str] = None,
+                     account_id: Optional[str] = None,
+                     venue: Optional[str] = None,
+                     instrument: Optional[str] = None,
+                     dedupe_key: Optional[str] = None,
+                     unresolved: bool = True) -> bool:
+        """Idempotent by event_id (src:line). Returns True when inserted."""
+        cur = self.db.execute(
+            "INSERT OR IGNORE INTO normalized_events(event_id, dedupe_key,"
+            " event_type, strategy_id, run_id, account_id, venue, instrument,"
+            " event_ts, payload_json, source_id, source_line, unresolved,"
+            " import_batch) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (event_id, dedupe_key, event_type, strategy_id, run_id,
+             account_id, venue, instrument, event_ts,
+             json.dumps(payload, ensure_ascii=False), source_id, source_line,
+             int(unresolved), import_batch))
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def events_for_strategy(self, strategy_id: str, *,
+                            start_ts: Optional[float] = None,
+                            end_ts: Optional[float] = None,
+                            limit: int = 500) -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM normalized_events WHERE strategy_id=?"
+        args: list = [strategy_id]
+        if start_ts is not None:
+            sql += " AND event_ts >= ?"
+            args.append(start_ts)
+        if end_ts is not None:
+            sql += " AND event_ts < ?"
+            args.append(end_ts)
+        sql += " ORDER BY event_ts, event_id LIMIT ?"
+        args.append(limit)
+        return [dict(r) for r in self.db.execute(sql, args)]
 
     # ------------------------------------------------------------------ meta
 

@@ -179,6 +179,26 @@ registerStrings({
 
     // detail
     "v2.det.title": "Strategy review",
+
+    "v2.det.list_note": "Persistent strategies (phase-B identity store): a strategy survives restarts, retunes and worker deletion. Net P&L stays pending until the reconciled ledger exists.",
+    "v2.det.back": "all strategies",
+    "v2.det.col.name": "strategy",
+    "v2.det.col.market": "market / legs",
+    "v2.det.col.type": "type",
+    "v2.det.col.runs": "runs",
+    "v2.det.col.live": "live",
+    "v2.det.col.net": "period net P&L",
+    "v2.det.none": "no strategies yet — start a worker to create one",
+    "v2.det.runs": "runs (process lifecycles)",
+    "v2.det.evidence": "evidence",
+    "v2.det.evidence_note": "no reconciled ledger yet — legacy CSVs are partial evidence",
+    "v2.det.import": "import legacy trade CSVs",
+    "v2.det.import_note": "imports the trade CSVs this profile declares (incl. .old rotations); incremental and idempotent by file+line",
+    "v2.det.imported": "imported",
+    "v2.det.bad_rows": "bad rows",
+    "v2.det.import_partial": "Legacy rows carry no order ids / fees: they stay UNRESOLVED partial evidence, not a reconciled ledger.",
+    "v2.det.import_no_profile": "no profile mapped to this strategy yet",
+    "v2.det.mapping": "mapping",
     "v2.det.no_id": "Open a strategy from the Overview. A persistent strategy page needs the phase-B identity store (V2-006) — this view will not fabricate history from worker sessions.",
 
     // experiments
@@ -360,6 +380,26 @@ registerStrings({
     "v2.res.note": "分析工作台、带宽回测、分钟历史与绝对日期筛选在 V2-005 迁移 —— 包括旧版相对小时视图所缺的后端 start/end 支持。",
 
     "v2.det.title": "策略复盘",
+
+    "v2.det.list_note": "持久策略（阶段 B 身份存储）：重启、调参、删除 worker 都不影响策略与历史。已核对账本建立前净收益保持待核对。",
+    "v2.det.back": "全部策略",
+    "v2.det.col.name": "策略",
+    "v2.det.col.market": "市场 / 两腿",
+    "v2.det.col.type": "类型",
+    "v2.det.col.runs": "运行次数",
+    "v2.det.col.live": "运行中",
+    "v2.det.col.net": "期间净收益",
+    "v2.det.none": "暂无策略 —— 启动一个 worker 后会自动创建",
+    "v2.det.runs": "运行历史（进程生命周期）",
+    "v2.det.evidence": "证据",
+    "v2.det.evidence_note": "尚无已核对账本 —— 旧 CSV 属于部分证据",
+    "v2.det.import": "导入历史成交流水",
+    "v2.det.import_note": "导入该配置声明的成交流水（含 .old 轮转）；按文件+行增量幂等",
+    "v2.det.imported": "已导入",
+    "v2.det.bad_rows": "坏行",
+    "v2.det.import_partial": "旧行没有订单号 / 手续费：保持未归因的部分证据状态，不是已核对账本。",
+    "v2.det.import_no_profile": "该策略还没有关联的配置",
+    "v2.det.mapping": "归属映射",
     "v2.det.no_id": "请从总览打开一个策略。持久策略页需要阶段 B 的身份存储（V2-006）—— 本视图不会用 worker 会话伪造历史。",
 
     "v2.exp.title": "调整与验证",
