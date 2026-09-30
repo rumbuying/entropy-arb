@@ -686,6 +686,70 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             pass
         return client
 
+    async def api_strategies(request):
+        """Persistent strategy identities (spec §10.2, phase B scope):
+        every strategy with its runs — stopped / deleted workers keep their
+        strategy and history. Live worker ids are joined for status only;
+        net_pnl stays null until the reconciled ledger exists (V2-009+)."""
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        out = []
+        for s in storage.list_strategies():
+            runs = storage.strategy_runs(s["id"], limit=50)
+            live = [w["id"] for w in supervisor.list()
+                    if w["profile"] and any(
+                        r["worker_id"] == w["id"] and r["state"] == "running"
+                        for r in runs)]
+            out.append({
+                "strategy_id": s["id"],
+                "name": s["name"],
+                "symbol": s["symbol"],
+                "type": s["type"],
+                "base_venue": s["base_venue"],
+                "base_market": s["base_market"],
+                "hedge_venue": s["hedge_venue"],
+                "parent_id": s["parent_id"],
+                "created_ts": s["created_ts"],
+                "archived_ts": s["archived_ts"],
+                "live_workers": live,
+                "run_count": len(runs),
+                "reconciliation_status": "no_data",
+                "net_pnl": None,
+            })
+        return web.json_response({
+            "schema_version": 1, "as_of": time.time(), "strategies": out})
+
+    async def api_strategy_detail(request):
+        sid = request.match_info["sid"]
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        s = storage.get_strategy(sid)
+        if s is None:
+            return web.json_response(
+                {"error": "not_found", "message": "unknown strategy"},
+                status=404)
+        runs = storage.strategy_runs(sid, limit=100)
+        profiles = sorted({r["profile"] for r in runs})
+        return web.json_response({
+            "schema_version": 1, "as_of": time.time(),
+            "strategy_id": s["id"], "name": s["name"], "symbol": s["symbol"],
+            "type": s["type"], "base_venue": s["base_venue"],
+            "base_market": s["base_market"], "hedge_venue": s["hedge_venue"],
+            "parent_id": s["parent_id"], "created_ts": s["created_ts"],
+            "archived_ts": s["archived_ts"],
+            "profiles": profiles,
+            "runs": [{"run_id": r["run_id"], "worker_id": r["worker_id"],
+                      "mode": r["mode"], "state": r["state"],
+                      "started_ts": r["started_ts"], "ended_ts": r["ended_ts"],
+                      "config_version": r["config_version"],
+                      "provisional": bool(r["provisional"]),
+                      "identity_note": r["identity_note"]} for r in runs],
+            "net_pnl": None,
+            "reconciliation_status": "no_data",
+        })
+
     # ------------------------------------------------------------- routes
 
     app.router.add_get("/", index)
@@ -717,6 +781,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                         operations_flatten_preview)
     app.router.add_post("/api/operations/flatten", operations_flatten)
     app.router.add_get("/api/operations/{op_id}", operations_status)
+    app.router.add_get("/api/strategies", api_strategies)
+    app.router.add_get("/api/strategies/{sid}", api_strategy_detail)
 
     # analysis + history are added by entropy_arb.console.analytics when the
     # console server is constructed with it (register_analytics(app, ...))

@@ -93,6 +93,34 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_events(ts);
 """),
+    # Migration 2 (V2-006, phase B): persistent strategy identity + the
+    # strategy/run mapping. A strategy is the long-lived object a profile
+    # launches into a market; runs (process lifecycles) reference it.
+    (2, """
+CREATE TABLE IF NOT EXISTS strategies (
+  id             TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  symbol         TEXT NOT NULL,
+  type           TEXT NOT NULL,            -- taker_basis | maker_hedge
+  base_venue     TEXT NOT NULL,
+  base_market    TEXT NOT NULL,            -- dex qualifier for hl legs
+  hedge_venue    TEXT NOT NULL,
+  parent_id      TEXT,
+  created_ts     REAL NOT NULL,
+  archived_ts    REAL
+);
+CREATE INDEX IF NOT EXISTS idx_strategies_symbol ON strategies(symbol,
+                                                                created_ts);
+CREATE TABLE IF NOT EXISTS profile_links (
+  profile        TEXT NOT NULL,
+  strategy_id    TEXT NOT NULL,
+  launch_identity TEXT NOT NULL,           -- symbol|base|dex|hedge|type
+  created_ts     REAL NOT NULL,
+  PRIMARY KEY (profile, launch_identity)
+);
+CREATE INDEX IF NOT EXISTS idx_profile_links_strategy
+  ON profile_links(strategy_id);
+"""),
 ]
 
 
@@ -263,6 +291,59 @@ class Storage:
         self.db.execute("UPDATE runs SET config_version=? WHERE run_id=?",
                         (config_version, run_id))
         self.db.commit()
+
+    # ------------------------------------------------------------- strategies
+
+    def find_strategy_by_identity(self, launch_identity: str) \
+            -> Optional[Dict[str, Any]]:
+        r = self.db.execute(
+            "SELECT s.* FROM strategies s JOIN profile_links p"
+            " ON p.strategy_id = s.id WHERE p.launch_identity=?"
+            " AND s.archived_ts IS NULL ORDER BY s.created_ts DESC LIMIT 1",
+            (launch_identity,)).fetchone()
+        return dict(r) if r else None
+
+    def create_strategy(self, *, name: str, symbol: str, type_: str,
+                        base_venue: str, base_market: str, hedge_venue: str,
+                        parent_id: Optional[str] = None,
+                        ts: Optional[float] = None) -> Dict[str, Any]:
+        sid = f"str-{uuid.uuid4().hex}"
+        now = ts if ts is not None else time.time()
+        with self.db:
+            self.db.execute(
+                "INSERT INTO strategies(id, name, symbol, type, base_venue,"
+                " base_market, hedge_venue, parent_id, created_ts)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (sid, name, symbol.upper(), type_, base_venue, base_market,
+                 hedge_venue, parent_id, now))
+        return self.get_strategy(sid)
+
+    def link_profile(self, *, profile: str, strategy_id: str,
+                     launch_identity: str) -> None:
+        self.db.execute(
+            "INSERT OR REPLACE INTO profile_links(profile, strategy_id,"
+            " launch_identity, created_ts) VALUES(?,?,?,?)",
+            (profile, strategy_id, launch_identity, time.time()))
+        self.db.commit()
+
+    def get_strategy(self, strategy_id: str) -> Optional[Dict[str, Any]]:
+        r = self.db.execute("SELECT * FROM strategies WHERE id=?",
+                            (strategy_id,)).fetchone()
+        return dict(r) if r else None
+
+    def list_strategies(self, *, include_archived: bool = True,
+                        limit: int = 200) -> List[Dict[str, Any]]:
+        sql = ("SELECT * FROM strategies"
+               + ("" if include_archived else " WHERE archived_ts IS NULL")
+               + " ORDER BY created_ts DESC, id LIMIT ?")
+        return [dict(r) for r in self.db.execute(sql, (limit,))]
+
+    def strategy_runs(self, strategy_id: str,
+                      limit: int = 100) -> List[Dict[str, Any]]:
+        return [dict(r) for r in self.db.execute(
+            "SELECT * FROM runs WHERE strategy_id=?"
+            " ORDER BY started_ts DESC, run_id LIMIT ?",
+            (strategy_id, limit))]
 
     # ------------------------------------------------------------------ meta
 

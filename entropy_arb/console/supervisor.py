@@ -29,6 +29,18 @@ STOP_GRACE_SEC = 25.0   # engine settles in-flight orders + reconciles on TERM
 LOG_TAIL = 500
 
 
+def worker_strategy_type(profiles_dir: str, profile: str) -> str:
+    """maker_hedge when the profile enables maker mode, else taker_basis."""
+    try:
+        import yaml as _yaml
+        with open(os.path.join(profiles_dir, f"{profile}.yaml")) as fh:
+            raw = _yaml.safe_load(fh) or {}
+        return "maker_hedge" if (raw.get("maker") or {}).get("enabled") \
+            else "taker_basis"
+    except Exception:
+        return "taker_basis"
+
+
 def parse_worker_cmdline(argv, profiles_dir: str) -> Optional[dict]:
     """Recognize one of our engine workers in a process cmdline.
 
@@ -262,7 +274,9 @@ class Supervisor:
         Adopt must not duplicate history: a worker that survived a console
         restart resumes its persisted run when pid + full spawn identity
         (and /proc start time where available) match. A worker from a
-        pre-persistence console gets a provisional run marked with the gap."""
+        pre-persistence console gets a provisional run marked with the gap.
+        The run keeps its original strategy_id — adopt never re-resolves
+        identity (spec §7.1: adopt 不重算)."""
         if self.storage is None:
             w.run_id = w.run_id or f"run-{uuid.uuid4().hex}"
             return
@@ -280,11 +294,39 @@ class Supervisor:
         note = ("adopted worker without a persisted run — identity not "
                 "traceable to a console-started record"
                 if w.adopted_pid is not None else "")
+        strategy_id = None
+        if not w.adopted_pid:
+            # a fresh console-started run resolves identity immediately
+            strategy_id = self._resolve_strategy_id(w)
         self.storage.create_run(
             run_id=w.run_id, worker_id=w.id, profile=w.profile,
             symbol=w.symbol, hedge=w.hedge, base=w.base, mode=w.mode,
             pid=pid, cmdline_hash=w.cmdline_hash, started_ts=w.started_ts,
+            strategy_id=strategy_id,
             provisional=w.adopted_pid is not None, identity_note=note)
+
+    def _resolve_strategy_id(self, w: Worker) -> Optional[str]:
+        """Resolve/create the strategy identity for a worker about to run
+        (phase B). Failure never blocks the launch — the run just keeps
+        strategy_id null and stays provisional (visible gap)."""
+        if self.storage is None:
+            return None
+        try:
+            from .identity import resolve_strategy
+            from .venues import load_profile_yaml
+            dex = ""
+            if w.base == "hl":
+                py = load_profile_yaml(self.profiles_dir, w.profile)
+                dex = ((py.get("entropy") or {}).get("dex") or "").strip()
+            stype = worker_strategy_type(self.profiles_dir, w.profile)
+            strategy, _created = resolve_strategy(
+                self.storage, profile=w.profile, symbol=w.symbol,
+                base=w.base, base_dex=dex, hedge=w.hedge,
+                strategy_type=stype)
+            return strategy["id"]
+        except Exception:
+            log.exception("strategy resolution failed for %s", w.id)
+            return None
 
     async def start(self, profile: str, symbol: str, hedge: str,
                     mode: str, base: str = "hl") -> Worker:
@@ -313,7 +355,8 @@ class Supervisor:
                 symbol=w.symbol, hedge=w.hedge, base=w.base, mode=w.mode,
                 pid=w.proc.pid, cmdline_hash=w.cmdline_hash,
                 started_ts=w.started_ts,
-                proc_start_ts=_proc_start_time(w.proc.pid))
+                proc_start_ts=_proc_start_time(w.proc.pid),
+                strategy_id=self._resolve_strategy_id(w))
         self.workers[w.id] = w
         w._reader_task = asyncio.create_task(self._pump(w),
                                              name=f"worker-{w.id}-log")
