@@ -1,12 +1,13 @@
-/* 总览 — period net P&L, funding & risk, pending items, strategy table.
-   V2-001 stage: strategies have no persistent identity yet (V2-006), so the
-   table lists live worker sessions explicitly labelled as a temporary view.
-   Net P&L shows the pending-reconciliation badge — never 0, never MTM. */
+/* 总览 — persistent strategies from the phase-B identity store (V2-011).
+   Period net P&L comes from the performance API and shows the
+   pending-reconciliation badge whenever it is null — never 0, never MTM.
+   Live worker sessions stay as a separate, clearly-labelled operations
+   view. */
 
 import { getJSON } from "/static/api.js";
 import { t } from "/static/i18n.js";
-import { el, card, table, stateBox, pendingBadge, badge, updatedStamp,
-         seqGuard } from "./components.js";
+import { el, card, table, stateBox, pendingBadge, badge, netPnlCell,
+         updatedStamp, seqGuard } from "./components.js";
 import { store } from "./store.js";
 
 export function mount(container, ctx) {
@@ -14,47 +15,47 @@ export function mount(container, ctx) {
   const stamp = updatedStamp();
 
   const kpis = el("div", { class: "kpi-strip" });
-  const sessionCard = card(t("v2.ov.strategies") + " — " +
-    t("v2.ov.live_sessions"));
-  const sessionNote = el("div", { class: "note", style: "margin-bottom:8px" },
-    t("v2.state.strategy_pending"));
-  const sessionTbl = table([
-    t("v2.ov.col.name"), t("v2.ov.col.type"), t("v2.ov.col.state"),
-    t("v2.ov.col.net"), t("v2.ov.col.evidence"), t("v2.ov.col.next"),
+  const strategyCard = card(t("v2.ov.strategies"));
+  const stratNote = el("div", { class: "note", style: "margin-bottom:8px" },
+    t("v2.det.list_note"));
+  const stratTbl = table([
+    t("v2.det.col.name"), t("v2.det.col.market"), t("v2.det.col.type"),
+    t("v2.det.col.live"), t("v2.ov.col.net"), t("v2.ov.col.next"),
   ]);
-  sessionCard.append(sessionNote, sessionTbl.node);
-  container.append(kpis, sessionCard);
+  strategyCard.append(stratNote, stratTbl.node);
+  const sessionCard = card(t("v2.ov.live_sessions"));
+  const sessionTbl = table([
+    t("v2.ov.col.name"), t("v2.ov.col.state"), t("v2.ov.col.net"),
+  ]);
+  sessionCard.append(sessionTbl.node);
+  container.append(kpis, strategyCard, sessionCard);
 
   async function refresh() {
-    let workers = [];
-    let profiles = [];
-    let secrets = null;
+    const my = seq.begin();
     const results = await Promise.allSettled([
-      seq(() => getJSON("/api/workers")),
-      seq(() => getJSON("/api/profiles")),
-      seq(() => getJSON("/api/secrets")),
+      seq.run(my, () => getJSON("/api/strategies")),
+      seq.run(my, () => getJSON("/api/workers")),
+      seq.run(my, () => getJSON("/api/secrets")),
     ]);
-    if (results[0].status === "fulfilled") workers = results[0].value;
-    if (results[1].status === "fulfilled") profiles = results[1].value;
-    if (results[2].status === "fulfilled") secrets = results[2].value;
-    const anyOk = results.some(r => r.status === "fulfilled");
-    if (!anyOk) {
-      sessionCard.replaceChildren(stateBox({
-        status: "error", message: t("v2.state.error"),
-        onRetry: refresh,
+    const strategies = results[0].status === "fulfilled"
+      ? (results[0].value.strategies || []) : null;
+    const workers = results[1].status === "fulfilled" ? results[1].value : [];
+    const secrets = results[2].status === "fulfilled" ? results[2].value
+      : null;
+    if (!strategies) {
+      strategyCard.replaceChildren(stratNote, stateBox({
+        status: "error", message: t("v2.state.error"), onRetry: refresh,
       }));
       return;
     }
     stamp.update(Date.now() / 1000);
 
-    // --- KPI strip: period net P&L is pending by definition until the
-    // reconciled ledger exists (phase B); funding aggregates running only.
+    // ---- KPI strip
     const running = workers.filter(w => w.state === "running");
     const errored = workers.filter(w => w.state === "errored");
     const incompleteCreds = secrets && secrets.venues
       ? Object.entries(secrets.venues).filter(([, ok]) => !ok)
-          .map(([k]) => k)
-      : [];
+          .map(([k]) => k) : [];
     kpis.replaceChildren(
       el("div", { class: "kpi" },
         el("div", { class: "label" }, t("v2.ov.period_pnl")),
@@ -81,41 +82,57 @@ export function mount(container, ctx) {
             : t("v2.ov.att_none"))),
     );
 
-    // --- live sessions (temporary, worker-dimension) ---
+    // ---- persistent strategies (operations state joined from live runs)
+    stratTbl.tbody.replaceChildren();
+    if (!strategies.length) {
+      stratTbl.tbody.appendChild(el("tr", {},
+        el("td", { colspan: "6", class: "muted",
+                   text: t("v2.det.none") })));
+    }
+    for (const s of strategies) {
+      const tr = el("tr");
+      tr.appendChild(el("td", {},
+        el("a", { href: `#/strategies/${s.strategy_id}` }, s.name)));
+      tr.appendChild(el("td", { class: "num" },
+        `${s.base_venue}${s.base_market ? ":" + s.base_market : ""} ↔ `
+        + `${s.hedge_venue} · ${s.symbol}`));
+      tr.appendChild(el("td", {},
+        badge(s.type === "maker_hedge" ? t("v2.ov.maker")
+              : t("v2.ov.taker"), "badge dim")));
+      tr.appendChild(el("td", {},
+        s.live_workers.length
+          ? badge(s.live_workers.join(", "), "badge running")
+          : badge(t("status.stopped"), "badge stopped")));
+      tr.appendChild(el("td", {}, netPnlCell(s.net_pnl)));
+      tr.appendChild(el("td", {},
+        el("a", { href: `#/strategies/${s.strategy_id}` },
+          t("v2.ov.next_review"))));
+      stratTbl.tbody.appendChild(tr);
+    }
+
+    // ---- live worker sessions (operations view)
     sessionTbl.tbody.replaceChildren();
     if (!workers.length) {
-      const tr = el("tr");
-      tr.appendChild(el("td", {
-        colspan: "6", class: "muted", text: t("v2.ov.no_workers"),
-      }));
-      sessionTbl.tbody.appendChild(tr);
+      sessionTbl.tbody.appendChild(el("tr", {},
+        el("td", { colspan: "3", class: "muted",
+                   text: t("v2.ov.no_workers") })));
     }
     for (const w of workers) {
-      const prof = profiles.find(p => p.name === w.profile) || {};
-      const isMaker = !!prof.maker;
       const tr = el("tr");
       tr.appendChild(el("td", {},
         el("span", { text: `${w.symbol}` }),
-        el("span", { class: "muted", text: ` · ${w.base} ↔ ${w.hedge}` })));
-      tr.appendChild(el("td", {},
-        badge(isMaker ? t("v2.ov.maker") : t("v2.ov.taker"), "badge dim")));
+        el("span", { class: "muted", text: ` · ${w.base} ↔ ${w.hedge}` }),
+        el("span", { class: "muted", text: ` (${w.id})` })));
       tr.appendChild(el("td", {},
         badge(t("status." + (w.state === "running" && w.mode === "record"
           ? "recording" : w.state)),
           w.state === "running" ? "badge running" : "badge stopped")));
       tr.appendChild(el("td", {}, pendingBadge()));
-      tr.appendChild(el("td", { class: "muted" }, t("v2.ov.evidence_none")));
-      const next = el("td", {},
-        el("a", { href: "#/detail" }, t("v2.ov.next_review")));
-      tr.appendChild(next);
       sessionTbl.tbody.appendChild(tr);
     }
   }
 
   refresh();
   const timer = setInterval(refresh, 5000);
-  return {
-    refresh,
-    destroy() { clearInterval(timer); },
-  };
+  return { refresh, destroy() { clearInterval(timer); } };
 }

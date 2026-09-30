@@ -100,15 +100,21 @@ export function updatedStamp() {
 }
 
 /* --- request sequencing (spec §4.3): late responses must not overwrite a
-   newer selection. Wrap async loads with a generation counter. */
+   newer REFRESH CYCLE. begin() opens a cycle; run(my, fn) tags the request
+   with it — parallel calls in the same cycle all stay valid. */
 export function seqGuard() {
   let gen = 0;
-  return function run(fn) {
-    const my = ++gen;
-    return Promise.resolve().then(fn).catch(e => {
-      if (my === gen) throw e;
-      return undefined;                     // stale — swallow silently
-    }).then(res => (my === gen ? res : undefined));
+  return {
+    begin() { return ++gen; },
+    async run(my, fn) {
+      try {
+        const res = await Promise.resolve().then(fn);
+        return my === gen ? res : undefined;   // stale — swallow silently
+      } catch (e) {
+        if (my === gen) throw e;
+        return undefined;
+      }
+    },
   };
 }
 
@@ -116,7 +122,11 @@ export function seqGuard() {
 export function card(title, ...children) {
   const c = el("div", { class: "card" });
   if (title) c.appendChild(el("h3", { text: title }));
-  for (const ch of children) c.appendChild(ch);
+  for (const ch of children.flat()) {
+    if (ch === null || ch === undefined || ch === false) continue;
+    c.appendChild(typeof ch === "string" || typeof ch === "number"
+      ? document.createTextNode(String(ch)) : ch);
+  }
   return c;
 }
 

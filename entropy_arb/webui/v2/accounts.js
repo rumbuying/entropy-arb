@@ -30,8 +30,9 @@ export function mount(container) {
   container.append(note, exCard, posCard, mtmNote);
 
   async function refresh() {
+    const my = seq.begin();
     try {
-      const data = await seq(() => getJSON("/api/venues"));
+      const data = await seq.run(my, () => getJSON("/api/venues"));
       if (!data) return;
       stamp.update(Date.now() / 1000);
       asof.textContent = t("v2.acct.asof",
