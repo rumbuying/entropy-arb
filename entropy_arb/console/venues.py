@@ -189,9 +189,25 @@ def aggregate(records: list) -> dict:
             "engines": len(g["engines"]),
             "positions": g["positions"],
         })
-    return {"exchanges": exchanges, "strategies": strategies,
-            "total_pnl_mtm": total_pnl,
-            "asof": time.time()}
+    # cross-venue totals (§5.5): the groups are DISTINCT venue deployments
+    # (HL io / Lighter / Lighter-RH / Katana / …) with separate accounts, so
+    # summing the per-group maxima is the honest total-funds estimate;
+    # within a group the max dedupes the engines that share one account.
+    # A group without equity data is excluded and flagged — a partial
+    # total is labelled, never silently presented as complete.
+    equities = [e["equity"] for e in exchanges if e["equity"] is not None]
+    frees = [e["free"] for e in exchanges if e["free"] is not None]
+    missing_equity = len([e for e in exchanges if e["equity"] is None])
+    return {
+        "exchanges": exchanges,
+        "strategies": strategies,
+        "total_pnl_mtm": total_pnl,
+        "asof": time.time(),
+        "total_equity": (sum(equities) if equities else None),
+        "total_free": (sum(frees) if frees else None),
+        "equity_groups_count": len(exchanges),
+        "equity_groups_missing": missing_equity,
+    }
 
 
 def load_profile_yaml(profiles_dir: str, name: str) -> dict:

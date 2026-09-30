@@ -12,6 +12,19 @@ export function mount(container) {
   const seq = seqGuard();
   const stamp = updatedStamp();
   const asof = el("span", { class: "right note" });
+  // ---- totals strip (跨交易所组合计) ----
+  const totals = el("div", { class: "kpi-strip" });
+  const totalEquityV = el("div", { class: "value" }, "…");
+  const totalFreeV = el("div", { class: "value" }, "…");
+  const totalNote = el("div", { class: "sub" });
+  totals.append(
+    el("div", { class: "kpi" },
+      el("div", { class: "label" }, t("v2.acct.total_equity")),
+      totalEquityV, totalNote),
+    el("div", { class: "kpi" },
+      el("div", { class: "label" }, t("v2.acct.total_free")),
+      totalFreeV,
+      el("div", { class: "sub" }, t("v2.acct.total_free_sub"))));
   const exCard = card(t("v2.acct.exchanges"), asof);
   const exTbl = table([
     t("col.venue"), t("col.equity"), t("col.free"),
@@ -27,7 +40,7 @@ export function mount(container) {
   posCard.appendChild(posTbl.node);
   const note = el("div", { class: "note" }, t("v2.acct.note"));
   const mtmNote = el("div", { class: "note" }, t("v2.acct.mtm_note"));
-  container.append(note, exCard, posCard, mtmNote);
+  container.append(totals, note, exCard, posCard, mtmNote);
 
   async function refresh() {
     const my = seq.begin();
@@ -35,6 +48,21 @@ export function mount(container) {
       const data = await seq.run(my, () => getJSON("/api/venues"));
       if (!data) return;
       stamp.update(Date.now() / 1000);
+      // totals: sum across DISTINCT venue deployments (the per-group max
+      // already deduped engines sharing one account); partial when some
+      // groups have no equity data — labelled, never silently complete
+      const te = data.total_equity;
+      totalEquityV.replaceChildren(
+        te === null || te === undefined ? el("span", { class: "muted" }, "—")
+        : el("span", { text: fmtNum(Number(te), 2) + " USD" }));
+      const missing = data.equity_groups_missing || 0;
+      totalNote.textContent = t("v2.acct.total_note",
+        { n: `${data.equity_groups_count || 0}` })
+        + (missing ? ` ${t("v2.acct.total_partial", { n: missing })}` : "");
+      totalFreeV.replaceChildren(
+        data.total_free === null || data.total_free === undefined
+          ? el("span", { class: "muted" }, "—")
+          : el("span", { text: fmtNum(Number(data.total_free), 2) + " USD" }));
       asof.textContent = t("v2.acct.asof",
         { t: new Date((data.asof || 0) * 1000).toLocaleTimeString() });
       exTbl.tbody.replaceChildren();

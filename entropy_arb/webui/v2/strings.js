@@ -60,6 +60,11 @@ registerStrings({
     "v2.acct.exchanges": "By exchange (running workers)",
     "v2.acct.positions": "Positions (per engine leg)",
     "v2.acct.asof": "as of {t}",
+    "v2.acct.total_equity": "Total equity (all venue groups)",
+    "v2.acct.total_free": "Total available margin",
+    "v2.acct.total_free_sub": "sum of per-venue free balances",
+    "v2.acct.total_note": "engines sharing one venue take the max; distinct venue deployments are summed ({n} groups)",
+    "v2.acct.total_partial": "PARTIAL — {n} group(s) report no equity",
     "v2.acct.mtm_note": "Session MTM resets on restart; realized-today is the legacy maker-hedge edge — neither is reconciled net profit.",
 
     // runs
@@ -313,6 +318,11 @@ registerStrings({
     "v2.acct.exchanges": "按交易所（运行中的 worker）",
     "v2.acct.positions": "持仓（按引擎腿）",
     "v2.acct.asof": "截至 {t}",
+    "v2.acct.total_equity": "总权益（全部交易所组合计）",
+    "v2.acct.total_free": "可用保证金合计",
+    "v2.acct.total_free_sub": "各交易所可用余额之和",
+    "v2.acct.total_note": "同一交易所的多个引擎取最大值，不同交易所部署相加（共 {n} 组）",
+    "v2.acct.total_partial": "部分数据 —— {n} 组未上报权益",
     "v2.acct.mtm_note": "会话 MTM 重启即清零；“今日已实现”是旧版 maker 对冲 edge —— 两者都不是已核对的净收益。",
 
     "v2.runs.title": "运行管理",

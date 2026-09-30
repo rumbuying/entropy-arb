@@ -36,11 +36,14 @@ export function mount(container, ctx) {
       seq.run(my, () => getJSON("/api/strategies")),
       seq.run(my, () => getJSON("/api/workers")),
       seq.run(my, () => getJSON("/api/secrets")),
+      seq.run(my, () => getJSON("/api/venues")),
     ]);
     const strategies = results[0].status === "fulfilled"
       ? (results[0].value.strategies || []) : null;
     const workers = results[1].status === "fulfilled" ? results[1].value : [];
     const secrets = results[2].status === "fulfilled" ? results[2].value
+      : null;
+    const venues = results[3].status === "fulfilled" ? results[3].value
       : null;
     if (!strategies) {
       strategyCard.replaceChildren(stratNote, stateBox({
@@ -64,9 +67,21 @@ export function mount(container, ctx) {
       el("div", { class: "kpi" },
         el("div", { class: "label" }, t("v2.ov.funding_risk")),
         el("div", { class: "value" },
-          el("a", { href: "#/accounts" }, t("v2.nav.accounts"))),
+          venues && venues.total_equity !== null
+            && venues.total_equity !== undefined
+            ? el("span", {
+                text: `${Number(venues.total_equity).toLocaleString(
+                  undefined, { minimumFractionDigits: 0,
+                               maximumFractionDigits: 0 })} USD`,
+              })
+            : el("a", { href: "#/accounts" }, t("v2.nav.accounts"))),
         el("div", { class: "sub" },
-          `${t("v2.ov.col.state")}: ${running.length}`)),
+          venues && venues.total_equity !== null
+            && venues.total_equity !== undefined
+            ? el("a", { href: "#/accounts" },
+                `${t("v2.acct.total_equity")} · ${t("v2.ov.col.state")}: `
+                + `${running.length}`)
+            : `${t("v2.ov.col.state")}: ${running.length}`)),
       el("div", { class: "kpi" },
         el("div", { class: "label" }, t("v2.ov.pending_items")),
         el("div", { class: "value" },

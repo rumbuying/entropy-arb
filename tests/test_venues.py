@@ -12,7 +12,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from entropy_arb.console.venues import _taker_fifo_realized  # noqa: E402
+from entropy_arb.console.venues import (  # noqa: E402
+    _taker_fifo_realized, aggregate)
 
 HEADER = ["ts", "direction", "buy_fill", "sell_fill", "fill_edge_usd"]
 
@@ -86,3 +87,64 @@ def test_midnight_matches_local_midnight_shape():
     lt = time.localtime()
     m = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
     assert m <= time.time()
+
+
+def _snap(venues):
+    """A worker snapshot dict with the given venue states."""
+    return {"status": "running", "session": {"pnl_mtm": 0.0},
+            "venues": venues}
+
+
+def test_total_equity_sums_distinct_groups_and_flags_partial():
+    # two engines on the SAME exchange report the same account (max wins);
+    # a second, distinct deployment sums in; a group without equity makes
+    # the total partial (flagged), and no equity at all -> null
+    recs = [
+        {"status": {"id": "w1", "state": "running", "symbol": "X",
+                    "profile": "p", "mode": "live", "hedge": "katana",
+                    "base": "hl"},
+         "maker": False, "realized": None,
+         "snap": _snap({"a": {"name": "ENTROPY", "key": "entropy",
+                              "equity": 1000.0, "free": 400.0,
+                              "position": 0.0},
+                        "h": {"name": "KATANA", "key": "hedge",
+                              "equity": 300.0, "free": 100.0,
+                              "position": 0.0}})},
+        {"status": {"id": "w2", "state": "running", "symbol": "X",
+                    "profile": "p", "mode": "live", "hedge": "katana",
+                    "base": "hl"},
+         "maker": False, "realized": None,
+         "snap": _snap({"a": {"name": "ENTROPY", "key": "entropy",
+                              "equity": 900.0,   # same account, stale copy
+                              "free": 350.0, "position": 0.0},
+                        "h": {"name": "KATANA", "key": "hedge",
+                              "equity": 300.0, "free": 100.0,
+                              "position": 0.0}})},
+        {"status": {"id": "w3", "state": "running", "symbol": "Y",
+                    "profile": "p", "mode": "live", "hedge": "lighter-rh",
+                    "base": "hl"},
+         "maker": False, "realized": None,
+         "snap": _snap({"a": {"name": "RH", "key": "entropy",
+                              "equity": None, "free": None,
+                              "position": 0.0}})},
+    ]
+    out = aggregate(recs)
+    by_name = {e["exchange"]: e for e in out["exchanges"]}
+    # same-account duplicates dedupe to the max WITHIN the group...
+    assert by_name["HL(io)"]["equity"] == 1000.0
+    assert by_name["Katana"]["equity"] == 300.0
+    assert by_name["Lighter-RH"]["equity"] is None
+    # ...and DISTINCT deployments sum into the total, flagged partial
+    assert out["total_equity"] == 1300.0
+    assert out["total_free"] == 500.0
+    assert out["equity_groups_missing"] == 1
+    assert out["equity_groups_count"] == 3
+
+    # no equity anywhere -> total null (never 0)
+    recs[0]["snap"]["venues"]["a"]["equity"] = None
+    recs[0]["snap"]["venues"]["h"]["equity"] = None
+    recs[1]["snap"]["venues"]["a"]["equity"] = None
+    recs[1]["snap"]["venues"]["h"]["equity"] = None
+    out2 = aggregate(recs)
+    assert out2["total_equity"] is None
+    assert out2["equity_groups_missing"] == 3
