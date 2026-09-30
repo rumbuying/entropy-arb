@@ -906,6 +906,54 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                     "evidence only, not a reconciled execution ledger",
         })
 
+    async def api_strategy_recommendations(request):
+        """Explainable rules (spec §11): traceable facts + missing items;
+        never executes anything."""
+        sid = request.match_info["sid"]
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        strategy = storage.get_strategy(sid)
+        if strategy is None:
+            return web.json_response(
+                {"error": "not_found", "message": "unknown strategy"},
+                status=404)
+        try:
+            start_ts, end_ts, tzname = _abs_range_or_400(request)
+        except web.HTTPBadRequest as e:
+            return web.Response(status=400, text=e.text,
+                                content_type=e.content_type)
+        from .performance import performance_for_strategy
+        from .recommendations import envelope, recommendations_for_strategy
+        runs = storage.strategy_runs(sid, limit=100)
+        live_states, exposed = [], False
+        for w in supervisor.list():
+            row = next((r for r in runs if r["worker_id"] == w["id"]), None)
+            if not row or row["state"] != "running":
+                continue
+            live_states.append("worker_running")
+            try:
+                snap = await supervisor.snapshot(w["id"])
+                if snap:
+                    live_states.append(snap.get("status"))
+                    mk = snap.get("maker") or {}
+                    if mk.get("exposed"):
+                        exposed = True
+            except Exception:
+                live_states.append("worker_unreachable")
+        perf = performance_for_strategy(
+            storage, strategy_id=sid, start_ts=start_ts, end_ts=end_ts,
+            timezone=tzname or "Asia/Shanghai") if start_ts is not None \
+            else None
+        unresolved = sum(1 for ev in storage.events_for_strategy(
+            sid, limit=10000) if ev.get("unresolved"))
+        provisional = sum(1 for r in runs if r["provisional"])
+        recs = recommendations_for_strategy(
+            strategy=strategy, runs=runs, live_states=live_states,
+            exposed=exposed, performance=perf, unresolved_events=unresolved,
+            provisional_runs=provisional)
+        return web.json_response(envelope(sid, recs))
+
     async def api_accounts(request):
         """Deduped account view (spec §10.2 / §5.5): one row per running
         engine leg, grouped per venue-deployment, equity via max (legacy
@@ -1030,6 +1078,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                        api_strategy_performance)
     app.router.add_get("/api/strategies/{sid}/executions",
                        api_strategy_executions)
+    app.router.add_get("/api/strategies/{sid}/recommendations",
+                       api_strategy_recommendations)
     app.router.add_get("/api/accounts", api_accounts)
     app.router.add_post("/api/import/scan", api_import_scan)
     app.router.add_post("/api/import/run", api_import_run)
