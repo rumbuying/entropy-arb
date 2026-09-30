@@ -93,7 +93,7 @@ registerStrings({
 
     // connections
     "v2.conn.title": "Exchange access / API Keys",
-    "v2.conn.note": "Masked status only in this stage: edit / save / delete and per-deployment diagnostics migrate in V2-002. “valid” means format-valid, not that authentication succeeded.",
+    "v2.conn.note": "Blank input = keep the stored value; deletion needs the explicit per-field tick. Save lists affected running instances and never restarts anything. “Format ok” is shape-only — it is not authentication.",
     "v2.conn.col.key": "key",
     "v2.conn.col.state": "state",
     "v2.conn.col.valid": "format",
@@ -344,7 +344,7 @@ registerStrings({
     "v2.runs.note": "运维操作经后端操作服务执行：锁、request_id 幂等与持久化结果。超时 = 状态未知 —— 先核对交易所，再考虑下一步。",
 
     "v2.conn.title": "交易所接入 / API Key",
-    "v2.conn.note": "本阶段仅展示掩码状态：编辑 / 保存 / 删除与分部署诊断在 V2-002 迁移。“格式正确”不代表鉴权成功。",
+    "v2.conn.note": "留空 = 保留已存值；删除需勾选该字段。保存前列出受影响的运行实例，且绝不自动重启。“格式正确”仅指形状校验，不代表鉴权成功。",
     "v2.conn.col.key": "键",
     "v2.conn.col.state": "状态",
     "v2.conn.col.valid": "格式",

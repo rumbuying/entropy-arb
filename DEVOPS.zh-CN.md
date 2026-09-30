@@ -104,8 +104,10 @@
 - 正式地址带 `?token=`；token 存 sessionStorage，换浏览器需重带完整链接。
 - 控制台只绑 127.0.0.1，外网经 nginx 443 反代；所有 `/api/*` 无/错 token 一律 401。
 - Console V2 并行入口：`/console-v2`（与旧页同 token 机制；旧页 `/` 保留为后备）。
-  V2 引入 `data/console-v2.sqlite3`（gitignored）：持久 run 身份 / 操作 / 配置版本 /
-  审计记录，仅 console 进程写。开发进度见 `CONSOLE-V2-DEVELOPMENT-SPEC.zh-CN.md`。
+  V2 引入 `data/console-v2.sqlite3`（gitignored）：持久策略身份 / run / 操作 / 配置版本 /
+  导入事件 / 实验草稿，仅 console 进程写。worker 事件采集写到 `logs/events/<run_id>.jsonl`
+  （由 console 启动时经 env 传入 run 身份；adopt 的旧 worker 无此环境，保持 CSV 采集）。
+  开发进度见 `CONSOLE-V2-DEVELOPMENT-SPEC.zh-CN.md`。
 
 ### 2.2 SOP：新上一条线（以 backpack 为例，全程 ≤ 7 步）
 
