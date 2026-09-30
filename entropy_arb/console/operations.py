@@ -188,7 +188,12 @@ class OperationService:
                                     cfg.settle_timeout_sec)
                 leg = {"leg": key, "venue": v.conf.label,
                        "symbol": w.symbol, "position": None,
-                       "equity": None, "book_ready": False, "error": None}
+                       "equity": None, "book_ready": False, "error": None,
+                       # venue-reported unrealized (mark vs the venue's own
+                       # entry average) + current mark — ESTIMATES for the
+                       # dialog, explicitly not a reconciled net (§6.2)
+                       "unrealized": None, "mark": None,
+                       "unrealized_source": None}
                 legs.append(leg)
                 try:
                     await v.load_market()
@@ -196,6 +201,16 @@ class OperationService:
                     tasks += v.start_tasks(stop, lambda: None, live=True)
                     pos = await asyncio.wait_for(v.fetch_position(), 15)
                     leg["position"] = pos
+                    # fetch_position refreshes the venue's own unrealized
+                    # on HL/Lighter; adapters without the field stay null
+                    leg["unrealized"] = getattr(v, "unrealized", None)
+                    leg["unrealized_source"] = (
+                        "venue_mark" if leg["unrealized"] is not None
+                        else "unsupported_adapter")
+                    try:
+                        leg["mark"] = v.book.mid()
+                    except Exception:
+                        leg["mark"] = None
                     try:
                         eq = await asyncio.wait_for(v.fetch_equity(), 15)
                         leg["equity"] = eq[0] if eq else None

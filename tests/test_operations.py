@@ -90,7 +90,14 @@ def test_operations_lifecycle():
                 # make it live; preview succeeds with stubbed leg reads
                 sup.workers[rec_wid].mode = "live"
                 async def fake_read_legs(w):
-                    return _legs_ok(w.symbol)
+                    legs = _legs_ok(w.symbol)
+                    legs[0]["unrealized"] = 3.35
+                    legs[0]["mark"] = 2050.7
+                    legs[0]["unrealized_source"] = "venue_mark"
+                    legs[1]["unrealized"] = -0.98
+                    legs[1]["mark"] = 2091.2
+                    legs[1]["unrealized_source"] = "venue_mark"
+                    return legs
                 svc._read_legs = fake_read_legs
 
                 async with http.post(
@@ -100,6 +107,8 @@ def test_operations_lifecycle():
                     preview = await r.json()
                 assert preview["allowed"] is True
                 assert preview["legs"][0]["position"] == 0.5
+                assert preview["legs"][0]["unrealized"] == 3.35
+                assert preview["legs"][1]["unrealized"] == -0.98
                 assert preview["expires_ts"] > preview["created_ts"]
 
                 # ---- shared-market conflict: a second live worker on the

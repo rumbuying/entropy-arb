@@ -234,8 +234,14 @@ export function mount(container) {
     }
     function renderPreview() {
       const legs = preview.legs || [];
+      const hasUpl = legs.some(l => l.unrealized !== null
+        && l.unrealized !== undefined);
       const tblEl = table([t("v2.acct.exchanges"), t("col.position"),
-                           t("col.equity"), t("v2.runs.col.data_age")]);
+                           t("col.equity"),
+                           ...(hasUpl ? [t("v2.runs.pv_mark"),
+                                      t("v2.runs.pv_upl")] : []),
+                           t("v2.runs.col.data_age")]);
+      let uplSum = null;
       for (const l of legs) {
         const tr = el("tr");
         tr.appendChild(el("td", { text: `${l.leg} · ${l.venue}` }));
@@ -243,15 +249,47 @@ export function mount(container) {
           l.error ? "—" : String(l.position)));
         tr.appendChild(el("td", { class: "num" },
           l.equity === null || l.equity === undefined ? "—" : String(l.equity)));
+        if (hasUpl) {
+          tr.appendChild(el("td", { class: "num" },
+            l.mark === null || l.mark === undefined
+              ? "—" : String(l.mark)));
+          const cls = l.unrealized > 0 ? "pos"
+            : l.unrealized < 0 ? "neg" : "muted";
+          tr.appendChild(el("td", { class: "num " + cls },
+            l.unrealized === null || l.unrealized === undefined
+              ? "—" : (l.unrealized >= 0 ? "+" : "")
+                      + Number(l.unrealized).toFixed(2)));
+          if (l.unrealized !== null && l.unrealized !== undefined) {
+            uplSum = (uplSum ?? 0) + l.unrealized;
+          }
+        }
         tr.appendChild(el("td", { class: l.error ? "err" : "muted" },
           l.error ? String(l.error) : (l.book_ready ? "✓" : "…")));
         tblEl.tbody.appendChild(tr);
+      }
+      if (hasUpl) {
+        const total = el("tr");
+        total.appendChild(el("td", { text: t("v2.runs.pv_total") }));
+        total.appendChild(el("td", {}));
+        total.appendChild(el("td", {}));
+        total.appendChild(el("td", {}));
+        total.appendChild(el("td", {
+          class: "num " + (uplSum > 0 ? "pos" : uplSum < 0 ? "neg" : "muted"),
+          text: uplSum === null ? "—"
+            : (uplSum >= 0 ? "+" : "") + Number(uplSum).toFixed(2),
+        }));
+        total.appendChild(el("td", {}));
+        tblEl.tbody.appendChild(total);
       }
       const parts = [
         el("div", { class: "note" }, t("v2.runs.preview_scope",
           { keys: (preview.leg_keys || []).join(", ") })),
         tblEl.node,
       ];
+      if (hasUpl) {
+        parts.push(el("div", { class: "note" },
+          t("v2.runs.pv_upl_note")));
+      }
       if ((preview.conflicts || []).length) {
         parts.push(el("div", { class: "note err" },
           t("v2.runs.preview_conflict"), ": ",
