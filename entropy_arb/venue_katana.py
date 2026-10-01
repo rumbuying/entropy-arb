@@ -274,6 +274,9 @@ class KatanaSigner:
 
 class KatanaVenue:
     kind = "katana"
+    # funding history verified live 2026-10-01: GET /fundingPayments
+    # (HMAC-signed) returns per-interval signed USD payments
+    funding_supported = True
     maker_capable = True      # implements the maker contract (see maker.py)
 
     def __init__(self, conf: VenueConf, session: aiohttp.ClientSession,
@@ -693,6 +696,39 @@ class KatanaVenue:
                 continue
             total += float(p.get("quantity") or 0.0)
         return total
+
+    async def fetch_funding(self, market: Optional[str] = None) -> list:
+        """Funding payments for this wallet (optionally one market).
+
+        VERIFIED against the live API (2026-10-01): GET /fundingPayments,
+        HMAC-signed via auth_params; returns per-interval rows
+        {market, paymentQuantity (USD, signed from the account's
+        perspective: negative = paid), positionQuantity, fundingRate,
+        indexPrice, time (ms)}. The unsigned /fundingRates is public.
+        ~8h funding intervals; the un-parameterized call returns the
+        recent window (≥5 days observed), which the console collector
+        dedupes by (market, time)."""
+        assert self.signer is not None
+        params, qs = self.signer.auth_params(
+            {"market": market} if market else None)
+        rows = await self._get("/fundingPayments", qs=qs,
+                               headers=self.signer.hmac_headers(qs))
+        out = []
+        for r in rows if isinstance(rows, list) else []:
+            try:
+                t_ms = int(r.get("time") or 0)
+                qty = float(r.get("paymentQuantity") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            out.append({
+                "ts": t_ms / 1000.0,
+                "market": r.get("market"),
+                "amount_usd": qty,          # signed USD payment
+                "rate": float(r.get("fundingRate") or 0.0),
+                "index_price": float(r.get("indexPrice") or 0.0),
+                "position_qty": float(r.get("positionQuantity") or 0.0),
+            })
+        return out
 
     async def close(self) -> None:
         pass

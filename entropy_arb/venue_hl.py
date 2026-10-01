@@ -66,6 +66,7 @@ class HLAccount:
 
 class HLVenue:
     kind = "hl"
+    # funding unsupported: HL /info fundingHistory returns 422 deserialize-error on every documented payload shape (verified live 2026-10-01)
 
     def __init__(self, conf: VenueConf, api_url: str, ws_url: str,
                  session: aiohttp.ClientSession, settle_timeout_sec: float) -> None:

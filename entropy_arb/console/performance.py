@@ -105,18 +105,72 @@ def performance_for_strategy(storage, *, strategy_id: str,
 
     marks_start: Dict[tuple, Decimal] = {}
     marks_end: Dict[tuple, Decimal] = {}
+
+    # ---- funding (§6.1): signed USD payments collected from VERIFIED
+    # venue APIs (katana /fundingPayments). Shared-account payments are
+    # flagged by the collector and refuse to count as strategy net (§6.4).
+    funding_net = None
+    funding_partial = False
+    funding_seen = False
+    for ev in events:
+        if ev.get("event_type") != "funding":
+            continue
+        try:
+            p = json.loads(ev.get("payload_json") or "{}")
+        except Exception:
+            continue
+        amt = L.D(p.get("amount_usd"))
+        if amt is None:
+            continue
+        funding_seen = True
+        funding_net = (funding_net or L.ZERO) + amt
+        if p.get("shared_account_market"):
+            funding_partial = True
+    if funding_net is not None:
+        funding_net = L.D(funding_net)
+
     result = L.compute_period(
         fills_start=fills_start, fills_period=fills_period,
         marks_start=marks_start, marks_end=marks_end,
-        funding_net=None,                 # no attributed funding source yet
+        funding_net=funding_net,
         fees_period=None,
         unresolved_in_scope=unresolved,
         fills_have_ids=all(f.fill_id for f in fills_period) if fills_period
         else True,
-        funding_source=None, fee_source="venue_fill",
+        funding_source="venue_api" if funding_seen else None,
+        fee_source="venue_fill",
         mark_source="valuation_snapshot" if unreal_start is not None
         or unreal_end is not None else None,
         unrealized_start=unreal_start, unrealized_end=unreal_end)
+
+    # §6.3 gate 5: "reconciled" additionally requires a real account-level
+    # reconciliation run (positions & cash vs the exchange, residuals
+    # recorded). The API computation alone never performs one, so the
+    # honest ceiling for this endpoint is "estimated" — a genuine
+    # reconciliation run is a separate, operator-triggered process.
+    if result["status"] == "reconciled":
+        result["status"] = "estimated"
+        result["missing"].append({
+            "code": "reconciliation_run_missing",
+            "message": "各项来源齐备但未执行与交易所账户事实的对账运行 —— "
+                       "封顶为估算；对账运行是独立的操作流程"})
+
+    # partial funding coverage: some legs' venues have no verified funding
+    # API — the component covers the verified legs only
+    strategy_row = storage.get_strategy(strategy_id)
+    if strategy_row and funding_seen:
+        supported = {"katana"}
+        for vk in (strategy_row.get("base_venue"),
+                   strategy_row.get("hedge_venue")):
+            if vk and vk not in supported:
+                funding_partial = True
+    if funding_partial:
+        result["missing"].append({
+            "code": "funding_partial",
+            "message": "资金费仅覆盖已验证的交易所（katana）—— 其余腿的"
+                       "资金费未计入，净收益仍不可给"})
+        result["status"] = "incomplete"
+        result["net_pnl"] = None
 
     # ---- persist the reconciliation (§7.2): every computation leaves a
     # revisable record; old revisions are never overwritten

@@ -186,6 +186,7 @@ class AccountOrdersFeed:
 
 class LighterVenue:
     kind = "lighter"
+    # funding unsupported: zkLighter API blocks funding paths (403 incl. unknown-path probe; verified live 2026-10-01); account JSON carries no funding fields
 
     def __init__(self, conf: VenueConf, session: aiohttp.ClientSession,
                  settle_timeout_sec: float) -> None:

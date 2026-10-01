@@ -31,14 +31,14 @@ logging:
 """
 
 
-def _mkfill(i, ts, side, qty, px, fill_id):
+def _mkfill(i, ts, side, qty, px, fill_id, fee=None):
     return {"schema_version": 1, "event_type": "maker_fill",
             "run_id": "run-x", "strategy_id": None, "event_ts": ts,
             "order_id": f"o{i}", "venue_fill_id": fill_id, "side": side,
             "qty_delta": qty, "price": px, "symbol": "SNDK",
             "venue": "KATANA",
-            "fee": {"amount": 0.01, "currency": "USDC",
-                    "source": "venue_fill"}}
+            "fee": fee or {"amount": 0.01, "currency": "USDC",
+                           "source": "venue_fill"}}
 
 
 def test_boundary_valuations_and_attribution():
@@ -180,3 +180,116 @@ def test_boundary_valuations_and_attribution():
             storage.close()
 
     asyncio.run(run())
+
+
+def test_funding_collection_and_attribution():
+    """Katana funding (verified API) → events → performance funding
+    component; shared-account payments refuse to become strategy net."""
+    from entropy_arb.venue_katana import KatanaVenue
+
+    async def fake_fetch_funding(self, market=None):
+        return [
+            {"ts": 1790323200.0, "market": "HYPE-USD",
+             "amount_usd": -1.73, "rate": 0.0001, "index_price": 92.97,
+             "position_qty": 2.0},
+            {"ts": 1790352000.0, "market": "HYPE-USD",
+             "amount_usd": 0.44, "rate": -0.00005, "index_price": 90.0,
+             "position_qty": 2.2},
+        ]
+
+    orig = KatanaVenue.fetch_funding
+    KatanaVenue.fetch_funding = fake_fetch_funding
+    try:
+        tmp = tempfile.mkdtemp(prefix="console-v2-fund-")
+        storage = Storage(os.path.join(tmp, "v2.sqlite3"))
+        storage.create_strategy(name="F", symbol="HYPE",
+                                type_="maker_hedge", base_venue="katana",
+                                base_market="", hedge_venue="katana")
+        sid = storage.list_strategies()[0]["id"]
+        # fills with ids + fees: entry buy 1@100, exit sell 1@106
+        for i, (side, px, fkey) in enumerate(
+                [("buy", "100", "f1"), ("sell", "106", "f2")]):
+            ev = _mkfill(i, 1790300000.0 + i * 600, side, "1", px, fkey,
+                         fee={"amount": 0.01, "currency": "USDC",
+                              "source": "venue_fill"})
+            ev["run_id"] = "run-f"
+            storage.insert_event(
+                event_id=f"funde:{i}", event_type="maker_fill",
+                import_batch="b", source_id=1, source_line=i + 1,
+                event_ts=ev["event_ts"], payload=ev, strategy_id=sid,
+                run_id="run-f", dedupe_key=f"f:{fkey}", unresolved=False)
+        # funding events: one normal, one shared-account
+        for i, (ts, amt, shared) in enumerate(
+                [(1790323200.0, -1.73, False),
+                 (1790352000.0, 0.44, True)]):
+            storage.insert_event(
+                event_id=f"fund:{i}", event_type="funding",
+                import_batch="live", source_id=0, source_line=0,
+                event_ts=ts,
+                payload={"amount_usd": amt, "market": "HYPE-USD",
+                         "shared_account_market": shared,
+                         "source": "venue_api"},
+                strategy_id=sid, venue="katana",
+                dedupe_key=f"f:katana:HYPE-USD:{int(ts * 1000)}",
+                unresolved=False)
+        # boundary valuation near period start
+        storage.save_valuation(strategy_id=sid, boundary="t",
+                               ts=1790299800.0, mark_source="venue_mark",
+                               payload={"unrealized": 0.0})
+
+        from entropy_arb.console.performance import performance_for_strategy
+        perf = performance_for_strategy(
+            storage, strategy_id=sid, start_ts=1790299200.0,
+            end_ts=1790360000.0)
+        # funding component is REAL (−1.73 + 0.44), sourced venue_api...
+        assert perf["components"]["funding_net"] is not None
+        # ...but one payment is shared-account → net refuses (§6.4)
+        assert perf["net_pnl"] is None
+        codes = {m["code"] for m in perf["missing"]}
+        assert "funding_partial" in codes
+        assert perf["reconciliation_status"] == "incomplete"
+
+        # a second strategy with the SAME fills but only NON-shared
+        # funding on all-supported legs → estimated WITH a real net
+        s2row = storage.create_strategy(name="F2", symbol="HYPE",
+                                        type_="maker_hedge",
+                                        base_venue="katana",
+                                        base_market="",
+                                        hedge_venue="katana")
+        sid2 = s2row["id"]
+        for i, (side, px, fkey) in enumerate(
+                [("buy", "100", "g1"), ("sell", "106", "g2")]):
+            ev = _mkfill(i, 1790300000.0 + i * 600, side, "1", px, fkey)
+            ev["run_id"] = "run-g"
+            storage.insert_event(
+                event_id=f"funde2:{i}", event_type="maker_fill",
+                import_batch="b", source_id=1, source_line=i + 1,
+                event_ts=ev["event_ts"], payload=ev, strategy_id=sid2,
+                run_id="run-g", dedupe_key=f"f:{fkey}", unresolved=False)
+        storage.insert_event(
+            event_id="fund2:0", event_type="funding",
+            import_batch="live", source_id=0, source_line=0,
+            event_ts=1790323200.0,
+            payload={"amount_usd": -1.73, "market": "HYPE-USD",
+                     "shared_account_market": False,
+                     "source": "venue_api"},
+            strategy_id=sid2, venue="katana",
+            dedupe_key="f2:katana:HYPE-USD:1790323200000",
+            unresolved=False)
+        storage.save_valuation(strategy_id=sid2, boundary="t",
+                               ts=1790299800.0, mark_source="venue_mark",
+                               payload={"unrealized": 0.0})
+        perf2 = performance_for_strategy(
+            storage, strategy_id=sid2, start_ts=1790299200.0,
+            end_ts=1790360000.0)
+        codes2 = {m["code"] for m in perf2["missing"]}
+        assert "funding_partial" not in codes2
+        assert "funding_missing" not in codes2
+        assert perf2["reconciliation_status"] == "estimated"
+        assert perf2["net_pnl"] is not None
+        # gross 6 + funding −1.73 + unreal Δ (0−0=0) − fees 0.02 = 4.25
+        import decimal
+        assert decimal.Decimal(perf2["net_pnl"]) == decimal.Decimal("4.25")
+        storage.close()
+    finally:
+        KatanaVenue.fetch_funding = orig

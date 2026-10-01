@@ -124,6 +124,135 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         app["valuation_task"] = asyncio.create_task(
             _valuation_loop(), name="v2-valuations")
 
+    # ---- funding collection (spec §7.3/§8): poll VERIFIED funding APIs
+    # per running strategy leg and store signed USD payments as resolved
+    # events (dedupe key f:{venue}:{market}:{ts_ms}). Only venue kinds with
+    # a live-verified API are polled; unsupported venues are recorded once
+    # so the performance gates can declare funding coverage PARTIAL.
+    async def _funding_loop():
+        seen: set = set()              # (sid, venue, market, ts_ms)
+        covered_notes: dict = {}
+        while True:
+            try:
+                if storage is not None:
+                    from entropy_arb.console import venues as venues_mod
+                    for s in supervisor.list():
+                        if s["state"] != "running" or s["mode"] != "live":
+                            continue          # funding follows LIVE accounts
+                        run = next(
+                            (r for r in storage.list_runs(limit=100)
+                             if r["worker_id"] == s["id"]
+                             and r["state"] == "running"), None)
+                        sid = (run or {}).get("strategy_id")
+                        if not sid:
+                            continue
+                        py = venues_mod.load_profile_yaml(
+                            supervisor.profiles_dir, s["profile"])
+                        dex = ((py.get("entropy") or {}).get("dex")
+                               or "").strip()
+                        legs = []
+                        if (s.get("base") or "hl") == "hl":
+                            legs.append(("hl", "entropy", dex or "io"))
+                        else:
+                            legs.append((s["base"], "entropy", ""))
+                        hedge = s.get("hedge") or ""
+                        legs.append(("hl" if hedge == "tradexyz" else hedge,
+                                     "hedge",
+                                     "xyz" if hedge == "tradexyz" else ""))
+                        for venue_kind, leg, leg_dex in legs:
+                            supported = venue_kind == "katana"
+                            if not supported:
+                                covered_notes.setdefault(
+                                    (sid, venue_kind, leg), {
+                                        "strategy_id": sid, "leg": leg,
+                                        "venue": venue_kind,
+                                        "supported": False})
+                                continue
+                            try:
+                                v = ops_mod._make_venue(
+                                    _diag_conf(
+                                        venue_kind, s["symbol"], leg
+                                        if venue_kind != "katana" else
+                                        "hedge", leg_dex,
+                                        secrets.env_path),
+                                    __import__("aiohttp").ClientSession(),
+                                    5.0)
+                                await v.load_market()
+                                v.init_signer()
+                                rows = await asyncio.wait_for(
+                                    v.fetch_funding(), 30)
+                            except Exception as e:
+                                log.warning("funding poll failed %s %s: %r",
+                                            sid[:16], venue_kind, e)
+                                continue
+                            finally:
+                                try:
+                                    await v.session.close()
+                                except Exception:
+                                    pass
+                            covered_notes.setdefault(
+                                (sid, venue_kind, leg), {
+                                    "strategy_id": sid, "leg": leg,
+                                    "venue": venue_kind, "supported": True})
+                            # shared account-market: the funding payment
+                            # belongs to the ACCOUNT (§6.4) — mark events
+                            # shared so performance refuses to sum them
+                            # as strategy-attributed net
+                            from .operations import leg_keys_for_worker
+                            target = {f"{venue_kind}:{s['symbol']}"
+                                      .upper()}
+                            others = [
+                                o["id"] for o in supervisor.list()
+                                if o["id"] != s["id"]
+                                and o["state"] == "running"
+                                and any(k.upper() in target
+                                        for k in leg_keys_for_worker(
+                                            supervisor.profiles_dir, o))
+                            ]
+                            shared = bool(others)
+                            for row in rows:
+                                key = (sid, row["market"],
+                                       int(row["ts"] * 1000))
+                                if key in seen:
+                                    continue
+                                seen.add(key)
+                                storage.insert_event(
+                                    event_id=f"funding:{sid}:"
+                                             f"{row['market']}:"
+                                             f"{int(row['ts'] * 1000)}",
+                                    event_type="funding",
+                                    import_batch="live",
+                                    source_id=0, source_line=0,
+                                    event_ts=row["ts"],
+                                    payload={
+                                        "amount_usd": row["amount_usd"],
+                                        "market": row["market"],
+                                        "rate": row["rate"],
+                                        "index_price": row["index_price"],
+                                        "position_qty":
+                                            row["position_qty"],
+                                        "venue": venue_kind, "leg": leg,
+                                        "shared_account_market": shared,
+                                        "shared_with": others,
+                                        "source": "venue_api"},
+                                    strategy_id=sid,
+                                    run_id=run["run_id"],
+                                    venue=venue_kind,
+                                    instrument=row["market"],
+                                    dedupe_key=f"f:{venue_kind}:"
+                                               f"{row['market']}:"
+                                               f"{int(row['ts'] * 1000)}",
+                                    unresolved=False)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("funding collection round failed")
+            await asyncio.sleep(900)
+
+    if storage is not None:
+        app["funding_task"] = asyncio.create_task(
+            _funding_loop(), name="v2-funding")
+
     def error_payload(e: OperationError, request_id=None) -> dict:
         out = {"error": e.code, "message": e.message,
                "details": e.details or {}}
