@@ -168,15 +168,16 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                         "venue": venue_kind,
                                         "supported": False})
                                 continue
+                            import aiohttp as _aio
+                            probe_sess = _aio.ClientSession()
                             try:
                                 v = ops_mod._make_venue(
                                     _diag_conf(
-                                        venue_kind, s["symbol"], leg
-                                        if venue_kind != "katana" else
-                                        "hedge", leg_dex,
+                                        venue_kind, s["symbol"],
+                                        "hedge" if venue_kind == "katana"
+                                        else leg, leg_dex,
                                         secrets.env_path),
-                                    __import__("aiohttp").ClientSession(),
-                                    5.0)
+                                    probe_sess, 5.0)
                                 await v.load_market()
                                 v.init_signer()
                                 rows = await asyncio.wait_for(
@@ -187,7 +188,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                 continue
                             finally:
                                 try:
-                                    await v.session.close()
+                                    await probe_sess.close()
                                 except Exception:
                                     pass
                             covered_notes.setdefault(
