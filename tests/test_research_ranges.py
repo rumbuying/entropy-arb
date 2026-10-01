@@ -165,3 +165,25 @@ def test_absolute_research_ranges():
             await server.close()
 
     asyncio.run(run())
+
+
+def test_headerless_minutes_file_parses():
+    """Live finding: rotation on the servers strips the header row from the
+    CURRENT minutes files — the parser must detect data-shaped first lines
+    and map them onto the standard recorder columns."""
+    from entropy_arb.analysis import load_rows
+    tmp = tempfile.mkdtemp(prefix="hdrless-")
+    path = os.path.join(tmp, "m.csv")
+    blocks = [(1790265600.0, 10), (1790350200.0, 10)]   # no header row
+    with open(path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        for start, n in blocks:
+            for i in range(n):
+                w.writerow([f"{start + i * 60:.0f}", "2026-09-25T00:00:00Z",
+                            "1", "1.1", "2", "2.1", "1.5", "4.0", "2.0",
+                            "1.5", "4.0", "2.0", "-4.0", "-2.0",
+                            "-4.0", "-2.0", "12"])
+    rows = load_rows(path, 0, 0)                     # full range
+    assert len(rows) == 20 and rows[0]["prem"] == 1.5
+    rows2 = load_rows(path, 0, 0, start_ts=1790350200.0, end_ts=1790351000.0)
+    assert len(rows2) == 10

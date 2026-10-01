@@ -30,11 +30,24 @@ def pctl(sorted_vals: list, q: float) -> float:
     return sorted_vals[lo] * (hi - k) + sorted_vals[hi] * (k - lo)
 
 
+RECORDER_HEADER = ["minute_ts", "time_utc",
+                   "entropy_bid", "entropy_ask", "hedge_bid", "hedge_ask",
+                   "premium_open_bps", "premium_high_bps", "premium_low_bps",
+                   "premium_close_bps", "premium_mean_bps", "premium_std_bps",
+                   "sell_edge_mean_bps", "sell_edge_max_bps",
+                   "buy_edge_mean_bps", "buy_edge_max_bps", "samples"]
+
+
 def _read_csv(path: str, hours: float, min_samples: int,
               start_ts: Optional[float] = None,
               end_ts: Optional[float] = None) -> list:
     """Relative window (hours) or absolute UTC range [start_ts, end_ts) —
-    never both; filtering happens BEFORE any statistics (spec §10.6)."""
+    never both; filtering happens BEFORE any statistics (spec §10.6).
+
+    Tolerates headerless files: rotation scripts on the servers strip the
+    header row from the live minutes files, so the first line is detected
+    by shape (first field parses as a unix timestamp) and mapped onto the
+    standard recorder columns."""
     cutoff = None
     if start_ts is not None:
         cutoff = start_ts
@@ -42,7 +55,23 @@ def _read_csv(path: str, hours: float, min_samples: int,
         cutoff = time.time() - hours * 3600
     rows = []
     with open(path, newline="") as fh:
-        for r in csv.DictReader(fh):
+        reader = csv.reader(fh)
+        first = next(reader, None)
+        if first is None:
+            return rows
+        headerless = bool(first) and \
+            first[0].strip().replace(".", "", 1).isdigit()
+        if headerless:
+            header = RECORDER_HEADER[:len(first)] if len(first) <= \
+                len(RECORDER_HEADER) else RECORDER_HEADER
+            if len(header) != len(first):
+                return rows
+        else:
+            header = first
+        import itertools
+        for fields in itertools.chain(([first] if headerless else []),
+                                      reader):
+            r = dict(zip(header, fields))
             try:
                 ts = float(r["minute_ts"])
                 if cutoff is not None and ts < cutoff:
