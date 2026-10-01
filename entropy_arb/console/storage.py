@@ -591,6 +591,42 @@ class Storage:
              json.dumps(payload, ensure_ascii=False)))
         self.db.commit()
 
+    def nearest_valuation(self, strategy_id: str, ts: float,
+                          max_age_sec: float = 900.0) \
+            -> Optional[Dict[str, Any]]:
+        """Nearest snapshot within `max_age_sec` (spec §6.5 freshness) —
+        used as period boundary valuation; outside the window the boundary
+        counts as missing instead of extrapolating."""
+        r = self.db.execute(
+            "SELECT * FROM valuations WHERE strategy_id=? AND ts BETWEEN ?"
+            " AND ? ORDER BY ABS(ts - ?) LIMIT 1",
+            (strategy_id, ts - max_age_sec, ts + max_age_sec,
+             ts)).fetchone()
+        return dict(r) if r else None
+
+    def valuations_series(self, strategy_id: str, *,
+                          start_ts: Optional[float] = None,
+                          end_ts: Optional[float] = None,
+                          limit: int = 2000) -> List[Dict[str, Any]]:
+        sql = "SELECT ts, payload_json FROM valuations WHERE strategy_id=?"
+        args: list = [strategy_id]
+        if start_ts is not None:
+            sql += " AND ts >= ?"
+            args.append(start_ts)
+        if end_ts is not None:
+            sql += " AND ts < ?"
+            args.append(end_ts)
+        sql += " ORDER BY ts LIMIT ?"
+        args.append(limit)
+        out = []
+        for r in self.db.execute(sql, args):
+            try:
+                out.append({"ts": r["ts"],
+                            **json.loads(r["payload_json"] or "{}")})
+            except Exception:
+                continue
+        return out
+
     # ---------------------------------------------------------- experiments
 
     def create_experiment(self, *, strategy_id: str, profile: str,

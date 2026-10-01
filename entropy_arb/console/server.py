@@ -76,6 +76,54 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         supervisor, profiles, secrets, storage)
     app["ops_service"] = ops_service
 
+    # ---- boundary valuation snapshots (spec §6.5): a console background
+    # task records a CONTEMPORANEOUS valuation per strategy every ~5 min so
+    # any later period boundary finds a mark recorded AT THE TIME (never a
+    # retrodictive current-book valuation). Data comes from the worker
+    # state proxy (venue-reported unrealized); read-only, never blocks or
+    # influences the trading path.
+    async def _valuation_loop():
+        while True:
+            try:
+                if storage is not None:
+                    for s in supervisor.list():
+                        if s["state"] != "running":
+                            continue
+                        run = next(
+                            (r for r in storage.list_runs(limit=100)
+                             if r["worker_id"] == s["id"]
+                             and r["state"] == "running"), None)
+                        sid = (run or {}).get("strategy_id")
+                        if not sid:
+                            continue
+                        snap = await supervisor.snapshot(s["id"])
+                        if not snap:
+                            continue
+                        sess = snap.get("session") or {}
+                        upl = sess.get("unrealized_usd")
+                        if upl is None:
+                            continue
+                        storage.save_valuation(
+                            strategy_id=sid, boundary="timeseries",
+                            ts=time.time(), mark_source="venue_mark",
+                            payload={
+                                "unrealized": upl,
+                                "pnl_mtm": sess.get("pnl_mtm"),
+                                "positions": {
+                                    k: v.get("position")
+                                    for k, v in (snap.get("venues")
+                                                 or {}).items()},
+                            })
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("valuation snapshot round failed")
+            await asyncio.sleep(300)
+
+    if storage is not None:
+        app["valuation_task"] = asyncio.create_task(
+            _valuation_loop(), name="v2-valuations")
+
     def error_payload(e: OperationError, request_id=None) -> dict:
         out = {"error": e.code, "message": e.message,
                "details": e.details or {}}
@@ -1270,6 +1318,165 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 continue
         return cands
 
+    async def api_strategy_attribution(request):
+        """Attribution (spec §10.2): kind=pnl_components (same gates as the
+        performance API) + kind=execution_edge / execution_loss built from
+        the per-fill evidence. Execution edge is the entry-price margin —
+        NOT net profit (§6.2) and NOT summable with the components (§6.6);
+        every block labels its own data gaps."""
+        sid = request.match_info["sid"]
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        if storage.get_strategy(sid) is None:
+            return web.json_response(
+                {"error": "not_found", "message": "unknown strategy"},
+                status=404)
+        try:
+            start_ts, end_ts, tzname = _abs_range_or_400(request)
+            if start_ts is None:
+                raise web.HTTPBadRequest(text=json.dumps(
+                    {"error": "invalid_range",
+                     "message": "start/end/timezone required"}),
+                    content_type="application/json")
+        except web.HTTPBadRequest as e:
+            return web.Response(status=400, text=e.text,
+                                content_type=e.content_type)
+        from .performance import performance_for_strategy
+        perf = performance_for_strategy(storage, strategy_id=sid,
+                                        start_ts=start_ts, end_ts=end_ts,
+                                        timezone=tzname or "Asia/Shanghai")
+        # per-direction execution evidence from the raw events
+        by_dir: dict = {}
+        for ev in storage.events_for_strategy(sid, start_ts=start_ts,
+                                              end_ts=end_ts, limit=50000):
+            try:
+                p = json.loads(ev.get("payload_json") or "{}")
+            except Exception:
+                continue
+            dkey = p.get("direction") or (
+                f"{p.get('side')}" if p.get("side") else None)
+            if not dkey:
+                continue
+            rec = by_dir.setdefault(dkey, {
+                "n": 0, "filled": 0, "exp_edge_usd": 0.0,
+                "fill_edge_usd": 0.0, "loss_usd": 0.0, "has_fee": False,
+                "source": ev.get("event_type"),
+            })
+            rec["n"] += 1
+            try:
+                if (p.get("buy_status") or "").lower() == "filled" and \
+                        (p.get("sell_status") or "").lower() == "filled":
+                    rec["filled"] += 1
+            except Exception:
+                pass
+            for k in ("exp_edge_usd", "fill_edge_usd"):
+                v = p.get(k)
+                if isinstance(v, (int, float)):
+                    rec[k] += v
+            # execution loss = expected minus actually captured (per row)
+            ee, fe = p.get("exp_edge_usd"), p.get("fill_edge_usd")
+            if isinstance(ee, (int, float)) and isinstance(fe, (int, float)):
+                rec["loss_usd"] += ee - fe
+            if isinstance(p.get("fee"), dict) and \
+                    p["fee"].get("amount") is not None:
+                rec["has_fee"] = True
+        def _blk(kind, payload, missing, note=None):
+            out = {"kind": kind, "period": perf["period"],
+                   "currency": perf["currency"], **payload}
+            if missing:
+                out["missing"] = missing
+            if note:
+                out["note"] = note
+            return out
+        comp = perf["components"] or {}
+        blocks = [
+            _blk("pnl_components", {"components": comp},
+                 perf["missing"],
+                 note="各分量来自对账门控的同一计算 —— 缺资金费时净收益为空"),
+        ]
+        for dkey, rec in sorted(by_dir.items()):
+            blocks.append(_blk(
+                "execution_edge",
+                {"direction": dkey, "attempts": rec["n"],
+                 "two_leg_filled": rec["filled"],
+                 "entry_edge_usd_est": round(rec["fill_edge_usd"], 4),
+                 "source": rec["source"]},
+                ([{"code": "entry_edge_not_net",
+                   "message": "入场价差边际不是净收益（§6.2）"}]
+                 + ([] if rec["has_fee"] else
+                    [{"code": "fee_missing",
+                      "message": "旧证据行无实际手续费"}]))))
+            if rec["loss_usd"]:
+                blocks.append(_blk(
+                    "execution_loss",
+                    {"direction": dkey,
+                     "loss_usd_est": round(rec["loss_usd"], 4)},
+                    [],
+                    note="执行损耗（预期-实际）单独展示，不与收益组成相加"))
+        return web.json_response({
+            "schema_version": 1, "as_of": time.time(),
+            "strategy_id": sid,
+            "reconciliation_status": perf["reconciliation_status"],
+            "attribution": blocks})
+
+    async def api_run_logs(request):
+        """Persistent logs by RUN id (spec §10.2): the profile's engine log
+        file (tail) plus this run's event records. The engine log is
+        profile-scoped (covers several runs); the events file is
+        run-scoped. Not the current worker's memory buffer."""
+        rid = request.match_info["run_id"]
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        run = storage.get_run(rid)
+        if run is None:
+            return web.json_response({"error": "not_found",
+                "message": "unknown run"}, status=404)
+        try:
+            limit = min(int(request.query.get("limit", "200")), 1000)
+        except ValueError:
+            limit = 200
+        log_lines = []
+        log_path = None
+        try:
+            from .venues import load_profile_yaml
+            py = load_profile_yaml(supervisor.profiles_dir, run["profile"])
+            lp = (py.get("logging") or {}).get("file")
+            if lp:
+                log_path = lp if os.path.isabs(lp) else os.path.join(
+                    supervisor.root, lp)
+                if os.path.exists(log_path):
+                    with open(log_path, errors="replace") as fh:
+                        fh.seek(0, os.SEEK_END)
+                        size = fh.tell()
+                        fh.seek(max(0, size - 256 * 1024))
+                        chunk = fh.read()
+                    lines = chunk.splitlines()
+                    if size > 256 * 1024 and lines:
+                        lines = lines[1:]
+                    log_lines = [ln for ln in lines if ln.strip()][
+                        -limit:]
+        except Exception as e:
+            log_lines = [f"(engine log unreadable: {e!r})"]
+        evs = storage.events_for_strategy(
+            run["strategy_id"] or "", limit=100000) \
+            if run["strategy_id"] else []
+        run_events = [e for e in evs if e.get("run_id") == rid][-limit:]
+        return web.json_response({
+            "schema_version": 1, "as_of": time.time(), "run_id": rid,
+            "profile": run["profile"],
+            "mode": run["mode"], "state": run["state"],
+            "started_ts": run["started_ts"], "ended_ts": run["ended_ts"],
+            "engine_log": {"path": log_path, "lines": log_lines,
+                           "scope": "profile (covers several runs)"},
+            "events": [{"event_id": e["event_id"],
+                        "event_type": e["event_type"],
+                        "event_ts": e["event_ts"],
+                        "payload": json.loads(e["payload_json"] or "{}")}
+                       for e in run_events],
+        })
+
     async def api_accounts(request):
         """Deduped account view (spec §10.2 / §5.5): live worker snapshots
         first; venue groups without a live reporter are filled by a cached
@@ -1426,6 +1633,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                        api_strategy_executions)
     app.router.add_get("/api/strategies/{sid}/recommendations",
                        api_strategy_recommendations)
+    app.router.add_get("/api/strategies/{sid}/attribution",
+                       api_strategy_attribution)
+    app.router.add_get("/api/runs/{run_id}/logs", api_run_logs)
     app.router.add_get("/api/experiments", api_experiments)
     app.router.add_post("/api/experiments", api_experiments_create)
     app.router.add_get("/api/experiments/{eid}", api_experiment_get)

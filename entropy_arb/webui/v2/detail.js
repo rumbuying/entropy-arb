@@ -107,13 +107,20 @@ export function mount(container, ctx) {
         r.started_ts ? new Date(r.started_ts * 1000).toLocaleString() : "—"));
       tr.appendChild(el("td", { class: "num muted" },
         r.config_version ? r.config_version.slice(0, 13) + "…" : "—"));
-      runsTbl.tbody.appendChild(tr);
+        const acts = el("td", {});
+        acts.appendChild(el("button", {
+          text: t("v2.det.run_logs"), onclick: () => showRunLogs(r),
+        }));
+        tr.appendChild(acts);
+        runsTbl.tbody.appendChild(tr);
     }
     container.appendChild(card(t("v2.det.runs"), runsTbl.node));
     // performance panel with the shared time ranges (V2-011)
     container.appendChild(buildPerfPanel(id));
     // execution evidence list (V2-012, paginated)
     container.appendChild(buildExecPanel(id));
+    // attribution (V2-012b): pnl components + per-direction execution edge
+    container.appendChild(buildAttributionPanel(id));
     // evidence / import
     const impBox = el("div");
     const impBtn = el("button", { class: "primary",
@@ -234,6 +241,47 @@ export function mount(container, ctx) {
     return box;
   }
 
+  function showRunLogs(r) {
+    const mask = el("div", { class: "modal-mask" });
+    const box = el("div", {},
+      el("h2", {}, `${t("v2.det.run_logs")} — ${r.run_id.slice(0, 13)}…`));
+    const logPre = el("pre", { class: "evlog" });
+    logPre.style.maxHeight = "260px";
+    logPre.style.whiteSpace = "pre";
+    const evPre = el("pre", { class: "evlog" });
+    evPre.style.maxHeight = "200px";
+    evPre.style.whiteSpace = "pre";
+    box.append(
+      el("div", { class: "section-title",
+        text: t("v2.det.run_logs_engine") }), logPre,
+      el("div", { class: "section-title",
+        text: t("v2.det.run_logs_events") }), evPre,
+      el("div", { class: "note" }, t("v2.det.run_logs_scope")));
+    const actions = el("div", { class: "actions" });
+    const close = el("button", { text: "✕" });
+    actions.appendChild(close);
+    box.appendChild(actions);
+    const modal = el("div", { class: "modal", style: "width:760px" }, box);
+    mask.appendChild(modal);
+    mask.addEventListener("click", e => {
+      if (e.target === mask) mask.remove();
+    });
+    document.body.appendChild(mask);
+    close.onclick = () => mask.remove();
+    getJSON(`/api/runs/${encodeURIComponent(r.run_id)}/logs?limit=200`)
+      .then(data => {
+        logPre.textContent = (data.engine_log?.lines || []).join("\n")
+          || "—";
+        logPre.scrollTop = logPre.scrollHeight;
+        evPre.textContent = (data.events || []).map(ev =>
+          `${new Date(ev.event_ts * 1000).toLocaleTimeString()} `
+          + `${ev.event_type}`).join("\n") || "—";
+      })
+      .catch(e => {
+        logPre.textContent = "✗ " + (e.message || String(e));
+      });
+  }
+
   function buildExecPanel(id) {
     const tbl = table([t("v2.det.exec_time"), t("v2.det.exec_type"),
                        t("v2.det.exec_detail"), t("v2.det.exec_src")]);
@@ -297,6 +345,91 @@ export function mount(container, ctx) {
       bits.push("fee:—");
     }
     return bits.join(" · ") || "—";
+  }
+
+  function buildAttributionPanel(id) {
+    const rangeSel = el("select", {},
+      el("option", { value: "2" }, t("v2.det.attr_last", { n: 2 })),
+      el("option", { value: "7" }, t("v2.det.attr_last", { n: 7 })));
+    const goBtn = el("button", { class: "primary",
+      text: t("v2.det.attr_load") });
+    const out = el("div");
+    const box = card(t("v2.det.attr_title"),
+      el("div", { style: "display:flex;gap:10px;align-items:center;margin-bottom:8px" },
+        rangeSel, goBtn), out);
+    goBtn.onclick = () => load().catch(() => {});
+
+    async function load() {
+      out.replaceChildren(stateBox({ status: "loading" }));
+      let attr;
+      try {
+        const now = new Date();
+        const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1)
+          .padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const start = fmt(new Date(now - (Number(rangeSel.value) - 1)
+          * 86400000));
+        const q = new URLSearchParams({ start, end: fmt(now),
+                                        timezone: "Asia/Shanghai" });
+        attr = await getJSON(`/api/strategies/${encodeURIComponent(id)
+          }/attribution?${q}`);
+      } catch (e) {
+        out.replaceChildren(stateBox({
+          status: "error", message: String(e.message || e), onRetry: load,
+        }));
+        return;
+      }
+      out.replaceChildren();
+      for (const b of attr.attribution || []) {
+        if (b.kind === "pnl_components") {
+          const kv = el("div", { class: "kv", style: "max-width:560px" });
+          const labels = {
+            gross_realized: t("v2.det.c_gross"),
+            unrealized_start: t("v2.det.c_us"),
+            unrealized_end: t("v2.det.c_ue"),
+            funding_net: t("v2.det.c_funding"),
+            trading_fees: t("v2.det.c_fees"),
+            other_costs: t("v2.det.c_other"),
+          };
+          for (const [k, label] of Object.entries(labels)) {
+            const v = b.components ? b.components[k] : null;
+            kv.append(el("span", { class: "k" }, label),
+              el("span", { class: "v num" },
+                v === null || v === undefined ? "—" : String(v)));
+          }
+          out.appendChild(el("div", { class: "section-title",
+            text: t("v2.det.attr_components") }));
+          out.appendChild(kv);
+          for (const m of b.missing || []) {
+            out.appendChild(el("div", { class: "note warn" },
+              `⚠ [${m.code}] ${m.message}`));
+          }
+        } else if (b.kind === "execution_edge") {
+          out.appendChild(el("div", { class: "section-title" },
+            `${t("v2.det.attr_edge")} — ${b.direction}`));
+          out.appendChild(el("div", { class: "kv",
+            style: "max-width:560px" },
+            el("span", { class: "k" }, t("v2.det.attr_attempts")),
+            el("span", { class: "v num" },
+              `${b.two_leg_filled}/${b.attempts}`),
+            el("span", { class: "k" }, t("v2.det.attr_entry_edge")),
+            el("span", { class: "v num" },
+              b.entry_edge_usd_est === null
+                ? "—" : String(b.entry_edge_usd_est))));
+          for (const m of b.missing || []) {
+            out.appendChild(el("div", { class: "note warn" },
+              `⚠ [${m.code}] ${m.message}`));
+          }
+        } else if (b.kind === "execution_loss") {
+          out.appendChild(el("div", { class: "note" },
+            `${t("v2.det.attr_loss")} — ${b.direction}: `
+            + `${b.loss_usd_est} ${b.currency} `
+            + `(${t("v2.det.attr_loss_note")})`));
+        }
+      }
+      out.appendChild(el("div", { class: "note" }, t("v2.det.attr_note")));
+    }
+    load().catch(() => {});
+    return box;
   }
 
   async function runImport(id, box) {

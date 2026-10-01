@@ -146,14 +146,21 @@ def compute_period(*, fills_start: List[Fill], fills_period: List[Fill],
                    fills_have_ids: bool = True,
                    funding_source: Optional[str] = None,
                    fee_source: Optional[str] = None,
-                   mark_source: Optional[str] = None) -> Dict[str, Any]:
+                   mark_source: Optional[str] = None,
+                   unrealized_start: Optional[Decimal] = None,
+                   unrealized_end: Optional[Decimal] = None)         -> Dict[str, Any]:
     """The §6.1 formula plus the §6.3 gates.
 
     fills_start: ALL fills up to (excluding) period start — needed for the
     opening lots (§6.1 期间包括边界前已有库存). fills_period: fills with
     start <= ts < end. fees/funding are signed: a fee REBATE is a negative
     trading_fees component. missing fee/funding/mark → net None with the
-    reason listed."""
+    reason listed.
+
+    unrealized_start / unrealized_end: boundary totals from CONTEMPORANEOUS
+    valuation snapshots (§6.5 — recorded at the time, not a retrodictive
+    current-book valuation). When provided they override the FIFO+marks
+    computation; None keeps that boundary missing."""
     gross = ZERO
     fee_total = ZERO
     fee_known = True
@@ -183,8 +190,10 @@ def compute_period(*, fills_start: List[Fill], fills_period: List[Fill],
         else:
             fee_known = False
 
-    unreal_start = unrealized(fills_start, marks_start)
-    unreal_end = unrealized(fills_start + fills_period, marks_end)
+    unreal_start = unrealized(fills_start, marks_start) \
+        if unrealized_start is None else unrealized_start
+    unreal_end = unrealized(fills_start + fills_period, marks_end) \
+        if unrealized_end is None else unrealized_end
 
     missing: List[dict] = []
     if unreal_start is None:

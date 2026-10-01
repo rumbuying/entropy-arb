@@ -74,9 +74,35 @@ def performance_for_strategy(storage, *, strategy_id: str,
                     and (end_ts is None or f.ts < end_ts)]
     unresolved = sum(1 for ev in events if ev.get("unresolved")
                      and ev.get("event_type") != "maker_fill")
-    # boundary marks: none are recorded yet — current books may NEVER be
-    # used to value history (§6.5). Until valuations are collected, both
-    # boundaries are unknown.
+
+    # ---- boundary valuations (§6.5): CONTEMPORANEOUS snapshots recorded by
+    # the console every ~5 min. A boundary counts only when a snapshot
+    # exists within ±15 min of the boundary instant — no extrapolation, no
+    # current-book retrodiction.
+    VALUATION_FRESHNESS = 900.0
+    unreal_start = unreal_end = None
+    boundary_notes = []
+    if start_ts is not None:
+        v0 = storage.nearest_valuation(strategy_id, start_ts,
+                                       VALUATION_FRESHNESS)
+        if v0:
+            p0 = json.loads(v0["payload_json"] or "{}")
+            unreal_start = L.D(p0.get("unrealized"))
+            boundary_notes.append({"boundary": "start", "ts": v0["ts"],
+                                   "source": v0["mark_source"]})
+        else:
+            boundary_notes.append({"boundary": "start", "missing": True})
+    if end_ts is not None:
+        v1 = storage.nearest_valuation(strategy_id, end_ts,
+                                       VALUATION_FRESHNESS)
+        if v1:
+            p1 = json.loads(v1["payload_json"] or "{}")
+            unreal_end = L.D(p1.get("unrealized"))
+            boundary_notes.append({"boundary": "end", "ts": v1["ts"],
+                                   "source": v1["mark_source"]})
+        else:
+            boundary_notes.append({"boundary": "end", "missing": True})
+
     marks_start: Dict[tuple, Decimal] = {}
     marks_end: Dict[tuple, Decimal] = {}
     result = L.compute_period(
@@ -87,7 +113,26 @@ def performance_for_strategy(storage, *, strategy_id: str,
         unresolved_in_scope=unresolved,
         fills_have_ids=all(f.fill_id for f in fills_period) if fills_period
         else True,
-        funding_source=None, fee_source="venue_fill", mark_source=None)
+        funding_source=None, fee_source="venue_fill",
+        mark_source="valuation_snapshot" if unreal_start is not None
+        or unreal_end is not None else None,
+        unrealized_start=unreal_start, unrealized_end=unreal_end)
+
+    # ---- persist the reconciliation (§7.2): every computation leaves a
+    # revisable record; old revisions are never overwritten
+    rec_id = storage.save_reconciliation(
+        strategy_id=strategy_id,
+        scope={"start": start_ts, "end": end_ts, "timezone": timezone},
+        rule_version=result["rule_version"],
+        status=result["status"],
+        net_pnl=result["net_pnl"],
+        components=result["components"],
+        missing=result["missing"],
+        residual={})
+
+    # ---- valuation series for the chart (gaps stay gaps — §4.4)
+    series = storage.valuations_series(strategy_id, start_ts=start_ts,
+                                       end_ts=end_ts)
 
     def _iso(ts):
         import datetime as _dt
@@ -114,7 +159,9 @@ def performance_for_strategy(storage, *, strategy_id: str,
             "fills_before_period": len(fills_start),
         },
         "missing": result["missing"],
-        "reconciliation": {"id": None, "residual": None, "tolerance": None},
-        "series": [],
+        "reconciliation": {"id": rec_id, "residual": None,
+                           "tolerance": None,
+                           "boundaries": boundary_notes},
+        "series": series,
         "rule_version": result["rule_version"],
     }
