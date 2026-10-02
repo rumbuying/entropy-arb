@@ -2,7 +2,8 @@
    Period net P&L comes from the performance API and shows the
    pending-reconciliation badge whenever it is null — never 0, never MTM.
    Live worker sessions stay as a separate, clearly-labelled operations
-   view. */
+   view. The contribution card (V2-012c) shows per-strategy period
+   components side by side. */
 
 import { getJSON } from "/static/api.js";
 import { t } from "/static/i18n.js";
@@ -15,6 +16,7 @@ export function mount(container, ctx) {
   const stamp = updatedStamp();
 
   const kpis = el("div", { class: "kpi-strip" });
+  const contribCard = buildContributionCard();
   const strategyCard = card(t("v2.ov.strategies"));
   const stratNote = el("div", { class: "note", style: "margin-bottom:8px" },
     t("v2.det.list_note"));
@@ -28,7 +30,81 @@ export function mount(container, ctx) {
     t("v2.ov.col.name"), t("v2.ov.col.state"), t("v2.ov.col.net"),
   ]);
   sessionCard.append(sessionTbl.node);
-  container.append(kpis, strategyCard, sessionCard);
+  container.append(kpis, contribCard, strategyCard, sessionCard);
+
+  // ---------------- per-strategy period contribution (V2-012c) ------------
+  function buildContributionCard() {
+    const rangeSel = el("select", {},
+      el("option", { value: "1" }, t("v2.time.today")),
+      el("option", { value: "2" }, t("v2.time.yesterday")),
+      el("option", { value: "7" }, t("v2.time.d7")));
+    const goBtn = el("button", { class: "primary",
+      text: t("v2.det.attr_load") });
+    const out = el("div");
+    const c = card(t("v2.ov.contrib_title"),
+      el("div", { style: "display:flex;gap:10px;align-items:center;margin-bottom:8px" },
+        rangeSel, goBtn), out);
+
+    async function load() {
+      out.replaceChildren(stateBox({ status: "loading" }));
+      let data;
+      try {
+        const now = new Date();
+        const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1)
+          .padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const start = fmt(new Date(now - (Number(rangeSel.value) - 1)
+          * 86400000));
+        const q = new URLSearchParams({
+          start, end: fmt(now), timezone: "Asia/Shanghai" });
+        data = await getJSON(`/api/strategies/summary?${q}`);
+      } catch (e) {
+        out.replaceChildren(stateBox({
+          status: "error", message: String(e.message || e), onRetry: load,
+        }));
+        return;
+      }
+      out.replaceChildren();
+      const tbl = table([
+        t("v2.ov.contrib.strategy"), t("v2.ov.contrib.upl_delta"),
+        t("v2.ov.contrib.realized"), t("v2.ov.contrib.fees"),
+        t("v2.ov.contrib.funding"), t("v2.ov.col.net"), t("v2.ov.contrib.state"),
+      ]);
+      for (const s of data.strategies || []) {
+        const tr = el("tr");
+        tr.appendChild(el("td", {},
+          el("a", { href: `#/strategies/${s.strategy_id}` }, s.name)));
+        const cell = (v, signed = true) => {
+          if (v === null || v === undefined) {
+            return el("td", { class: "num muted" }, "—");
+          }
+          const n = Number(v);
+          const cls = n > 0 ? "pos" : n < 0 ? "neg" : "zero";
+          return el("td", { class: "num " + cls },
+            (signed && n > 0 ? "+" : "") + n.toFixed(2));
+        };
+        tr.appendChild(cell(s.unrealized_delta));
+        tr.appendChild(cell(s.gross_realized));
+        tr.appendChild(cell(s.trading_fees, false));
+        tr.appendChild(cell(s.funding_net));
+        tr.appendChild(el("td", {}, netPnlCell(s.net_pnl)));
+        tr.appendChild(el("td", {},
+          badge(s.status, s.status === "estimated"
+            ? "badge stale" : s.status === "reconciled"
+            ? "badge reconciled" : "badge pending")));
+        tbl.tbody.appendChild(tr);
+      }
+      if (!(data.strategies || []).length) {
+        tbl.tbody.appendChild(el("tr", {},
+          el("td", { colspan: "7", class: "muted",
+                     text: t("v2.det.none") })));
+      }
+      out.appendChild(tbl.node);
+      out.appendChild(el("div", { class: "note" }, data.note || ""));
+    }
+    goBtn.onclick = () => load().catch(() => {});
+    load().catch(() => {});
+    return c;
+  }
 
   async function refresh() {
     const my = seq.begin();

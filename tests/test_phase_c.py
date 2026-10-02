@@ -293,3 +293,100 @@ def test_funding_collection_and_attribution():
         storage.close()
     finally:
         KatanaVenue.fetch_funding = orig
+
+
+def test_strategies_summary_endpoint():
+    async def run():
+        tmp = tempfile.mkdtemp(prefix="console-v2-sum-")
+        storage = Storage(os.path.join(tmp, "v2.sqlite3"))
+        profiles = ProfilesManager(tmp, env_file=os.path.join(tmp, ".env"))
+        secrets = SecretsManager(os.path.join(tmp, ".env"))
+        sup = Supervisor(tmp, tmp, storage=storage)
+        sup.build_argv = lambda w: [sys.executable, "-c",
+                                    "import time; time.sleep(30)"]
+        app = create_app(sup, profiles, secrets, token="t0k", storage=storage)
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            async with aiohttp.ClientSession(
+                    headers={"Authorization": "Bearer t0k"}) as http:
+                url = server.make_url
+                await http.post(url("/api/profiles"),
+                                json={"name": "P1", "yaml": YAML,
+                                      "symbol": "SNDK",
+                                      "hedge": "lighter-rh"})
+                async with http.post(url("/api/workers"),
+                                     json={"profile": "P1", "symbol": "SNDK",
+                                           "hedge": "lighter-rh",
+                                           "mode": "record"}) as r:
+                    w = await r.json()
+                sid = storage.get_run(w["run_id"])["strategy_id"]
+                await http.post(url(f"/api/workers/{w['id']}/stop"))
+
+                now = time.time()
+                # maker round trip + non-shared funding + both boundaries
+                for i, ev in enumerate([
+                        _mkfill(1, now - 3000, "buy", "1", "100", "s1"),
+                        _mkfill(2, now - 2000, "sell", "1", "106", "s2")]):
+                    storage.insert_event(
+                        event_id=f"sum:{i}", event_type="maker_fill",
+                        import_batch="b", source_id=1, source_line=i + 1,
+                        event_ts=ev["event_ts"], payload=ev,
+                        strategy_id=sid, run_id=w["run_id"],
+                        dedupe_key=f"f:{ev['venue_fill_id']}",
+                        unresolved=False)
+                storage.insert_event(
+                    event_id="sum:f0", event_type="funding",
+                    import_batch="live", source_id=0, source_line=0,
+                    event_ts=now - 1500,
+                    payload={"amount_usd": -0.5, "market": "SNDK-USD",
+                             "shared_account_market": False,
+                             "source": "venue_api"},
+                    strategy_id=sid, venue="katana",
+                    dedupe_key="f:katana:SNDK-USD:0", unresolved=False)
+                storage.save_valuation(strategy_id=sid, boundary="t",
+                                       ts=now - 3400, mark_source="venue_mark",
+                                       payload={"unrealized": 0.0})
+                storage.save_valuation(strategy_id=sid, boundary="t",
+                                       ts=now - 60, mark_source="venue_mark",
+                                       payload={"unrealized": 2.0})
+
+                s_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                      time.gmtime(now - 3600))
+                e_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                      time.gmtime(now + 600))
+                import urllib.parse
+                q = urllib.parse.urlencode(
+                    {"start": s_iso, "end": e_iso, "timezone": "UTC"})
+                async with http.get(url(
+                        f"/api/strategies/summary?{q}")) as r:
+                    assert r.status == 200
+                    summ = await r.json()
+                assert summ["schema_version"] == 1
+                row = [x for x in summ["strategies"]
+                       if x["strategy_id"] == sid][0]
+                import decimal
+                assert decimal.Decimal(
+                    row["unrealized_delta"]) == decimal.Decimal("2.0")
+                assert decimal.Decimal(row["gross_realized"]) == \
+                    decimal.Decimal("6")
+                assert decimal.Decimal(row["funding_net"]) == \
+                    decimal.Decimal("-0.5")
+                # strategy legs are hl/lighter-rh (no verified funding API)
+                # → funding_partial fires and net stays honestly null
+                assert row["net_pnl"] is None
+                assert row["status"] == "incomplete"
+                assert any(m["code"] == "funding_partial"
+                           for m in row["missing"])
+                # no range → 400 (§10.1)
+                async with http.get(url("/api/strategies/summary")) as r:
+                    assert r.status == 400
+        finally:
+            vt = app.get("valuation_task")
+            if vt:
+                vt.cancel()
+            await sup.shutdown()
+            await server.close()
+            storage.close()
+
+    asyncio.run(run())

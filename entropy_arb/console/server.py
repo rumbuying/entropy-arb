@@ -1448,6 +1448,72 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 continue
         return cands
 
+    async def api_strategies_summary(request):
+        """Per-strategy contribution for one period (§5.1 期间净收益 /
+        §6.4): the same gated computation as /performance, aggregated into
+        one comparable table. 总权益变动 ≠ 各策略之和 — transfers, manual
+        trades and un-covered funding stay in the account view."""
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        try:
+            start_ts, end_ts, tzname = _abs_range_or_400(request)
+            if start_ts is None:
+                raise web.HTTPBadRequest(text=json.dumps(
+                    {"error": "invalid_range",
+                     "message": "start/end/timezone required"}),
+                    content_type="application/json")
+        except web.HTTPBadRequest as e:
+            return web.Response(status=400, text=e.text,
+                                content_type=e.content_type)
+        from .performance import performance_for_strategy
+        rows = []
+        for s in storage.list_strategies():
+            try:
+                perf = performance_for_strategy(
+                    storage, strategy_id=s["id"], start_ts=start_ts,
+                    end_ts=end_ts, timezone=tzname or "Asia/Shanghai")
+            except Exception:
+                log.exception("summary perf failed for %s", s["id"])
+                continue
+            c = perf["components"] or {}
+
+            def _d(key):
+                v = c.get(key)
+                return None if v is None or v == "null" else v
+            us, ue = _d("unrealized_start"), _d("unrealized_end")
+            from decimal import Decimal as _D
+            try:
+                delta = str(_D(ue) - _D(us)) \
+                    if (us is not None and ue is not None) else None
+            except Exception:
+                delta = None
+            rows.append({
+                "strategy_id": s["id"], "name": s["name"],
+                "symbol": s["symbol"], "type": s["type"],
+                "live_workers": [w["id"] for w in supervisor.list()
+                                 if w["state"] == "running"
+                                 and any(
+                                     r.get("strategy_id") == s["id"]
+                                     for r in storage.strategy_runs(
+                                         s["id"], limit=10))],
+                "unrealized_delta": delta,
+                "gross_realized": _d("gross_realized"),
+                "trading_fees": _d("trading_fees"),
+                "funding_net": _d("funding_net"),
+                "net_pnl": perf["net_pnl"],
+                "status": perf["reconciliation_status"],
+                "missing": perf["missing"],
+            })
+        return web.json_response({
+            "schema_version": 1, "as_of": time.time(),
+            "period": {"start": start_ts, "end": end_ts,
+                       "timezone": tzname or "Asia/Shanghai"},
+            "strategies": rows,
+            "note": "浮盈变化来自估值快照（交易所按均价估算）；已实现仅含"
+                    "事件账本成交；账户总权益变动 ≠ 各策略之和（划转/"
+                    "人工/未覆盖资金费）—— 账户维度见账户与风险页"})
+
     async def api_strategy_attribution(request):
         """Attribution (spec §10.2): kind=pnl_components (same gates as the
         performance API) + kind=execution_edge / execution_loss built from
@@ -1756,6 +1822,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_post("/api/operations/flatten", operations_flatten)
     app.router.add_get("/api/operations/{op_id}", operations_status)
     app.router.add_get("/api/strategies", api_strategies)
+    app.router.add_get("/api/strategies/summary", api_strategies_summary)
     app.router.add_get("/api/strategies/{sid}", api_strategy_detail)
     app.router.add_get("/api/strategies/{sid}/performance",
                        api_strategy_performance)

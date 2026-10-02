@@ -78,9 +78,15 @@ def test_executions_pagination():
 
                 # walk all pages
                 seen, cursor, pages = [], None, 0
+                # range must bracket the event timestamps (now-relative —
+                # hardcoding a month broke when the calendar moved on)
+                d_start = time.strftime(
+                    "%Y-%m-%d", time.gmtime(base - 86400))
+                d_end = time.strftime(
+                    "%Y-%m-%d", time.gmtime(base + 172800))
                 while True:
-                    q = f"limit=50&start=2026-09-01&end=2026-10-01" \
-                        "&timezone=UTC"
+                    q = (f"limit=50&start={d_start}&end={d_end}"
+                         "&timezone=UTC")
                     if cursor:
                         q += f"&cursor={cursor}"
                     async with http.get(url(
