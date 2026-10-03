@@ -1,0 +1,73 @@
+# MU 观察线（record-only）：Backpack 美股永续 ↔ lighter-rh(Robinhood) MU
+#
+#   2026-10-01 美盘复扫（logs/bp-rh-20261001-us，5.4h 完整美盘尾段）中唯一
+#   std 达标市场：4.7bp（成本栈 ≈6.3bp，门槛 4bp），且该晚 INTC 完全死水
+#   （σ1.8）——MU 底层波动高一档，非事件日驱动。基础设施全场最佳：
+#   BP 点差 0.1bp、24h 量 ~$3M（重叠市场最大）。按纪律 record-only 采
+#   2–3 个完整美盘周期后再决定 live。
+#
+# 成本栈: RH 两侧 0 费率（orderBooks 实测）+ BP taker tier1 5.0bp（实测）
+#         + 半点差（BP 0.1 + RH 2.5）≈ 6.3bp 往返
+# 风险:   折价单边（BP 低于 RH，中位 −11bp）；band 吃的是围绕中位的摆动；
+#         2σ 触发 ~13/day 处于绞肉机边缘——观察期核心问题就是验证真实
+#         fires/day 与单笔净利。观察期不交易。
+thresholds:
+  # 占位值（record-only 不交易；live 前由 auto_band 校准）
+  # 口径: premium = Backpack(MU.US) / lighter-rh(MU) − 1
+  midline_bps: 0.0
+  upper_bps: 12.0
+  lower_bps: 12.0
+
+entropy:
+  # MU.US 在 Backpack 自动解析为 MU.US_USDC_PERP
+  symbol: MU.US
+  taker_fee_bps: 5.0        # BP tier1 实测
+  max_position_usd: 50
+  max_orders_per_min: 60
+
+hedge:
+  symbol: MU                # lighter-rh 的符号
+  taker_fee_bps: 0.0        # RH 两侧 0 费率（实测）
+  max_position_usd: 50
+  max_orders_per_min: 60
+
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 40
+  min_order_notional_usd: 10   # RH min_quote=$10
+
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 7
+  hedge_slippage_bps: 20
+  max_signal_edge_bps: 20   # 拒追 ±20bps 以外：薄盘大偏移基本是幻影
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+
+recorder:
+  enabled: true
+  csv: logs/minutes-MU.US-backpack-rh.csv
+
+logging:
+  file: logs/engine-MU.US-backpack-rh.log
+  trades_csv: logs/trades-MU.US-backpack-rh.csv
+  dashboard: false
+  level: INFO
+
+# 分时段 band 自动校准（同 sndk-rh/intc-rh 口径）：midline=当前美东时段
+# 滚动中位数，宽度=max(k×时段std, 2×实测滑点, 5bps)
+auto_band:
+  enabled: true
+  window_days: 3
+  width_k: 2.0
+  min_width_bps: 5.0
+  sigma_halflife_h: 24
+  slip_lookback_days: 2
+  slip_min_fills: 5
+  skip_engine_down_min: 15
