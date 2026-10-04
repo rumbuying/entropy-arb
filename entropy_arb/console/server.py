@@ -82,6 +82,49 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     # retrodictive current-book valuation). Data comes from the worker
     # state proxy (venue-reported unrealized); read-only, never blocks or
     # influences the trading path.
+    async def _account_equity_now() -> dict:
+        """{group: {equity, free, source, strategies}} — live worker states
+        grouped per venue (equity = max within group) + console probes for
+        groups no live worker covers. Shared by the accounts API and the
+        equity history recorder."""
+        from entropy_arb.console.venues import exchange_of,             load_profile_yaml
+        groups: dict = {}
+        for s in supervisor.list():
+            if s["state"] != "running":
+                continue
+            snap = await supervisor.snapshot(s["id"])
+            if not snap:
+                continue
+            for v in (snap.get("venues") or {}).values():
+                g = exchange_of(v.get("name"))
+                rec = groups.setdefault(g, {"equity": None, "free": None,
+                                            "source": "worker",
+                                            "strategies": set()})
+                rec["strategies"].add(s["id"])
+                if v.get("equity") is not None:
+                    rec["equity"] = max(
+                        rec["equity"] if rec["equity"] is not None
+                        else float("-inf"), float(v["equity"]))
+                if v.get("free") is not None:
+                    rec["free"] = max(
+                        rec["free"] if rec["free"] is not None
+                        else float("-inf"), float(v["free"]))
+        for g, p in _probe_candidates().items():
+            if g in groups:
+                continue
+            try:
+                d = await ops_mod.probe_account_cached(
+                    p["venue"], p["symbol"], env_file=secrets.env_path,
+                    role=p["role"], dex=p["dex"])
+            except Exception:
+                continue
+            if d.get("equity") is None:
+                continue
+            groups[g] = {"equity": float(d["equity"]),
+                         "free": d.get("free"), "source": "console_probe",
+                         "strategies": set()}
+        return groups
+
     async def _valuation_loop():
         while True:
             try:
@@ -114,6 +157,19 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                     for k, v in (snap.get("venues")
                                                  or {}).items()},
                             })
+                    # account-dimension equity history (§6.2): the account
+                    # view of "where did the money move"
+                    try:
+                        eq = await _account_equity_now()
+                        now_ts = time.time()
+                        for g, rec in eq.items():
+                            if rec["equity"] is None:
+                                continue
+                            storage.save_account_equity(
+                                scope=g, ts=now_ts, equity=rec["equity"],
+                                free=rec["free"], source=rec["source"])
+                    except Exception:
+                        log.exception("account equity snapshot failed")
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -1733,6 +1789,43 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 "source": "console_probe",
                 "probe_error": d.get("error"),
             }
+        # optional period view: per-account equity change from snapshots
+        # (recorded every ~5 min by the console) — the account dimension of
+        # "where did the money move" (§6.2)
+        period = None
+        from .analytics import RangeError, abs_range
+        try:
+            ps, pe, ptz = abs_range(request.query.get)
+        except RangeError as e:
+            return web.json_response({"error": "invalid_range",
+                                      "message": str(e)}, status=400)
+        if ps is not None:
+            FRESH = 900.0
+            scopes = set(list(accounts) + [
+                r["scope"] for r in storage.db.execute(
+                    "SELECT DISTINCT scope FROM account_equity")])
+            changes = []
+            for scope in sorted(scopes):
+                v0 = storage.nearest_account_equity(scope, ps, FRESH)
+                v1 = storage.nearest_account_equity(scope, pe, FRESH)
+                eq0 = v0["equity"] if v0 else None
+                eq1 = v1["equity"] if v1 else None
+                changes.append({
+                    "scope": scope, "equity_start": eq0,
+                    "equity_end": eq1,
+                    "delta": (round(eq1 - eq0, 4)
+                              if eq0 is not None and eq1 is not None
+                              else None),
+                    "start_ts": v0["ts"] if v0 else None,
+                    "end_ts": v1["ts"] if v1 else None,
+                })
+            period = {
+                "start": ps, "end": pe, "timezone": ptz,
+                "changes": changes,
+                "note": "账户权益变动含已实现/浮盈/资金费/费用 —— 是账户"
+                        "维度事实；与策略归因（总览各策略分项）对照看",
+            }
+
         out = []
         for scope in sorted(accounts):
             rec = accounts[scope]
@@ -1753,6 +1846,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             })
         return web.json_response({"schema_version": 1, "as_of": time.time(),
                                   "accounts": out,
+                                  "period": period,
                                   "note": "live-worker groups report via "
                                           "engine snapshots; groups without "
                                           "a running engine are probed "

@@ -232,6 +232,22 @@ CREATE TABLE IF NOT EXISTS experiments (
 CREATE INDEX IF NOT EXISTS idx_experiments_strategy
   ON experiments(strategy_id, created_ts);
 """),
+    # Migration 6 (V2-016+): per-venue-account equity history — the account
+    # dimension of "where did my money move" (§6.2: account equity_delta
+    # reconciles the account view; strategy attribution stays separate).
+    (6, """
+CREATE TABLE IF NOT EXISTS account_equity (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope         TEXT NOT NULL,             -- venue group label
+  ts            REAL NOT NULL,
+  equity        REAL,
+  free          REAL,
+  source        TEXT NOT NULL,             -- worker | console_probe
+  UNIQUE(scope, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_account_equity
+  ON account_equity(scope, ts);
+"""),
 ]
 
 
@@ -602,6 +618,22 @@ class Storage:
             " AND ? ORDER BY ABS(ts - ?) LIMIT 1",
             (strategy_id, ts - max_age_sec, ts + max_age_sec,
              ts)).fetchone()
+        return dict(r) if r else None
+
+    def save_account_equity(self, *, scope: str, ts: float, equity: float,
+                            free: Optional[float], source: str) -> None:
+        self.db.execute(
+            "INSERT OR IGNORE INTO account_equity(scope, ts, equity, free,"
+            " source) VALUES(?,?,?,?,?)",
+            (scope, ts, equity, free, source))
+        self.db.commit()
+
+    def nearest_account_equity(self, scope: str, ts: float,
+                               max_age_sec: float = 900.0)             -> Optional[Dict[str, Any]]:
+        r = self.db.execute(
+            "SELECT * FROM account_equity WHERE scope=? AND ts BETWEEN ?"
+            " AND ? ORDER BY ABS(ts - ?) LIMIT 1",
+            (scope, ts - max_age_sec, ts + max_age_sec, ts)).fetchone()
         return dict(r) if r else None
 
     def valuations_series(self, strategy_id: str, *,

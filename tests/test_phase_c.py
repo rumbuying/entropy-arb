@@ -390,3 +390,60 @@ def test_strategies_summary_endpoint():
             storage.close()
 
     asyncio.run(run())
+
+
+def test_accounts_equity_period_view():
+    async def run():
+        tmp = tempfile.mkdtemp(prefix="console-v2-accteq-")
+        storage = Storage(os.path.join(tmp, "v2.sqlite3"))
+        profiles = ProfilesManager(tmp, env_file=os.path.join(tmp, ".env"))
+        secrets = SecretsManager(os.path.join(tmp, ".env"))
+        sup = Supervisor(tmp, tmp, storage=storage)
+        sup.build_argv = lambda w: [sys.executable, "-c", "import time"]
+        app = create_app(sup, profiles, secrets, token="t0k", storage=storage)
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            async with aiohttp.ClientSession(
+                    headers={"Authorization": "Bearer t0k"}) as http:
+                url = server.make_url
+                now = time.time()
+                # the console records these every ~5 min; simulate 3 rounds
+                for ts, eq in ((now - 7200, 100.0), (now - 3600, 112.0),
+                               (now - 60, 126.0)):
+                    storage.save_account_equity(
+                        scope="HL(io)", ts=ts, equity=eq, free=None,
+                        source="worker")
+                s_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                      time.gmtime(now - 7200))
+                e_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                      time.gmtime(now + 600))
+                import urllib.parse
+                q = urllib.parse.urlencode(
+                    {"start": s_iso, "end": e_iso, "timezone": "UTC"})
+                async with http.get(url(f"/api/accounts?{q}")) as r:
+                    assert r.status == 200
+                    data = await r.json()
+                assert data["period"] is not None
+                chg = {c["scope"]: c for c in data["period"]["changes"]}
+                row = chg["HL(io)"]
+                import decimal
+                assert decimal.Decimal(str(row["equity_start"])) == \
+                    decimal.Decimal("100.0")
+                assert decimal.Decimal(str(row["equity_end"])) == \
+                    decimal.Decimal("126.0")
+                assert decimal.Decimal(str(row["delta"])) == \
+                    decimal.Decimal("26.0")
+                # bad range → 400
+                async with http.get(url(
+                        "/api/accounts?start=x&end=y&timezone=UTC")) as r:
+                    assert r.status == 400
+        finally:
+            vt = app.get("valuation_task")
+            if vt:
+                vt.cancel()
+            await sup.shutdown()
+            await server.close()
+            storage.close()
+
+    asyncio.run(run())

@@ -31,6 +31,74 @@ export function mount(container) {
     t("venue.col.gross"), t("venue.col.net"), t("venue.col.engines"),
   ]);
   exCard.appendChild(exTbl.node);
+
+  // ---- equity change per account (account dimension of "where did the
+  // money move") — snapshots recorded by the console every ~5 min
+  const chgRange = el("select", {},
+    el("option", { value: "1" }, t("v2.time.today")),
+    el("option", { value: "2" }, t("v2.time.yesterday")),
+    el("option", { value: "7" }, t("v2.time.d7")));
+  const chgBtn = el("button", { class: "primary",
+    text: t("v2.det.attr_load") });
+  const chgOut = el("div");
+  const chgCard = card(t("v2.acct.change_title"),
+    el("div", { style: "display:flex;gap:10px;align-items:center;margin-bottom:8px" },
+      chgRange, chgBtn), chgOut);
+
+  async function loadChanges() {
+    chgOut.replaceChildren(stateBox({ status: "loading" }));
+    let data;
+    try {
+      const now = new Date();
+      const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1)
+        .padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const start = fmt(new Date(now - (Number(chgRange.value) - 1)
+        * 86400000));
+      const q = new URLSearchParams({
+        start, end: fmt(now), timezone: "Asia/Shanghai" });
+      data = await getJSON(`/api/accounts?${q}`);
+    } catch (e) {
+      chgOut.replaceChildren(stateBox({
+        status: "error", message: String(e.message || e),
+        onRetry: loadChanges,
+      }));
+      return;
+    }
+    chgOut.replaceChildren();
+    if (!data.period || !data.period.changes) {
+      chgOut.appendChild(el("div", { class: "note" },
+        t("v2.acct.change_none")));
+      return;
+    }
+    const tbl = table([
+      t("col.venue"), t("v2.acct.chg_start"), t("v2.acct.chg_end"),
+      t("v2.acct.chg_delta"),
+    ]);
+    for (const ch of data.period.changes) {
+      const tr = el("tr");
+      tr.appendChild(el("td", {}, ch.scope,
+        ch.delta !== null && ch.delta !== undefined ? el("span", {},
+          el("span", { class: "muted", text: "  " }),
+          el("a", { class: "muted", href: "#/strategies",
+                    title: t("v2.acct.chg_link") }, "→")) : null));
+      tr.appendChild(el("td", { class: "num" },
+        ch.equity_start === null ? "—" : fmtNum(Number(ch.equity_start), 2)));
+      tr.appendChild(el("td", { class: "num" },
+        ch.equity_end === null ? "—" : fmtNum(Number(ch.equity_end), 2)));
+      const d = ch.delta;
+      tr.appendChild(el("td", {
+        class: "num " + (d > 0 ? "pos" : d < 0 ? "neg" : "muted"),
+        text: d === null ? "—" : (d > 0 ? "+" : "") + Number(d).toFixed(2),
+      }));
+      tbl.tbody.appendChild(tr);
+    }
+    chgOut.appendChild(tbl.node);
+    chgOut.appendChild(el("div", { class: "note" },
+      data.period.note || ""));
+  }
+  chgBtn.onclick = () => loadChanges().catch(() => {});
+  loadChanges().catch(() => {});
+  const chgTimer = setInterval(loadChanges, 60000);
   const posCard = card(t("v2.acct.positions"));
   const posTbl = table([
     t("col.venue"), t("venue.col.strategy"), t("venue.col.symbol"),
@@ -40,7 +108,7 @@ export function mount(container) {
   posCard.appendChild(posTbl.node);
   const note = el("div", { class: "note" }, t("v2.acct.note"));
   const mtmNote = el("div", { class: "note" }, t("v2.acct.mtm_note"));
-  container.append(totals, note, exCard, posCard, mtmNote);
+  container.append(totals, note, chgCard, exCard, posCard, mtmNote);
 
   async function refresh() {
     const my = seq.begin();
@@ -146,7 +214,8 @@ export function mount(container) {
 
   refresh();
   const timer = setInterval(refresh, 5000);
-  return { refresh, destroy() { clearInterval(timer); } };
+  return { refresh,
+           destroy() { clearInterval(timer); clearInterval(chgTimer); } };
 }
 
 function fmtUsd0(x) {
