@@ -109,8 +109,10 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                     rec["free"] = max(
                         rec["free"] if rec["free"] is not None
                         else float("-inf"), float(v["free"]))
+        # groups covered by a live worker that reports NO equity (e.g.
+        # record-only collectors) still fall through to the probe
         for g, p in _probe_candidates().items():
-            if g in groups:
+            if g in groups and groups[g]["equity"] is not None:
                 continue
             try:
                 d = await ops_mod.probe_account_cached(
@@ -122,7 +124,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 continue
             groups[g] = {"equity": float(d["equity"]),
                          "free": d.get("free"), "source": "console_probe",
-                         "strategies": set()}
+                         "strategies": groups.get(g, {}).get(
+                             "strategies", set())}
         return groups
 
     async def _valuation_loop():
@@ -1768,8 +1771,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         from . import ops as ops_mod
         cands = _probe_candidates()
         for g, p in cands.items():
-            if g in accounts:
-                continue                     # live reporter wins
+            if g in accounts and accounts[g].get("equity") is not None:
+                continue                     # live reporter with equity wins
             try:
                 d = await ops_mod.probe_account_cached(
                     p["venue"], p["symbol"], env_file=secrets.env_path,
