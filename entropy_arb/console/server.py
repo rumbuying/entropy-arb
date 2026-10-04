@@ -111,6 +111,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                         else float("-inf"), float(v["free"]))
         # groups covered by a live worker that reports NO equity (e.g.
         # record-only collectors) still fall through to the probe
+        from . import ops as ops_mod
         for g, p in _probe_candidates().items():
             if g in groups and groups[g]["equity"] is not None:
                 continue
