@@ -76,29 +76,43 @@ def performance_for_strategy(storage, *, strategy_id: str,
                      and ev.get("event_type") != "maker_fill")
 
     # ---- boundary valuations (§6.5): CONTEMPORANEOUS snapshots recorded by
-    # the console every ~5 min. A boundary counts only when a snapshot
-    # exists within ±15 min of the boundary instant — no extrapolation, no
-    # current-book retrodiction.
+    # the console every ~5 min. Start boundary: a snapshot within ±15 min
+    # of the period start, else the FIRST snapshot inside the period
+    # (clamped, labelled). End boundary: the LATEST snapshot at or before
+    # min(end, now) — end-day-inclusive ranges have a nominal end in the
+    # future where no snapshot can exist, so it clamps to now.
+    import time as _time
     VALUATION_FRESHNESS = 900.0
+    _now = _time.time()
     unreal_start = unreal_end = None
     boundary_notes = []
     if start_ts is not None:
         v0 = storage.nearest_valuation(strategy_id, start_ts,
                                        VALUATION_FRESHNESS)
+        if v0 is None:
+            v0 = storage.first_valuation_after(strategy_id, start_ts)
+            if v0 is not None and (end_ts is None or v0["ts"] < end_ts):
+                boundary_notes.append({"boundary": "start",
+                                       "ts": v0["ts"], "clamped": True})
+            else:
+                v0 = None
         if v0:
             p0 = json.loads(v0["payload_json"] or "{}")
             unreal_start = L.D(p0.get("unrealized"))
-            boundary_notes.append({"boundary": "start", "ts": v0["ts"],
-                                   "source": v0["mark_source"]})
+            if not any(n.get("boundary") == "start"
+                       for n in boundary_notes):
+                boundary_notes.append({"boundary": "start", "ts": v0["ts"],
+                                       "source": v0["mark_source"]})
         else:
             boundary_notes.append({"boundary": "start", "missing": True})
     if end_ts is not None:
-        v1 = storage.nearest_valuation(strategy_id, end_ts,
-                                       VALUATION_FRESHNESS)
-        if v1:
+        v1 = storage.latest_valuation_before(strategy_id,
+                                             min(end_ts, _now))
+        if v1 and (start_ts is None or v1["ts"] >= start_ts):
             p1 = json.loads(v1["payload_json"] or "{}")
             unreal_end = L.D(p1.get("unrealized"))
             boundary_notes.append({"boundary": "end", "ts": v1["ts"],
+                                   "clamped": end_ts > _now,
                                    "source": v1["mark_source"]})
         else:
             boundary_notes.append({"boundary": "end", "missing": True})

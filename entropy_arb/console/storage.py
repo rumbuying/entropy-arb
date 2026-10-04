@@ -629,11 +629,42 @@ class Storage:
         self.db.commit()
 
     def nearest_account_equity(self, scope: str, ts: float,
-                               max_age_sec: float = 900.0)             -> Optional[Dict[str, Any]]:
+                               max_age_sec: float = 900.0) \
+            -> Optional[Dict[str, Any]]:
         r = self.db.execute(
             "SELECT * FROM account_equity WHERE scope=? AND ts BETWEEN ?"
             " AND ? ORDER BY ABS(ts - ?) LIMIT 1",
             (scope, ts - max_age_sec, ts + max_age_sec, ts)).fetchone()
+        return dict(r) if r else None
+
+    def latest_account_equity_before(self, scope: str, ts: float) \
+            -> Optional[Dict[str, Any]]:
+        """Latest snapshot at or before ts — end boundaries of
+        end-day-inclusive ranges clamp to now."""
+        r = self.db.execute(
+            "SELECT * FROM account_equity WHERE scope=? AND ts <= ?"
+            " ORDER BY ts DESC LIMIT 1", (scope, ts)).fetchone()
+        return dict(r) if r else None
+
+    def first_account_equity_after(self, scope: str, ts: float) \
+            -> Optional[Dict[str, Any]]:
+        r = self.db.execute(
+            "SELECT * FROM account_equity WHERE scope=? AND ts >= ?"
+            " ORDER BY ts LIMIT 1", (scope, ts)).fetchone()
+        return dict(r) if r else None
+
+    def latest_valuation_before(self, strategy_id: str, ts: float) \
+            -> Optional[Dict[str, Any]]:
+        r = self.db.execute(
+            "SELECT * FROM valuations WHERE strategy_id=? AND ts <= ?"
+            " ORDER BY ts DESC LIMIT 1", (strategy_id, ts)).fetchone()
+        return dict(r) if r else None
+
+    def first_valuation_after(self, strategy_id: str, ts: float) \
+            -> Optional[Dict[str, Any]]:
+        r = self.db.execute(
+            "SELECT * FROM valuations WHERE strategy_id=? AND ts >= ?"
+            " ORDER BY ts LIMIT 1", (strategy_id, ts)).fetchone()
         return dict(r) if r else None
 
     def valuations_series(self, strategy_id: str, *,

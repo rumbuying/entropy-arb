@@ -1803,16 +1803,25 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             return web.json_response({"error": "invalid_range",
                                       "message": str(e)}, status=400)
         if ps is not None:
-            FRESH = 900.0
+            now_ts = time.time()
+            eff_end = min(pe, now_ts)   # end-day-inclusive: nominal end may
+            FRESH = 900.0               # lie in the future — clamp to now
             scopes = set(list(accounts) + [
                 r["scope"] for r in storage.db.execute(
                     "SELECT DISTINCT scope FROM account_equity")])
             changes = []
             for scope in sorted(scopes):
                 v0 = storage.nearest_account_equity(scope, ps, FRESH)
-                v1 = storage.nearest_account_equity(scope, pe, FRESH)
+                if v0 is None:
+                    v0 = storage.first_account_equity_after(scope, ps)
+                    if v0 is not None and v0["ts"] > eff_end:
+                        v0 = None
+                v1 = storage.latest_account_equity_before(scope, eff_end)
                 eq0 = v0["equity"] if v0 else None
                 eq1 = v1["equity"] if v1 else None
+                clamped = bool(
+                    v0 is not None and v1 is not None
+                    and v0["ts"] > ps + FRESH)
                 changes.append({
                     "scope": scope, "equity_start": eq0,
                     "equity_end": eq1,
@@ -1821,12 +1830,15 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                               else None),
                     "start_ts": v0["ts"] if v0 else None,
                     "end_ts": v1["ts"] if v1 else None,
+                    "clamped": clamped,
                 })
             period = {
-                "start": ps, "end": pe, "timezone": ptz,
+                "start": ps, "end": pe, "effective_end": eff_end,
+                "timezone": ptz,
                 "changes": changes,
                 "note": "账户权益变动含已实现/浮盈/资金费/费用 —— 是账户"
-                        "维度事实；与策略归因（总览各策略分项）对照看",
+                        "维度事实；与策略归因（总览各策略分项）对照看。"
+                        "期初缺失时变动自区间内首个快照起（已标注）",
             }
 
         out = []

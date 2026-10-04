@@ -119,16 +119,14 @@ def test_boundary_valuations_and_attribution():
                         f"/api/strategies/{sid}/performance?{q}")) as r:
                     perf = await r.json()
                 assert perf["components"]["unrealized_start"] == "1.5"
-                # both fills closed each other → flat at end → 0 is the
-                # honest FIFO value (no mark needed for an empty book)
-                assert perf["components"]["unrealized_end"] == "0"
+                # end boundary clamps to now: the latest known mark is the
+                # start snapshot itself (the fabricated one) → end = 1.5
+                assert perf["components"]["unrealized_end"] == "1.5"
+                assert any(b.get("boundary") == "end" and b.get("clamped")
+                           for b in perf["reconciliation"]["boundaries"])
                 codes = {m["code"] for m in perf["missing"]}
                 assert "funding_missing" in codes
-                # end boundary missing is called out; start no longer is
                 assert perf["reconciliation"]["id"]
-                assert any(b.get("boundary") == "end"
-                           and b.get("missing") for b in
-                           perf["reconciliation"]["boundaries"])
                 # persisted reconciliation rows exist
                 recs = storage.list_reconciliations(sid)
                 assert recs and recs[0]["id"] == \
