@@ -16,3 +16,9 @@ lighter-sdk @ git+https://github.com/elliottech/lighter-python.git
 # Backpack request signing (Ed25519; only needed with a --base/--hedge
 # backpack leg) — 仅当一条腿在 Backpack 时需要（Ed25519 请求签名）
 cryptography>=42.0
+
+# bulk.trade order signing (only needed with a --base/--hedge bulk leg).
+# Official wincode serializer + Ed25519 signer; prebuilt wheels exist for
+# Python 3.9-3.13 ONLY (no 3.14 yet). -- 仅当一条腿在 bulk 时需要。
+# 官方 wincode 序列化 + Ed25519 签名；仅有 Python 3.9-3.13 的预编译 wheel。
+bulk-keychain>=0.1.30

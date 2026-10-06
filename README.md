@@ -14,6 +14,7 @@ is one of:
 | `tradexyz` | Hyperliquid trade.xyz dex | USDC | ~1 bps | HL l2Book, sync IOC settle |
 | `katana` | Katana Perps (perps.katana.network) | USDC | ~1.9 bps | REST snapshot + l2orderbook ws diffs, sync IOC settle. Crypto majors only (BTC/ETH/SOL/…) — pair with `entropy.dex: ""` |
 | `backpack` | Backpack Exchange perps | USDC | ~2–5 bps (tier — verify!) | REST + ws depth (snapshot + absolute diffs), sync IOC settle; Ed25519-signed. Deep books; maker-capable (post-only) — see [BACKPACK-PLAN.md](BACKPACK-PLAN.md) |
+| `bulk` | bulk.trade (Solana perp DEX) | USDC | 3.5→2.2 bps (tier), maker 0 bps | ws l2Delta + periodic l2Snapshot (dual-channel, no seq nums), sync IOC settle; Solana Ed25519 tx signing via `bulk-keychain`. Maker-capable (ALO post-only); account queries & private stream are UNSIGNED (pubkey-keyed) |
 
 > **Referral links** — signing up through these supports this project:
 > - Entropy — Tier 4 referral, 100% rebates: <https://entropy.io/?r=yourquantguy>
@@ -278,6 +279,7 @@ entropy_arb/venue_hl.py  Hyperliquid dex adapter (Entropy, tradexyz)
 entropy_arb/venue_lighter.py  zkLighter adapter (mainnet, Robinhood chain)
 entropy_arb/venue_katana.py   Katana Perps adapter (HMAC + EIP-712)
 entropy_arb/venue_backpack.py Backpack Exchange adapter (Ed25519-signed REST + ws)
+entropy_arb/venue_bulk.py        bulk.trade adapter (Solana Ed25519 tx signing via bulk-keychain)
 DEVOPS.zh-CN.md         dev & ops handbook (architecture, runbooks, venue checklist)
 entropy_arb/engine.py    the two-venue strategy loop
 entropy_arb/dashboard.py Rich terminal dashboard

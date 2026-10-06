@@ -33,18 +33,19 @@ from .maker import MakerParams
 HL_API_URL = "https://api.hyperliquid.xyz"
 HL_WS_URL = "wss://api.hyperliquid.xyz/ws"   # official ws — the only HL feed used
 
-HEDGE_VENUES = ("lighter", "lighter-rh", "tradexyz", "katana", "backpack")
+HEDGE_VENUES = ("lighter", "lighter-rh", "tradexyz", "katana", "backpack",
+                "bulk")
 
 # venues the BASE (entropy) leg may run on. Historically hard-wired to
 # Hyperliquid; "lighter" unlocks the Lighter-vs-Katana line where the whole
 # edge lives (BASIS-EXPLORE.md: Katana maker + Lighter taker ≈ 0.95bp toll).
 # "backpack" is the taker-hedge role in maker mode (e.g. Katana quotes hedged
 # on Backpack — see BACKPACK-PLAN.md).
-BASE_VENUES = ("hl", "lighter", "lighter-rh", "katana", "backpack")
+BASE_VENUES = ("hl", "lighter", "lighter-rh", "katana", "backpack", "bulk")
 
 # venues that implement the maker contract (maker_capable=True) and may run
 # with maker.enabled — the console pre-flights this at launch
-MAKER_VENUES = ("katana", "backpack")
+MAKER_VENUES = ("katana", "backpack", "bulk")
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,22 @@ class BackpackCreds:
 
 
 @dataclass
+class BulkCreds:
+    """bulk.trade credentials: ONE Solana Ed25519 secret key, base58.
+
+    The wallet pubkey IS the bulk account address (fund it with USDC on
+    bulk.trade and it trades from the same key). Accepts the 32-byte seed
+    or the full 64-byte keypair, both base58 — Phantom's "Export Private
+    Key" format works as-is. Signing uses the official bulk-keychain
+    package (pip install bulk-keychain, Python 3.9–3.13)."""
+    secret_key: Optional[str]
+
+    @property
+    def complete(self) -> bool:
+        return bool(self.secret_key)
+
+
+@dataclass
 class VenueConf:
     key: str                  # "entropy" | "hedge"
     kind: str                 # "hl" | "lighter" | "katana"
@@ -140,6 +157,8 @@ class VenueConf:
     katana_creds: Optional[KatanaCreds] = None
     # backpack
     backpack_creds: Optional[BackpackCreds] = None
+    # bulk
+    bulk_creds: Optional[BulkCreds] = None
 
 
 @dataclass
@@ -206,6 +225,9 @@ class Config:
                 return False
             if v.kind == "backpack" and not (v.backpack_creds
                                              and v.backpack_creds.complete):
+                return False
+            if v.kind == "bulk" and not (v.bulk_creds
+                                         and v.bulk_creds.complete):
                 return False
         return True
 
@@ -586,6 +608,18 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
                 _env_s("BACKPACK_API_KEY"),
                 _env_s("BACKPACK_API_SECRET")),
         )
+    elif base_venue == "bulk":
+        entropy = VenueConf(
+            key="entropy", kind="bulk", label="BULK",
+            symbol=entropy_symbol,
+            # tier-0 taker fee is 3.5bp (GET /feeState serves the live tier
+            # ladder; maker is 0bp) — same explicit-source-of-truth rule as
+            # the other venues
+            fee_bps=float(_get(raw, "entropy", "taker_fee_bps", 3.5)),
+            cap_usd=float(_get(raw, "entropy", "max_position_usd", 1000.0)),
+            orders_per_min=int(_get(raw, "entropy", "max_orders_per_min", 30)),
+            bulk_creds=BulkCreds(_env_s("BULK_SECRET_KEY")),
+        )
     else:
         entropy = VenueConf(
             key="entropy", kind="hl", label="ENTROPY",
@@ -643,6 +677,17 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
             backpack_creds=BackpackCreds(
                 _env_s("BACKPACK_API_KEY"),
                 _env_s("BACKPACK_API_SECRET")),
+        )
+    elif hedge_venue == "bulk":
+        hedge = VenueConf(
+            key="hedge", kind="bulk", label="BULK",
+            symbol=hedge_symbol,
+            # tier-0 taker fee is 3.5bp (GET /feeState serves the live tier
+            # ladder; maker is 0bp) — 同上：显式配置是唯一事实源，接口值只做对照
+            fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 3.5)),
+            cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
+            orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 30)),
+            bulk_creds=BulkCreds(_env_s("BULK_SECRET_KEY")),
         )
     else:
         hedge = VenueConf(

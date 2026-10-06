@@ -27,6 +27,7 @@ No credentials: every feed here is a public market-data stream.
     python3 tools/basis_probe.py --a lighter --b katana --symbols BTC --duration 3600
 
 Venues: ``hl`` | ``lighter`` | ``lighter-rh`` | ``katana`` | ``backpack``
+        | ``bulk``
 Output: ``<out-dir>/minutes-<SYM>-<a>-vs-<b>.csv``  (MinuteRecorder schema)
 """
 from __future__ import annotations
@@ -44,15 +45,18 @@ import aiohttp  # noqa: E402
 
 from entropy_arb.book import OrderBook  # noqa: E402
 from entropy_arb.config import HL_WS_URL, LIGHTER_PROFILES  # noqa: E402
-from entropy_arb.feeds import (BackpackBookFeed, HLBookFeed,  # noqa: E402
-                               KatanaBookFeed, LighterBookFeed)
+from entropy_arb.feeds import (BackpackBookFeed, BulkBookFeed,  # noqa: E402
+                               HLBookFeed, KatanaBookFeed,  # noqa: E402
+                               LighterBookFeed)
 from entropy_arb.recorder import MinuteRecorder  # noqa: E402
 from entropy_arb.venue_backpack import PROD_REST as BACKPACK_REST  # noqa: E402
 from entropy_arb.venue_backpack import PROD_WS as BACKPACK_WS  # noqa: E402
+from entropy_arb.venue_bulk import PROD_REST as BULK_REST  # noqa: E402
+from entropy_arb.venue_bulk import PROD_WS as BULK_WS  # noqa: E402
 from entropy_arb.venue_katana import PROD_REST as KATANA_REST  # noqa: E402
 from entropy_arb.venue_katana import PROD_WS as KATANA_WS  # noqa: E402
 
-VENUES = ("hl", "lighter", "lighter-rh", "katana", "backpack")
+VENUES = ("hl", "lighter", "lighter-rh", "katana", "backpack", "bulk")
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=20)
 
 # one fetch per venue per process: /markets is rate-limited (429) and the
@@ -144,6 +148,32 @@ async def resolve(session: aiohttp.ClientSession, venue: str,
         def make(name, book, notify):
             return BackpackBookFeed(name, BACKPACK_REST, BACKPACK_WS, market,
                                     book, notify, session=session)
+        return Resolved(venue, symbol, market, note, make)
+
+    if venue == "bulk":
+        if "bulk-markets" not in _CACHE:
+            async with session.get(f"{BULK_REST}/exchangeInfo",
+                                   timeout=HTTP_TIMEOUT) as r:
+                r.raise_for_status()
+                raw = await r.json()
+            _CACHE["bulk-markets"] = raw if isinstance(raw, list) else []
+        entries = _CACHE["bulk-markets"]
+        candidates = {symbol, f"{symbol}-USD"}
+        entry = next((m for m in entries
+                      if str(m.get("symbol", "")).upper() in candidates), None)
+        if entry is None:
+            raise RuntimeError(f"{symbol} not on bulk")
+        if entry.get("status") != "TRADING":
+            raise RuntimeError(f"{entry['symbol']}: status="
+                               f"{entry.get('status')}")
+        market = entry["symbol"]
+        note = (f"tick={entry.get('tickSize')} "
+                f"step={entry.get('sizeIncrement')} "
+                f"min_ntl={entry.get('minNotional')} "
+                f"max_lev={entry.get('maxLeverage')}")
+
+        def make(name, book, notify):
+            return BulkBookFeed(name, BULK_WS, market, book, notify)
         return Resolved(venue, symbol, market, note, make)
 
     if venue in ("lighter", "lighter-rh"):

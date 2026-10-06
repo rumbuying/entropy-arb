@@ -73,7 +73,7 @@ cp .env.example .env                     # 密钥——交易必填
 
 交易哪个市场**不在**配置文件中——每次启动时用命令行参数显式指定：
 `--symbol`（两个交易所共同交易的品种）和 `--hedge`（五选一：
-`lighter`、`lighter-rh`、`tradexyz`、`katana`、`backpack`；Entropy 永远是
+`lighter`、`lighter-rh`、`tradexyz`、`katana`、`backpack`、`bulk`；Entropy 永远是
 另一条腿）。
 
 本机器人**没有模拟盘**——要么采集数据（`--record-only`），要么实盘交易。
@@ -247,6 +247,7 @@ entropy_arb/venue_hl.py  Hyperliquid dex 适配器（Entropy、tradexyz）
 entropy_arb/venue_lighter.py  zkLighter 适配器（主网、Robinhood 链）
 entropy_arb/venue_katana.py   Katana Perps 适配器（HMAC + EIP-712）
 entropy_arb/venue_backpack.py Backpack Exchange 适配器（Ed25519 签名 REST + ws）
+entropy_arb/venue_bulk.py        bulk.trade 适配器（Solana Ed25519 交易签名，依赖 bulk-keychain）
 DEVOPS.zh-CN.md         开发运维手册（架构 / Runbook / 新增交易所清单）
 entropy_arb/engine.py    双交易所策略主循环
 entropy_arb/dashboard.py Rich 终端仪表盘

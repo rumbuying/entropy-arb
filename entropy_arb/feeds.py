@@ -15,6 +15,11 @@ BackpackBookFeed: Backpack Exchange depth channel — a REST snapshot
     (lastUpdateId) plus U..u-sequenced diffs with ABSOLUTE level quantities.
     Same snapshot+diff discipline as Katana: subscribe first, buffer diffs,
     replay over the snapshot, resnapshot on any gap.
+BulkBookFeed: bulk.trade L2 — dual-channel because the l2Delta stream has
+    NO sequence numbers (a silently missed frame cannot be detected): the
+    periodic l2Snapshot (200ms, nlevels) rebuilds the book wholesale as the
+    self-healing anchor, while l2Delta applies atomic absolute-quantity
+    updates in between. The book is ready only after the first SNAPSHOT.
 
 All touch the book on any inbound frame (connection-based freshness: a quiet
 market is not stale, only a dead feed is) and reconnect with backoff.
@@ -645,3 +650,119 @@ class BackpackBookFeed:
             backoff = min(backoff * 2, 30.0)
         if self._own_session and self._session is not None:
             await self._session.close()
+
+
+class BulkBookFeed:
+    """bulk.trade L2 order book for one market (e.g. "BTC-USD").
+
+    The venue exposes two channels and neither carries a sequence number:
+
+      * l2Delta — one atomic batch per instrument update: every changed
+        level with its NEW total quantity (sz=0 removes the level). The
+        first frame after subscribing is the venue's current cached book
+        (updateType "snapshot"). A silently missed frame is undetectable —
+        the book would drift without any signal.
+      * l2Snapshot — the full top-N book every 200ms (nlevels parameter).
+
+    So this feed subscribes to BOTH: snapshots rebuild the book wholesale
+    and act as the self-healing anchor (any drift from a missed delta is
+    corrected within 200ms), deltas give sub-200ms freshness in between.
+    The book is marked ready only when the first SNAPSHOT lands — deltas
+    alone on an empty book could look like a one-sided market.
+
+    The 200ms snapshot cadence is the liveness signal too: a dead feed is
+    detected by the usual connection-freshness clock (any frame touches).
+    """
+    SNAPSHOT_NLEVELS = 50
+
+    def __init__(self, name: str, ws_url: str, market: str, book: OrderBook,
+                 notify: Callable[[], None]) -> None:
+        self.name = name
+        self.ws_url = ws_url
+        self.market = market
+        self.book = book
+        self.notify = notify
+        self._snapped = False
+
+    @staticmethod
+    def _apply(levels, side: dict) -> None:
+        for lvl in levels or []:
+            try:
+                px, sz = float(lvl.get("px")), float(lvl.get("sz"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if sz <= 0:
+                side.pop(px, None)
+            else:
+                side[px] = sz
+
+    def _handle_book(self, kind: str, b: dict) -> None:
+        if str(b.get("symbol") or "") != self.market:
+            return
+        levels = b.get("levels") or []
+        bids = levels[0] if len(levels) > 0 else []
+        asks = levels[1] if len(levels) > 1 else []
+        update = str(b.get("updateType") or "")
+        if kind == "l2Snapshot" or update == "snapshot":
+            self.book.clear()
+            self._apply(bids, self.book.bids)
+            self._apply(asks, self.book.asks)
+            self.book.ready = True
+            self.book.last_update_ts = time.time()
+            if not self._snapped:
+                self._snapped = True
+                log.info("[%s] snapshot: %d bids / %d asks", self.name,
+                         len(self.book.bids), len(self.book.asks))
+            self.notify()
+            return
+        # delta: apply atomically, but only onto a book a snapshot has
+        # already seeded — pre-snapshot deltas describe levels of a book
+        # we never saw the rest of
+        if not self.book.ready:
+            return
+        self._apply(bids, self.book.bids)
+        self._apply(asks, self.book.asks)
+        self.book.last_update_ts = time.time()
+        self.notify()
+
+    async def run(self, stop: asyncio.Event) -> None:
+        backoff = 1.0
+        while not stop.is_set():
+            try:
+                async with ws_connect(self.ws_url, max_size=2**23,
+                                      open_timeout=10, ping_interval=20,
+                                      ping_timeout=20) as ws:
+                    log.info("[%s] connected (%s)", self.name, self.ws_url)
+                    self.book.clear()
+                    self._snapped = False
+                    await ws.send(json.dumps({
+                        "method": "subscribe",
+                        "subscription": [
+                            {"type": "l2Delta", "symbol": self.market},
+                            {"type": "l2Snapshot", "symbol": self.market,
+                             "nlevels": self.SNAPSHOT_NLEVELS},
+                        ]}))
+                    async for raw in ws:
+                        backoff = 1.0
+                        self.book.touch()
+                        msg = json.loads(raw)
+                        t = str(msg.get("type") or "")
+                        if t in ("l2Delta", "l2Snapshot"):
+                            self._handle_book(
+                                t, (msg.get("data") or {}).get("book") or {})
+                        elif t == "error":
+                            log.warning("[%s] ws error frame: %s", self.name,
+                                        str(msg.get("error"))[:200])
+                        if stop.is_set():
+                            break
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.warning("[%s] ws error: %s — reconnect in %.0fs",
+                            self.name, e, backoff)
+            self.book.ready = False
+            self.notify()
+            if stop.is_set():
+                break
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)

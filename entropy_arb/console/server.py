@@ -220,7 +220,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                      "hedge",
                                      "xyz" if hedge == "tradexyz" else ""))
                         for venue_kind, leg, leg_dex in legs:
-                            supported = venue_kind == "katana"
+                            supported = venue_kind in ("katana", "bulk")
                             if not supported:
                                 covered_notes.setdefault(
                                     (sid, venue_kind, leg), {
@@ -654,7 +654,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         creds = secrets.status()["venues"]
         needed = {"lighter": "lighter", "lighter-rh": "lighter-rh",
                   "tradexyz": "tradexyz", "katana": "katana",
-                  "backpack": "backpack"}
+                  "backpack": "backpack", "bulk": "bulk"}
         if mode == "live":
             # the entropy leg's credential requirement follows --base; a
             # Lighter leg uses its per-leg override when one is present
@@ -1496,6 +1496,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                         gname = "Katana"
                     elif venue == "backpack":
                         gname = "Backpack"
+                    elif venue == "bulk":
+                        gname = "Bulk"
                     elif venue == "lighter":
                         gname = "Lighter"
                     elif venue == "lighter-rh":

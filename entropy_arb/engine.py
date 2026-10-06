@@ -31,6 +31,7 @@ from .maker import (FillEvent, MakerQuote, clamp_to_maker_book,
                     vol_widen_bps)
 from .recorder import MinuteRecorder
 from .venue_backpack import BackpackVenue
+from .venue_bulk import BulkVenue
 from .venue_hl import HLVenue
 from .venue_katana import KatanaVenue
 from .venue_lighter import LighterVenue
@@ -250,6 +251,8 @@ class Engine:
             return KatanaVenue(vc, self.session, self.cfg.settle_timeout_sec)
         if vc.kind == "backpack":
             return BackpackVenue(vc, self.session, self.cfg.settle_timeout_sec)
+        if vc.kind == "bulk":
+            return BulkVenue(vc, self.session, self.cfg.settle_timeout_sec)
         return HLVenue(vc, self.cfg.hl_api_url, self.cfg.hl_ws_url,
                        self.session, self.cfg.settle_timeout_sec)
 

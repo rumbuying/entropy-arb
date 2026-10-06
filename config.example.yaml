@@ -18,6 +18,8 @@
 #   katana       Katana Perps               (USDC, ~1.9 bps taker; crypto
 #                                           majors only — pair with the main
 #                                           HL dex via entropy.dex: "")
+#   bulk         bulk.trade (Solana perp DEX) (USDC, 3.5 bps taker /
+#                0 bps maker; account pubkey = Solana wallet pubkey)
 #   backpack     Backpack Exchange perps    (USDC, tier-1 ~5 bps taker /
 #                                           ~2 bps maker — VERIFY your tier;
 #                                           deep books, Ed25519-signed REST)
@@ -90,12 +92,12 @@ auto_band:
 # base leg with a taker order, and lock premium-minus-costs per fill.
 # Mutually exclusive with the taker band strategy (which it disables).
 # The hedge venue must implement the maker contract (maker_capable —
-# currently katana and backpack). See MAKER-DESIGN.md for the full design.
+# currently katana, backpack and bulk). See MAKER-DESIGN.md for the full design.
 #
 # maker.enabled: true 切换为挂单策略：在对冲腿（如 --hedge katana /
 # --hedge backpack）以 post-only 挂单吸收流量，成交瞬间在基准腿吃单对冲，
 # 锁定"溢价−成本"的净边际。与 taker band 策略互斥（启用后 band 扫描停止）。
-# 对冲腿必须实现挂单契约（maker_capable——目前为 katana 与 backpack）。
+# 对冲腿必须实现挂单契约（maker_capable——目前为 katana、backpack 与 bulk）。
 # 完整设计见 MAKER-DESIGN.md。
 maker:
   enabled: false

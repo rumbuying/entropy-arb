@@ -99,6 +99,9 @@ class MakerCase:
     """Adapter-provided shim. Subclass in the venue's test module."""
 
     venue_name = "?"
+    # HTTP verb the market-wide safety cancel uses (bulk signs cancels as
+    # POST /order transactions; the other venues have DELETE endpoints)
+    cancel_method = "DELETE"
 
     # -- construction ---------------------------------------------------------
     def make_venue(self, session):
@@ -218,7 +221,8 @@ def check_cancel_all_for_market_is_one_request(case: MakerCase) -> None:
     r = _run(v.cancel_orders())
     assert r["ok"] is True, f"[{case.venue_name}] {r}"
     method, url, kw = s.only()
-    assert method == "DELETE", f"[{case.venue_name}] cancel used {method}"
+    assert method == case.cancel_method, \
+        f"[{case.venue_name}] cancel used {method}"
     assert case.is_market_cancel(case.request_params(method, url, kw)), \
         f"[{case.venue_name}] market-wide cancel params look wrong"
 

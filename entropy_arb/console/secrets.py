@@ -40,6 +40,10 @@ RE_TOKEN = re.compile(r"^\S{8,}$")
 # the secret is the base64 32-byte seed — both decode to exactly 32 bytes
 # (44 base64 chars with padding). Checked by decode, not by alphabet.
 RE_B64 = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
+# bulk.trade secret: base58 Solana Ed25519 key (32-byte seed or 64-byte
+# keypair). Base58 excludes 0OIl; length varies with leading zero bytes, so
+# only the alphabet and a sane floor are checked (43–88 chars covers both).
+RE_B58 = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{43,88}$")
 
 # key -> (kind, description)
 KEY_KINDS: Dict[str, str] = {
@@ -65,6 +69,7 @@ KEY_KINDS: Dict[str, str] = {
     "KATANA_WALLET": "address",
     "BACKPACK_API_KEY": "b64_32",
     "BACKPACK_API_SECRET": "b64_32",
+    "BULK_SECRET_KEY": "b58_key",
 }
 
 # what each hedge choice needs to be tradeable (creds_complete semantics)
@@ -77,6 +82,7 @@ VENUE_REQUIREMENTS: Dict[str, List[str]] = {
                    "LIGHTER_API_PRIVATE_KEY"],
     "katana": ["KATANA_API_KEY", "KATANA_API_SECRET", "KATANA_PRIVATE_KEY"],
     "backpack": ["BACKPACK_API_KEY", "BACKPACK_API_SECRET"],
+    "bulk": ["BULK_SECRET_KEY"],
 }
 
 # the same requirements under a per-leg override name, tried first
@@ -169,6 +175,8 @@ def validate_value(key: str, value: str) -> Optional[str]:
     if kind == "b64_32" and (not RE_B64.match(value.strip())
                              or not _b64_32_ok(value)):
         return _b64_32_error(value)
+    if kind == "b58_key" and not RE_B58.match(value.strip()):
+        return _b58_key_error(value)
     return None
 
 
@@ -178,6 +186,27 @@ def _b64_32_ok(value: str) -> bool:
         return len(base64.b64decode(value.strip(), validate=True)) == 32
     except Exception:
         return False
+
+
+def _b58_key_error(value: str) -> str:
+    """Explain why a bulk.trade key paste failed the shape check, describing
+    only the SHAPE — never echoing any character of the value."""
+    s = value.strip()
+    why = []
+    if re.search(r"\s", value):
+        why.append("contains a space or line break (copy may have wrapped)")
+    bad = sum(1 for c in s if c not in
+              "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+    if bad:
+        why.append(f"{bad} non-base58 character(s) — base58 never uses "
+                   "0, O, I or l")
+    if s and len(s) < 43:
+        why.append(f"only {len(s)} characters — a truncated paste?")
+    if len(s) > 88:
+        why.append(f"{len(s)} characters — too long for an Ed25519 key")
+    return ("expect the base58 Solana Ed25519 secret key (Phantom's "
+            "'Export Private Key' value works as-is)"
+            + ("; " + "; ".join(why) if why else ""))
 
 
 def _line_pattern(key: str):

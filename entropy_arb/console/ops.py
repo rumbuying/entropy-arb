@@ -29,9 +29,11 @@ from typing import Callable, Optional
 import aiohttp
 
 from ..book import floor_step
-from ..config import (LIGHTER_PROFILES, BackpackCreds, ConfigError, HLCreds,
-                      KatanaCreds, VenueConf, lighter_creds, load_config)
+from ..config import (LIGHTER_PROFILES, BackpackCreds, BulkCreds, ConfigError,
+                      HLCreds, KatanaCreds, VenueConf, lighter_creds,
+                      load_config)
 from ..venue_backpack import BackpackVenue
+from ..venue_bulk import BulkVenue
 from ..venue_hl import HLVenue
 from ..venue_katana import KatanaVenue
 from ..venue_lighter import LighterVenue
@@ -53,6 +55,8 @@ def _make_venue(vc: VenueConf, session: aiohttp.ClientSession,
         return KatanaVenue(vc, session, settle_timeout)
     if vc.kind == "backpack":
         return BackpackVenue(vc, session, settle_timeout)
+    if vc.kind == "bulk":
+        return BulkVenue(vc, session, settle_timeout)
     # HL endpoints come from the config module (the engine reads them off
     # the loaded Config; ops builds VenueConfs directly)
     from ..config import HL_API_URL, HL_WS_URL
@@ -100,6 +104,10 @@ def _diag_conf(venue: str, symbol: str, role: str, dex: str, env_file: str) \
                          backpack_creds=BackpackCreds(
                              os.getenv("BACKPACK_API_KEY"),
                              os.getenv("BACKPACK_API_SECRET")), **base)
+    if venue == "bulk":
+        return VenueConf(label="BULK", kind="bulk",
+                         bulk_creds=BulkCreds(
+                             os.getenv("BULK_SECRET_KEY")), **base)
     raise ValueError(f"unknown venue {venue!r}")
 
 

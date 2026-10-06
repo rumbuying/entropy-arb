@@ -24,6 +24,8 @@ def exchange_of(venue_name: str) -> str:
         return "HL(io)"
     if "BACKPACK" in n:
         return "Backpack"
+    if "BULK" in n:
+        return "Bulk"
     if n == "RH" or "LIGHTER-RH" in n:
         return "Lighter-RH"
     if "KATANA" in n:

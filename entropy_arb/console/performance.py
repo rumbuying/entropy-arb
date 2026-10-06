@@ -173,7 +173,7 @@ def performance_for_strategy(storage, *, strategy_id: str,
     # API — the component covers the verified legs only
     strategy_row = storage.get_strategy(strategy_id)
     if strategy_row and funding_seen:
-        supported = {"katana"}
+        supported = {"katana", "bulk"}      # venues with a verified funding API
         for vk in (strategy_row.get("base_venue"),
                    strategy_row.get("hedge_venue")):
             if vk and vk not in supported:
