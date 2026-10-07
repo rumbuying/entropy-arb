@@ -17,6 +17,9 @@ venv/
 .pytest_cache/
 *.egg-info/
 
+# console running-profile markers (runtime state) / 控制台运行中的 profile 标记
+profiles/*.lock
+
 # console auto-generated token / 控制台自动生成的令牌
 logs/console-token
 

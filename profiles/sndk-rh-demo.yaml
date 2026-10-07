@@ -1,0 +1,27 @@
+thresholds:
+  midline_bps: -6.5
+  upper_bps: 6
+  lower_bps: 6
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 250
+  min_order_notional_usd: 10
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 50
+  hedge_slippage_bps: 20
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+recorder:
+  enabled: true
+  csv: logs/minutes-SNDK-lighter.csv
+logging:
+  file: logs/engine-SNDK-lighter.log
+  trades_csv: logs/trades-SNDK-lighter.csv
+  dashboard: false
+  level: INFO
