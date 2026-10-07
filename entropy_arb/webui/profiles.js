@@ -103,7 +103,7 @@ export function initProfiles(pane, shell) {
     const sym = document.createElement("input"); sym.type = "text";
     sym.placeholder = t("profiles.symbol_ph"); sym.style.textTransform = "uppercase";
     const hedge = document.createElement("select");
-    ["lighter", "lighter-rh", "tradexyz", "katana", "backpack"].forEach(v => {
+    ["lighter", "lighter-rh", "tradexyz", "katana", "backpack", "bulk"].forEach(v => {
       const o = document.createElement("option"); o.value = v; o.textContent = v;
       hedge.appendChild(o);
     });
@@ -307,7 +307,7 @@ export function initProfiles(pane, shell) {
     const sym = document.createElement("input");
     sym.type = "text"; sym.placeholder = t("profiles.symbol_ph");
     const hedge = document.createElement("select");
-    ["lighter", "lighter-rh", "tradexyz", "backpack"].forEach(v => {
+    ["lighter", "lighter-rh", "tradexyz", "katana", "backpack", "bulk"].forEach(v => {
       const o = document.createElement("option"); o.value = v; o.textContent = v;
       hedge.appendChild(o);
     });

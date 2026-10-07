@@ -53,6 +53,10 @@ const GROUPS = [
     keys: ["BACKPACK_API_KEY", "BACKPACK_API_SECRET"],
     diag: { venue: "backpack" },
     affects: w => w.base === "backpack" || w.hedge === "backpack" },
+  { id: "bulk", title: "secrets.title.bulk",
+    keys: ["BULK_SECRET_KEY"],
+    diag: { venue: "bulk" },
+    affects: w => w.base === "bulk" || w.hedge === "bulk" },
 ];
 
 export function mount(container) {
@@ -304,6 +308,7 @@ export function mount(container) {
         : g.id === "xyz" ? ["tradexyz"]
         : g.id === "katana" ? ["katana"]
         : g.id === "backpack" ? ["backpack"]
+        : g.id === "bulk" ? ["bulk"]
         : ["lighter", "lighter-rh"];
       for (const v of rel) {
         chips.appendChild(badge(`${v} ${st.venues[v] ? "✓" : "✗"}`,

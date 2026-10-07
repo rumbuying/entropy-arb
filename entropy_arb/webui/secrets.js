@@ -21,6 +21,9 @@ const GROUPS = [
   { id: "backpack", title: "secrets.title.backpack", venue: "backpack",
     role: "hedge",
     keys: ["BACKPACK_API_KEY", "BACKPACK_API_SECRET"] },
+  { id: "bulk", title: "secrets.title.bulk", venue: "bulk",
+    role: "hedge",
+    keys: ["BULK_SECRET_KEY"] },
 ];
 
 export function initSecrets(pane, shell) {
@@ -54,6 +57,7 @@ export function initSecrets(pane, shell) {
         : g.id === "xyz" ? ["tradexyz"]
         : g.id === "katana" ? ["katana"]
         : g.id === "backpack" ? ["backpack"]
+        : g.id === "bulk" ? ["bulk"]
         : ["lighter", "lighter-rh"];
       for (const v of relevant) {
         const c = document.createElement("span");

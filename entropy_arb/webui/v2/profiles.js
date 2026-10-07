@@ -133,10 +133,10 @@ export function mount(container) {
     sym.placeholder = t("profiles.symbol_ph");
     sym.style.textTransform = "uppercase";
     const hedge = el("select", {});
-    ["lighter", "lighter-rh", "tradexyz", "katana", "backpack"].forEach(v =>
+    ["lighter", "lighter-rh", "tradexyz", "katana", "backpack", "bulk"].forEach(v =>
       hedge.appendChild(el("option", { value: v }, v)));
     const base = el("select", {});
-    ["hl", "lighter", "lighter-rh", "katana", "backpack"].forEach(v =>
+    ["hl", "lighter", "lighter-rh", "katana", "backpack", "bulk"].forEach(v =>
       base.appendChild(el("option", { value: v }, v)));
     const mrow = (label, node) => el("div", { class: "form-row" },
       el("label", { text: label }), node);
@@ -386,10 +386,10 @@ export function mount(container) {
     const sym = el("input", { type: "text" });
     sym.placeholder = t("profiles.symbol_ph");
     const hedge = el("select", {});
-    ["lighter", "lighter-rh", "tradexyz", "katana", "backpack"].forEach(v =>
+    ["lighter", "lighter-rh", "tradexyz", "katana", "backpack", "bulk"].forEach(v =>
       hedge.appendChild(el("option", { value: v }, v)));
     const base = el("select", {});
-    ["hl", "lighter", "lighter-rh", "katana", "backpack"].forEach(v =>
+    ["hl", "lighter", "lighter-rh", "katana", "backpack", "bulk"].forEach(v =>
       base.appendChild(el("option", { value: v }, v)));
     const row = (label, node) => el("div", { class: "form-row" },
       el("label", { text: label }), node);
