@@ -1,0 +1,48 @@
+# HL main-dex HYPE vs bulk.trade HYPE-USD — data collection profile.
+#
+# 5-min snapshot 2026-10-07: premium -2.9bp mean / 0.9 std — INVERTED vs the
+# other bulk markets (bulk persistently RICH vs HL). The interesting side is
+# the BUY-entropy direction (buy HL cheap / sell bulk rich). Thresholds are
+# placeholders until days of data exist; --record-only never trades.
+thresholds:
+  midline_bps: -2.9
+  upper_bps: 8.0
+  lower_bps: 8.0
+entropy:
+  dex: ""                    # main HL perp dex: bare HYPE
+  taker_fee_bps: 4.5
+  max_position_usd: 1000
+  max_orders_per_min: 120
+hedge:
+  symbol: HYPE-USD
+  taker_fee_bps: 3.5
+  max_position_usd: 1000
+  max_orders_per_min: 30
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 100
+  min_order_notional_usd: 50   # bulk HYPE minNotional
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 10
+  hedge_slippage_bps: 20
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+recorder:
+  enabled: true
+  csv: logs/minutes-HYPE-bulk.csv
+logging:
+  file: logs/engine-HYPE-bulk.log
+  trades_csv: logs/trades-HYPE-bulk.csv
+  dashboard: false
+  level: INFO
+auto_band:
+  enabled: false
+  window_days: 7
+  width_k: 2.5
+  min_width_bps: 5.0

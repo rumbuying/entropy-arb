@@ -1,25 +1,25 @@
 # ANTH (io dex) vs ANTHROPIC (lighter-rh) — 盘前币对，先 RECORD-ONLY 采集
 # hedge.symbol 别名：两所对同一标的的不同命名
 thresholds:
-  midline_bps: -168.8
-  upper_bps: 57.68
-  lower_bps: 57.68
+  midline_bps: -186.49
+  upper_bps: 15.75
+  lower_bps: 15.75
 
 entropy:
   dex: io
   taker_fee_bps: 0.9
-  max_position_usd: 1000
+  max_position_usd: 1500
   max_orders_per_min: 120
 
 hedge:
   symbol: ANTHROPIC
   taker_fee_bps: 0.0
-  max_position_usd: 1000
+  max_position_usd: 1500
   max_orders_per_min: 30
 
 sizing:
   take_fraction: 0.5
-  max_order_notional_usd: 125
+  max_order_notional_usd: 150
   min_order_notional_usd: 10
 
 inventory:

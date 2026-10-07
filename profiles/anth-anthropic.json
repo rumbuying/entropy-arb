@@ -1,6 +1,7 @@
 {
   "symbol": "ANTH",
   "hedge": "lighter-rh",
-  "updated_ts": 1789620115.419967,
-  "created_ts": 1789620115.4199686
+  "updated_ts": 1790759700.0922482,
+  "created_ts": 1789620115.4199686,
+  "base": "hl"
 }

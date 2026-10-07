@@ -1,0 +1,48 @@
+# HL main-dex SOL vs bulk.trade SOL-USD — data collection profile.
+#
+# 5-min snapshot 2026-10-07: premium +4.9bp mean / 0.8 std (bulk persistently
+# cheap vs HL — widest stable premium among bulk's non-BTC markets).
+# Thresholds are placeholders until days of data exist; --record-only never
+# trades and band hot-reload picks up new values without a restart.
+thresholds:
+  midline_bps: 4.9
+  upper_bps: 8.0
+  lower_bps: 8.0
+entropy:
+  dex: ""                    # main HL perp dex: bare SOL
+  taker_fee_bps: 4.5
+  max_position_usd: 1000
+  max_orders_per_min: 120
+hedge:
+  symbol: SOL-USD
+  taker_fee_bps: 3.5         # bulk tier-0 taker (GET /feeState serves the ladder)
+  max_position_usd: 1000
+  max_orders_per_min: 30
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 100
+  min_order_notional_usd: 50   # bulk SOL minNotional
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 10
+  hedge_slippage_bps: 20
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+recorder:
+  enabled: true
+  csv: logs/minutes-SOL-bulk.csv
+logging:
+  file: logs/engine-SOL-bulk.log
+  trades_csv: logs/trades-SOL-bulk.csv
+  dashboard: false
+  level: INFO
+auto_band:
+  enabled: false
+  window_days: 7
+  width_k: 2.5
+  min_width_bps: 5.0

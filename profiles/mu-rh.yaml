@@ -14,9 +14,9 @@
 thresholds:
   # 占位值（record-only 不交易；live 前由 auto_band 校准）
   # 口径: premium = Backpack(MU.US) / lighter-rh(MU) − 1
-  midline_bps: 0.0
-  upper_bps: 12.0
-  lower_bps: 12.0
+  midline_bps: -3.28
+  upper_bps: 7.83
+  lower_bps: 7.83
 
 entropy:
   # MU.US 在 Backpack 自动解析为 MU.US_USDC_PERP
