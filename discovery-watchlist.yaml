@@ -1,0 +1,24 @@
+symbols:
+- symbol: NEAR
+- symbol: PENDLE
+venues:
+- hl
+- hl:io
+- lighter
+- lighter-rh
+- katana
+- backpack
+- bulk
+depth_levels: 3
+max_spread_bps: 50
+rescan_minutes: 30
+max_feeds: 24
+scoring:
+  promote: true
+  min_minutes: 60
+  dead_bps: 2.0
+  provisional_hours: 24
+  stable_hours: 72
+  min_potential_bps: 6.0
+  min_hits_per_day: 3.0
+  min_capacity_usd: 200.0

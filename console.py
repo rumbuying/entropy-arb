@@ -16,6 +16,7 @@ generated, printed here and stored in logs/console-token (0600).
 """
 import argparse
 import asyncio
+import contextlib
 import logging
 import os
 import secrets as pysecrets
@@ -94,6 +95,13 @@ async def amain(args) -> None:
         register_analytics(app, profiles)
     except ImportError:
         logging.getLogger("console").warning("analytics module unavailable")
+    try:
+        from entropy_arb.console.discovery import (register_discovery,
+                                                   start_discovery_loop)
+        register_discovery(app, supervisor, profiles, storage, audit, root)
+        start_discovery_loop(app)
+    except ImportError:
+        logging.getLogger("console").warning("discovery module unavailable")
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, args.host, args.port)
@@ -108,6 +116,13 @@ async def amain(args) -> None:
     try:
         await asyncio.Event().wait()
     finally:
+        loop_task = app.get("discovery_loop")
+        if loop_task:
+            loop_task.cancel()
+        aclose = (app.get("discovery") or {}).get("aclose")
+        if aclose:
+            with contextlib.suppress(Exception):
+                await aclose()
         app["ops_service"].shutdown()
         await supervisor.shutdown()
         await runner.cleanup()

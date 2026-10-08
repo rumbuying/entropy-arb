@@ -1,0 +1,54 @@
+# entropy-arb star discovery probe (systemd unit)
+#
+# 用途：Discovery L1 星型采集常驻进程（DISCOVERY-PLAN.zh-CN.md §L1）。对
+# watchlist 里每个币种先做 L0 解析（entropy_arb.discovery.universe），对每个
+# resolved (venue, symbol) 只建 1 条公共盘口 feed，落盘单所分钟条
+# logs/minutes-<SYM>-@<venue>.csv（VenueMinuteRecorder schema，含 top-3 深度
+# 与 wide-spread 防幻影过滤）；全部 N×(N−1) 配对溢价由分析期从单所条推导。
+#
+# 安装（root）:
+#   cp deploy/entropy-star-probe.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now entropy-star-probe
+#
+# 查看:
+#   systemctl status entropy-star-probe
+#   tail -f /root/code/entropy/logs/star-probe.log
+#   cat /root/code/entropy/logs/discovery/scanner-status.json   # 采集心跳
+#
+# 产出:
+#   logs/minutes-<SYM>-@<venue>.csv      单所分钟条（@ 区别于 engine/probe 命名）
+#   logs/discovery/scanner-status.json   每 --status-interval 秒原子重写
+#
+# 改采集标的 = 编辑 /root/code/entropy/discovery-watchlist.yaml，保存即热加载
+# （进程每 ~15s 看 mtime，新增币种开始采、删除的停掉，不动已写 CSV），无需
+# systemctl restart。rescan（默认 30 分钟）刷新市场目录，新上市的 venue 自动
+# 补 feed。
+#
+# 注意：
+#   - 每 resolved (venue, symbol) 一条公共行情 ws，总连接数受 watchlist 的
+#     max_feeds（默认 24）限制，超出的记入 scanner-status.json 的
+#     dropped_for_budget；未上市场所记入 unresolved。
+#   - feed 断线由 feeds 内部重连循环处理；连续 90s 无任何 ws 帧由本进程的
+#     看门狗 cancel 并重建（同一 recorder 继续用，rebuilds +1）。
+#   - Katana 的 REST 快照有速率限制（429），rescan 走 discovery 的 10 分钟
+#     TTL 缓存，勿把 rescan_minutes 调得过小。
+#   - 不要再起第二个写同样文件的进程——同一 CSV 会被两个写者交错追加。
+
+[Unit]
+Description=entropy-arb star discovery probe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/code/entropy
+ExecStart=/usr/bin/python3.11 tools/star_probe.py --watchlist /root/code/entropy/discovery-watchlist.yaml
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=append:/root/code/entropy/logs/star-probe.log
+StandardError=append:/root/code/entropy/logs/star-probe.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
