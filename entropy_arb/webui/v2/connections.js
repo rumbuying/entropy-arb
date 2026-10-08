@@ -6,61 +6,35 @@
    Polling never clobbers editing: refresh() skips re-render while any
    input is non-empty / focused / dirty (spec §4.3, §5.3). */
 
+// Credential cards come from /api/venue-catalog (registry-derived) —
+// fetching a new venue's keys/diag mapping from the backend table, not from
+// this file. The per-card special notes below (shared-view source line,
+// deployment note) are keyed by card id and only exist for the Lighter
+// family's override semantics.
+
 import { getJSON, postJSON } from "/static/api.js";
-import { t } from "/static/i18n.js";
+import { t, getLang } from "/static/i18n.js";
+import { venueCatalog } from "./catalog.js";
 import { el, card, stateBox, badge, updatedStamp } from "./components.js";
 
-// display groups per spec §5.3. `diag` = the exact venue/role/dex mapping
-// the legacy /api/diagnostics contract expects (spec §9: tradeXYZ maps to
-// venue=hl role=hedge dex=xyz — never venue "tradexyz").
-const GROUPS = [
-  { id: "entropy", title: "secrets.title.entropy",
-    keys: ["HL_PRIVATE_KEY", "HL_ACCOUNT_ADDRESS"],
-    diag: { venue: "hl", role: "base", dexInput: true },
-    affects: w => w.base === "hl" || w.hedge === "tradexyz" },
-  { id: "xyz", title: "secrets.title.xyz",
-    keys: ["HL_PRIVATE_KEY_XYZ", "HL_ACCOUNT_ADDRESS_XYZ"],
-    source: "tradexyz",
-    diag: { venue: "hl", role: "hedge", dex: "xyz" },
-    affects: w => w.hedge === "tradexyz" },
-  { id: "lighter", title: "v2.conn.title.lighter",
-    keys: ["LIGHTER_ACCOUNT_INDEX", "LIGHTER_API_KEY_INDEX",
-           "LIGHTER_API_PRIVATE_KEY"],
-    roles: true,
-    diag: { venue: "lighter" },
-    affects: w => ["lighter", "lighter-rh"].includes(w.base)
-               || ["lighter", "lighter-rh"].includes(w.hedge) },
-  { id: "lighter-rh", title: "v2.conn.title.rh", sharedView: true,
-    diag: { venue: "lighter-rh" },
-    affects: w => ["lighter", "lighter-rh"].includes(w.base)
-               || ["lighter", "lighter-rh"].includes(w.hedge) },
-  { id: "lighter-base", title: "v2.conn.title.base",
-    keys: ["LIGHTER_BASE_ACCOUNT_INDEX", "LIGHTER_BASE_API_KEY_INDEX",
-           "LIGHTER_BASE_API_PRIVATE_KEY"],
-    completeness: "lighter-base", diag: { venue: "lighter", role: "base" },
-    affects: w => ["lighter", "lighter-rh"].includes(w.base) },
-  { id: "lighter-hedge", title: "v2.conn.title.hedge",
-    keys: ["LIGHTER_HEDGE_ACCOUNT_INDEX", "LIGHTER_HEDGE_API_KEY_INDEX",
-           "LIGHTER_HEDGE_API_PRIVATE_KEY"],
-    completeness: "lighter-hedge", diag: { venue: "lighter", role: "hedge" },
-    affects: w => ["lighter", "lighter-rh"].includes(w.hedge) },
-  { id: "katana", title: "secrets.title.katana",
-    keys: ["KATANA_API_KEY", "KATANA_API_SECRET", "KATANA_PRIVATE_KEY",
-           "KATANA_WALLET"],
-    diag: { venue: "katana" },
-    affects: w => w.base === "katana" || w.hedge === "katana" },
-  { id: "backpack", title: "secrets.title.backpack",
-    keys: ["BACKPACK_API_KEY", "BACKPACK_API_SECRET"],
-    diag: { venue: "backpack" },
-    affects: w => w.base === "backpack" || w.hedge === "backpack" },
-  { id: "bulk", title: "secrets.title.bulk",
-    keys: ["BULK_SECRET_KEY"],
-    diag: { venue: "bulk" },
-    affects: w => w.base === "bulk" || w.hedge === "bulk" },
-];
+let GROUPS = [];               // catalog.cards once fetched
 
-export function mount(container) {
+function cardTitle(g) {
+  if (g.title_key) return t(g.title_key);
+  const tt = g.title || {};
+  return tt[getLang()] || tt.en || g.id;
+}
+
+function affectsPred(g) {
+  const a = g.affects || {};
+  const base = a.base || [], hedge = a.hedge || [];
+  return w => base.includes(w.base) || hedge.includes(w.hedge);
+}
+
+export async function mount(container) {
   const stamp = updatedStamp();
+  try { GROUPS = (await venueCatalog()).cards || []; }
+  catch (_) { GROUPS = []; }          // cards render empty; retry via refresh
   let workers = [];              // for affected-instance warnings
   let data = null;               // last /api/connections payload
   const inputs = new Map();      // key -> {input, del}
@@ -211,7 +185,7 @@ export function mount(container) {
 
   function affectedWorkers(g) {
     return workers.filter(w => {
-      try { return g.affects(w); } catch (_) { return false; }
+      try { return affectsPred(g)(w); } catch (_) { return false; }
     });
   }
 
@@ -300,16 +274,10 @@ export function mount(container) {
     }
     const sources = st.credential_sources || {};
     for (const g of GROUPS) {
-      const c = card(t(g.title));
+      const c = card(cardTitle(g));
       // completeness chips (fields non-empty — NOT authenticated, §3.2)
       const chips = el("div", { style: "margin:2px 0 10px" });
-      const rel = g.completeness ? [g.completeness]
-        : g.id === "entropy" ? ["entropy"]
-        : g.id === "xyz" ? ["tradexyz"]
-        : g.id === "katana" ? ["katana"]
-        : g.id === "backpack" ? ["backpack"]
-        : g.id === "bulk" ? ["bulk"]
-        : ["lighter", "lighter-rh"];
+      const rel = g.rel || [];
       for (const v of rel) {
         chips.appendChild(badge(`${v} ${st.venues[v] ? "✓" : "✗"}`,
           st.venues[v] ? "badge running" : "badge stale"));
@@ -344,7 +312,7 @@ export function mount(container) {
           el("button", { class: "primary", text: t("secrets.save"),
             onclick: () => saveDialog(g, st) })));
       }
-      if (g.id === "lighter") {
+      if (g.deploymentNote) {
         c.appendChild(el("div", { class: "note", style: "margin-top:6px" },
           t("secrets.deployment_note")));
       }
@@ -389,7 +357,7 @@ export function mount(container) {
     diagHistoryRenderers.forEach(fn => { try { fn(); } catch (_) {} });
   }
 
-  refresh();
+  await refresh();
   const timer = setInterval(refresh, 8000);
   return { refresh, destroy() { clearInterval(timer); } };
 }

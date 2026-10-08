@@ -8,7 +8,8 @@
 import { getJSON, postJSON, delJSON } from "/static/api.js";
 import { t } from "/static/i18n.js";
 import { parseYaml, emitYaml, setPaths } from "/static/yaml-lite.js";
-import { el, card, table, stateBox, badge, updatedStamp } from "./components.js";
+import { el, card, table, stateBox, badge, updatedStamp } from "./components.js"
+import { venueCatalog, fillLegSelects } from "./catalog.js";
 import { store } from "./store.js";
 
 const FIELDS = [
@@ -133,11 +134,8 @@ export function mount(container) {
     sym.placeholder = t("profiles.symbol_ph");
     sym.style.textTransform = "uppercase";
     const hedge = el("select", {});
-    ["lighter", "lighter-rh", "tradexyz", "katana", "backpack", "bulk"].forEach(v =>
-      hedge.appendChild(el("option", { value: v }, v)));
     const base = el("select", {});
-    ["hl", "lighter", "lighter-rh", "katana", "backpack", "bulk"].forEach(v =>
-      base.appendChild(el("option", { value: v }, v)));
+    venueCatalog().then(c => fillLegSelects(hedge, base, c));
     const mrow = (label, node) => el("div", { class: "form-row" },
       el("label", { text: label }), node);
     formBox.append(
@@ -386,11 +384,8 @@ export function mount(container) {
     const sym = el("input", { type: "text" });
     sym.placeholder = t("profiles.symbol_ph");
     const hedge = el("select", {});
-    ["lighter", "lighter-rh", "tradexyz", "katana", "backpack", "bulk"].forEach(v =>
-      hedge.appendChild(el("option", { value: v }, v)));
     const base = el("select", {});
-    ["hl", "lighter", "lighter-rh", "katana", "backpack", "bulk"].forEach(v =>
-      base.appendChild(el("option", { value: v }, v)));
+    venueCatalog().then(c => fillLegSelects(hedge, base, c));
     const row = (label, node) => el("div", { class: "form-row" },
       el("label", { text: label }), node);
     const box = el("div", {}, el("h2", { text: t("profiles.new") }),

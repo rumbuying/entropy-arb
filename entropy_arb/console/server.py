@@ -547,6 +547,12 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 audit(f"credential_revision -> {rev}")
         return web.json_response(r, status=200 if r["ok"] else 400)
 
+    async def api_venue_catalog(request):
+        """Declarative venue catalog for the console UI (v2): venue lists,
+        capabilities and credential cards — all derived from the venue
+        registry, so a newly registered venue appears without a JS edit."""
+        return web.json_response(venue_registry.ui_catalog())
+
     async def api_connections(request):
         """V2 access view (spec §10.3): masked status + the credential
         source each deployment/role actually resolves to + per-target
@@ -1918,6 +1924,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_get("/api/secrets", secrets_status)
     app.router.add_post("/api/secrets", secrets_update)
     app.router.add_get("/api/connections", api_connections)
+    app.router.add_get("/api/venue-catalog", api_venue_catalog)
     app.router.add_get("/api/workers", workers_list)
     app.router.add_get("/api/venues", api_venues)
     app.router.add_post("/api/workers", worker_start)

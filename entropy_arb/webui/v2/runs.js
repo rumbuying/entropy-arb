@@ -6,7 +6,8 @@
 import { getJSON, postJSON, delJSON } from "/static/api.js";
 import { t } from "/static/i18n.js";
 import { fmtUptime } from "/static/fmt.js";
-import { el, card, table, stateBox, badge, updatedStamp } from "./components.js";
+import { el, card, table, stateBox, badge, updatedStamp } from "./components.js"
+import { venueCatalog, fillLegSelects, needGroupFor } from "./catalog.js";
 
 const ENGINE_STATES = ["starting", "running", "recording", "halted",
                        "venue_down", "stale", "rate_limited"];
@@ -502,11 +503,13 @@ export function mount(container) {
     const sym = el("input", { type: "text" });
     sym.placeholder = t("profiles.symbol_ph");
     const base = el("select", {});
-    ["hl", "lighter", "lighter-rh", "katana", "backpack"].forEach(v =>
-      base.appendChild(el("option", { value: v }, v)));
     const hedge = el("select", {});
-    ["lighter", "lighter-rh", "tradexyz", "katana", "backpack"].forEach(v =>
-      hedge.appendChild(el("option", { value: v }, v)));
+    let cat = null;                      // venue catalog (async, cached)
+    venueCatalog().then(c => {
+      cat = c;
+      fillLegSelects(hedge, base, c);
+      syncCreds();
+    });
     const mode = el("select", {});
     [["record", t("mode.record")], ["live", t("mode.live")]].forEach(([v, l]) =>
       mode.appendChild(el("option", { value: v }, l)));
@@ -531,11 +534,10 @@ export function mount(container) {
       // show the REAL credential completeness for the chosen legs (§5.4)
       const v = (creds && creds.venues) || {};
       const lines = [];
-      const needBase = base.value === "hl" ? "entropy"
-        : ["lighter", "lighter-rh"].includes(base.value) ? "lighter-base"
+      const needBase = cat ? needGroupFor(cat, base.value, "base")
         : base.value;
-      const needHedge = ["lighter", "lighter-rh"].includes(hedge.value)
-        ? "lighter-hedge" : hedge.value;
+      const needHedge = cat ? needGroupFor(cat, hedge.value, "hedge")
+        : hedge.value;
       lines.push(`base ${base.value}: ${v[needBase] ? "✓" : "✗ " + needBase}`);
       lines.push(`hedge ${hedge.value}: ${v[needHedge] ? "✓" : "✗ " + needHedge}`);
       credsNote.textContent = lines.join(" · ");

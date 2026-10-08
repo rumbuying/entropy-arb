@@ -372,3 +372,122 @@ def key_kinds() -> Dict[str, str]:
 def venue_requirements() -> Dict[str, Tuple[str, ...]]:
     """creds-group id -> minimal env keys that make the group tradeable."""
     return {VENUES[k].creds_group: VENUES[k].requirements for k in _ORDER}
+
+
+# ------------------------------------------------------------- console UI
+
+# Credential-card data for the console's API Keys page (webui/v2 renders
+# /api/venue-catalog; the legacy v1 page still carries its own copy).
+# `title_key` is the existing i18n key — a NEW venue passes a literal
+# {"en","zh"} title instead and needs no strings.js edit. Cards render in
+# list order. `affects`/`rel`/`need_group` replace the JS-side per-venue
+# chains that used to be hand-synced with this table.
+UI_CARDS: Dict[str, list] = {
+    "hl": [{
+        "id": "entropy", "order": 10, "title_key": "secrets.title.entropy",
+        "keys": ["HL_PRIVATE_KEY", "HL_ACCOUNT_ADDRESS"],
+        "diag": {"venue": "hl", "role": "base", "dexInput": True},
+        "affects": {"base": ["hl"], "hedge": ["tradexyz"]},
+        "rel": ["entropy"],
+    }],
+    "tradexyz": [{
+        "id": "xyz", "order": 20, "title_key": "secrets.title.xyz",
+        "keys": ["HL_PRIVATE_KEY_XYZ", "HL_ACCOUNT_ADDRESS_XYZ"],
+        "source": "tradexyz",
+        "diag": {"venue": "hl", "role": "hedge", "dex": "xyz"},
+        "affects": {"hedge": ["tradexyz"]},
+        "rel": ["tradexyz"],
+    }],
+    "lighter": [
+        {"id": "lighter", "order": 30, "title_key": "v2.conn.title.lighter",
+         "keys": ["LIGHTER_ACCOUNT_INDEX", "LIGHTER_API_KEY_INDEX",
+                  "LIGHTER_API_PRIVATE_KEY"],
+         "roles": True,
+         "diag": {"venue": "lighter"},
+         "affects": {"base": ["lighter", "lighter-rh"],
+                     "hedge": ["lighter", "lighter-rh"]},
+         "rel": ["lighter", "lighter-rh"],
+         "deploymentNote": True},
+        {"id": "lighter-base", "order": 50, "title_key": "v2.conn.title.base",
+         "keys": ["LIGHTER_BASE_ACCOUNT_INDEX",
+                  "LIGHTER_BASE_API_KEY_INDEX",
+                  "LIGHTER_BASE_API_PRIVATE_KEY"],
+         "completeness": "lighter-base",
+         "diag": {"venue": "lighter", "role": "base"},
+         "affects": {"base": ["lighter", "lighter-rh"]},
+         "rel": ["lighter-base"]},
+        {"id": "lighter-hedge", "order": 60, "title_key": "v2.conn.title.hedge",
+         "keys": ["LIGHTER_HEDGE_ACCOUNT_INDEX",
+                  "LIGHTER_HEDGE_API_KEY_INDEX",
+                  "LIGHTER_HEDGE_API_PRIVATE_KEY"],
+         "completeness": "lighter-hedge",
+         "diag": {"venue": "lighter", "role": "hedge"},
+         "affects": {"hedge": ["lighter", "lighter-rh"]},
+         "rel": ["lighter-hedge"]},
+    ],
+    "lighter-rh": [{
+        "id": "lighter-rh", "order": 40, "title_key": "v2.conn.title.rh",
+        "keys": [],
+        "sharedView": True,
+        "diag": {"venue": "lighter-rh"},
+        "affects": {"base": ["lighter", "lighter-rh"],
+                    "hedge": ["lighter", "lighter-rh"]},
+        "rel": ["lighter", "lighter-rh"],
+    }],
+    "katana": [{
+        "id": "katana", "order": 70, "title_key": "secrets.title.katana",
+        "keys": ["KATANA_API_KEY", "KATANA_API_SECRET",
+                 "KATANA_PRIVATE_KEY", "KATANA_WALLET"],
+        "diag": {"venue": "katana"},
+        "affects": {"base": ["katana"], "hedge": ["katana"]},
+        "rel": ["katana"],
+    }],
+    "backpack": [{
+        "id": "backpack", "order": 80, "title_key": "secrets.title.backpack",
+        "keys": ["BACKPACK_API_KEY", "BACKPACK_API_SECRET"],
+        "diag": {"venue": "backpack"},
+        "affects": {"base": ["backpack"], "hedge": ["backpack"]},
+        "rel": ["backpack"],
+    }],
+    "bulk": [{
+        "id": "bulk", "order": 90, "title_key": "secrets.title.bulk",
+        "keys": ["BULK_SECRET_KEY"],
+        "diag": {"venue": "bulk"},
+        "affects": {"base": ["bulk"], "hedge": ["bulk"]},
+        "rel": ["bulk"],
+    }],
+}
+
+# which secrets-group shows completeness for a leg on this venue (runs.js
+# pre-flight lines): lighter's per-leg override groups, hl's "entropy"
+NEED_GROUP: Dict[str, dict] = {
+    "hl": {"base": "entropy"},
+    "lighter": {"base": "lighter-base", "hedge": "lighter-hedge"},
+    "lighter-rh": {"base": "lighter-base", "hedge": "lighter-hedge"},
+}
+
+
+def ui_catalog() -> dict:
+    """The /api/venue-catalog payload: everything the console UI needs to
+    render venue dropdowns and credential cards, derived from this table."""
+    venues = [{
+        "key": VENUES[k].key,
+        "kind": VENUES[k].kind,
+        "display": VENUES[k].display,
+        "base": VENUES[k].base,
+        "hedge": VENUES[k].hedge,
+        "maker": VENUES[k].maker_capable,
+        "funding": VENUES[k].funding_supported,
+        "need": dict(NEED_GROUP.get(k, {})),
+    } for k in _ORDER]
+    cards = []
+    for k in _ORDER:
+        for c in UI_CARDS.get(k, []):
+            card = dict(c)
+            card["affects"] = {role: list(v)
+                               for role, v in c["affects"].items()}
+            card["rel"] = list(c["rel"])
+            card["keys"] = list(c["keys"])
+            cards.append(card)
+    cards.sort(key=lambda c: c["order"])
+    return {"venues": venues, "cards": cards}
