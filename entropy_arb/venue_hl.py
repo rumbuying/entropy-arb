@@ -380,3 +380,49 @@ class HLVenue:
 
     async def close(self) -> None:
         pass
+
+
+# ------------------------------------------------------------ registry hooks
+# Module-level factories the venue registry resolves lazily (importlib path
+# strings in venue_registry.VENUES) — see ADD-A-VENUE.zh-CN.md.
+
+def make_venue(vc, session, settle_timeout):
+    from .config import HL_API_URL, HL_WS_URL
+    return HLVenue(vc, HL_API_URL, HL_WS_URL, session, settle_timeout)
+
+
+def make_public_feed(listing, book, notify, session=None):
+    from .config import HL_WS_URL
+    return HLBookFeed(f"{listing.venue}:{listing.symbol}", HL_WS_URL,
+                      listing.market, book, notify)
+
+
+async def list_markets_catalog(session, venue: str, dex: str):
+    """Public perp catalog for the main dex or any builder dex."""
+    from .config import HL_API_URL
+    from .markets import MarketListing, _f
+    payload = {"type": "meta"}
+    if dex:
+        payload["dex"] = dex
+    async with session.post(f"{HL_API_URL}/info", json=payload,
+                            timeout=aiohttp.ClientTimeout(total=20)) as r:
+        r.raise_for_status()
+        meta = await r.json()
+    out = []
+    for a in meta.get("universe") or []:
+        name = str(a.get("name") or "")
+        if not name:
+            continue
+        # dex universes name entries either bare or "dex:SYM" — keep the
+        # canonical symbol bare and remember the subscription name
+        bare = name.split(":", 1)[1] if ":" in name else name
+        if a.get("isDelisted"):
+            continue
+        out.append(MarketListing(
+            venue=venue, symbol=bare, market=name,
+            quote="USDC",
+            max_leverage=_f(a.get("maxLeverage")),
+            min_base=_f(10 ** -int(a.get("szDecimals") or 0)),
+            fee_source="none",
+        ))
+    return out

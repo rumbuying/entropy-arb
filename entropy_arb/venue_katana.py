@@ -940,3 +940,48 @@ class KatanaOrdersFeed:
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
         log.info("[%s] orders stream stopped", self.name)
+
+
+# ------------------------------------------------------------ registry hooks
+
+def make_venue(vc, session, settle_timeout):
+    return KatanaVenue(vc, session, settle_timeout)
+
+
+def make_public_feed(listing, book, notify, session=None):
+    return KatanaBookFeed(f"{listing.venue}:{listing.symbol}", PROD_REST,
+                          PROD_WS, listing.market, book, notify,
+                          session=session)
+
+
+async def list_markets_catalog(session, venue="katana", dex=""):
+    from .markets import MarketListing, _bps, _f
+    async with session.get(f"{PROD_REST}/markets",
+                           timeout=aiohttp.ClientTimeout(total=20)) as r:
+        r.raise_for_status()
+        raw = await r.json()
+    entries = raw.get("data") if isinstance(raw, dict) else raw
+    out = []
+    for m in entries or []:
+        market = str(m.get("market") or "")
+        if not market:
+            continue
+        # the engine requires status=="active" (venue_katana.load_market);
+        # tolerate a missing field, reject a non-active present one
+        st = m.get("status")
+        if st is not None and str(st).lower() != "active":
+            continue
+        out.append(MarketListing(
+            venue="katana",
+            symbol=market[:-4] if market.endswith("-USD") else market,
+            market=market,
+            quote="USDC",
+            taker_fee_bps=_bps(m.get("takerFeeRate")),
+            maker_fee_bps=_bps(m.get("makerFeeRate")),
+            tick=_f(m.get("tickSize")),
+            step=_f(m.get("stepSize")),
+            min_base=_f(m.get("takerOrderMinimum")),
+            max_leverage=_f(m.get("maxLeverage")),
+            fee_source="api" if m.get("takerFeeRate") is not None else "none",
+        ))
+    return out

@@ -28,7 +28,7 @@ except ImportError:
     from websockets import connect as ws_connect  # type: ignore
 
 from .book import OrderBook
-from .config import VenueConf
+from .config import LIGHTER_PROFILES, VenueConf
 from .feeds import LighterBookFeed
 
 log = logging.getLogger("lighter")
@@ -446,3 +446,39 @@ class LighterVenue:
                 await self.signer.api_client.close()
             except Exception:
                 pass
+
+
+# ------------------------------------------------------------ registry hooks
+
+def make_venue(vc, session, settle_timeout):
+    return LighterVenue(vc, session, settle_timeout)
+
+
+def make_public_feed(listing, book, notify, session=None):
+    prof = LIGHTER_PROFILES[listing.venue]
+    return LighterBookFeed(f"{listing.venue}:{listing.symbol}", prof.ws_url,
+                           int(listing.market_id), book, notify)
+
+
+async def list_markets_catalog(session, venue: str, dex: str = ""):
+    from .markets import MarketListing, _bps, _f
+    prof = LIGHTER_PROFILES[venue]
+    url = prof.api_url.rstrip("/") + "/api/v1/orderBooks"
+    async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as r:
+        r.raise_for_status()
+        data = await r.json()
+    out = []
+    for ob in data.get("order_books") or []:
+        sym = str(ob.get("symbol") or "")
+        if not sym or ob.get("status") != "active":
+            continue
+        out.append(MarketListing(
+            venue=venue, symbol=sym, market=f"{sym}#{ob.get('market_id')}",
+            quote="USDG" if venue == "lighter-rh" else "USDC",
+            taker_fee_bps=_bps(ob.get("taker_fee")),
+            maker_fee_bps=_bps(ob.get("maker_fee")),
+            min_base=_f(ob.get("min_base_amount")),
+            market_id=int(ob.get("market_id")),
+            fee_source="api",
+        ))
+    return out

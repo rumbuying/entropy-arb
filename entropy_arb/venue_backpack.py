@@ -848,3 +848,46 @@ class BackpackOrdersFeed:
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
         log.info("[%s] orders stream stopped", self.name)
+
+
+# ------------------------------------------------------------ registry hooks
+
+def make_venue(vc, session, settle_timeout):
+    return BackpackVenue(vc, session, settle_timeout)
+
+
+def make_public_feed(listing, book, notify, session=None):
+    return BackpackBookFeed(f"{listing.venue}:{listing.symbol}", PROD_REST,
+                            PROD_WS, listing.market, book, notify,
+                            session=session)
+
+
+async def list_markets_catalog(session, venue="backpack", dex=""):
+    from .markets import MarketListing, _f
+    async with session.get(f"{PROD_REST}/api/v1/markets",
+                           timeout=aiohttp.ClientTimeout(total=20)) as r:
+        r.raise_for_status()
+        raw = await r.json()
+    out = []
+    for m in raw if isinstance(raw, list) else []:
+        if m.get("marketType") != "PERP":
+            continue
+        if m.get("orderBookState") != "Open":
+            continue
+        sym = str(m.get("symbol") or "")
+        base = sym
+        for suf in ("_USDC_PERP", "_PERP", "_USDC"):
+            if base.endswith(suf):
+                base = base[:-len(suf)]
+                break
+        flt = m.get("filters") or {}
+        out.append(MarketListing(
+            venue="backpack", symbol=base, market=sym,
+            quote="USDC",
+            tick=_f((flt.get("price") or {}).get("tickSize")),
+            step=_f((flt.get("quantity") or {}).get("stepSize")),
+            min_base=_f((flt.get("quantity") or {}).get("minQuantity")),
+            min_notional=_f(m.get("minNotional")),
+            fee_source="none",
+        ))
+    return out

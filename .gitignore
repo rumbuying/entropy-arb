@@ -31,3 +31,5 @@ docs/
 
 # console token env (real token lives here, never committed) / 控制台真实 token
 deploy/*.env
+Pendle_Proxy.pem
+.zcode/

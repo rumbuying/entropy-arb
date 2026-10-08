@@ -871,3 +871,38 @@ class BulkOrdersFeed:
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
         log.info("[%s] account stream stopped", self.name)
+
+
+# ------------------------------------------------------------ registry hooks
+
+def make_venue(vc, session, settle_timeout):
+    return BulkVenue(vc, session, settle_timeout)
+
+
+def make_public_feed(listing, book, notify, session=None):
+    return BulkBookFeed(f"{listing.venue}:{listing.symbol}", PROD_WS,
+                        listing.market, book, notify)
+
+
+async def list_markets_catalog(session, venue="bulk", dex=""):
+    from .markets import MarketListing, _f
+    async with session.get(f"{PROD_REST}/exchangeInfo",
+                           timeout=aiohttp.ClientTimeout(total=20)) as r:
+        r.raise_for_status()
+        raw = await r.json()
+    out = []
+    for m in raw if isinstance(raw, list) else []:
+        sym = str(m.get("symbol") or "")
+        if not sym or m.get("status") != "TRADING":
+            continue
+        base = sym[:-4] if sym.endswith("-USD") else sym
+        out.append(MarketListing(
+            venue="bulk", symbol=base, market=sym,
+            quote="USDC",
+            tick=_f(m.get("tickSize")),
+            step=_f(m.get("sizeIncrement")),
+            min_notional=_f(m.get("minNotional")),
+            max_leverage=_f(m.get("maxLeverage")),
+            fee_source="none",
+        ))
+    return out

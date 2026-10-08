@@ -20,6 +20,10 @@ Per-venue naming differences are the caller's problem, expressed with the
 same ``aliases`` convention the engine's ``hedge.symbol`` uses (e.g. ANTH
 on hl:io is ANTHROPIC on lighter-rh).
 
+The venue table lives in venue_registry (single registration point): the
+keys, the fee defaults and the per-venue catalog/feed implementations all
+derive from it — a newly registered venue appears here automatically.
+
 TTL cache: each venue's catalog is fetched once per process per TTL
 (default 10 min) — the lighter book list is large and Katana rate-limits.
 """
@@ -29,43 +33,22 @@ import argparse
 import asyncio
 import json
 import time
-from dataclasses import dataclass, field, fields
 from typing import Dict, List, Optional
 
 import aiohttp
 
-from .config import HL_API_URL, LIGHTER_PROFILES
+from . import venue_registry
+from .markets import (DEFAULT_CATALOG, HTTP_TIMEOUT, Catalog, MarketListing,
+                      _bps, _f, find_listing, pair_keys, symbol_fs, venue_dex,
+                      venue_fs)
 
-VENUE_KEYS = ("hl", "lighter", "lighter-rh", "katana", "backpack", "bulk")
-
-HTTP_TIMEOUT = aiohttp.ClientTimeout(total=20)
-CATALOG_TTL_SEC = 600.0
+VENUE_KEYS = venue_registry.discovery_keys()
 
 # Conservative taker-fee defaults (bps) used by the SCORER before a real
 # profile exists. Source: README venue table + engine profiles. These are
 # account-tier dependent (HL especially — referral/rebate tiers) — a
 # watchlist entry may override any of them, and the UI labels the source.
-DEFAULT_TAKER_FEE_BPS = {
-    "hl": 4.5,          # main dex base tier; io-dex profiles run ~0.9
-    "hl:io": 0.9,       # builder dex tier (engine io profiles)
-    "hl:xyz": 1.0,      # trade.xyz per README (~1 bps)
-    "lighter": 0.0,
-    "lighter-rh": 0.0,
-    "katana": None,     # filled from the venue's own /markets when present
-    "backpack": 2.5,    # tier 2–5 bps — verify against your tier
-    "bulk": 3.5,
-}
-
-
-def venue_dex(venue: str) -> str:
-    """'' for the HL main dex, the dex name for ``hl:<dex>`` keys."""
-    return venue.split(":", 1)[1] if venue.startswith("hl:") else ""
-
-
-def venue_fs(venue: str) -> str:
-    """Filesystem-safe venue label (``hl:io`` → ``hl-io``)."""
-    return venue.replace(":", "-")
-
+DEFAULT_TAKER_FEE_BPS = venue_registry.default_taker_fees()
 
 # venue-local exchange suffixes that carry NO instrument identity —
 # backpack names US-stock perps "INTC.US", lighter/lighter-rh use the bare
@@ -87,80 +70,6 @@ def symbol_group_key(symbol: str) -> str:
     return s
 
 
-def symbol_fs(symbol: str) -> str:
-    return str(symbol).replace(":", "-").replace("/", "-")
-
-
-@dataclass
-class MarketListing:
-    """One tradable market of one venue, normalized."""
-    venue: str                    # venue key (hl, hl:io, lighter, ...)
-    symbol: str                   # the symbol ASKED FOR (canonical key)
-    market: str                   # name to subscribe (coin / market id str)
-    status: str = "active"
-    quote: str = "USDC"
-    taker_fee_bps: Optional[float] = None
-    maker_fee_bps: Optional[float] = None
-    tick: Optional[float] = None
-    step: Optional[float] = None
-    min_base: Optional[float] = None
-    min_notional: Optional[float] = None
-    max_leverage: Optional[float] = None
-    market_id: Optional[int] = None      # lighter feeds need the int id
-    fee_source: str = "default"          # api | default | none
-
-    def to_dict(self) -> dict:
-        return {f.name: getattr(self, f.name) for f in fields(self)}
-
-
-def _f(v) -> Optional[float]:
-    try:
-        if v is None or v == "":
-            return None
-        return float(v)
-    except (TypeError, ValueError):
-        return None
-
-
-def _bps(v) -> Optional[float]:
-    """Fraction → bps, preserving None; 0 stays 0 (Lighter is 0 bps)."""
-    f = _f(v)
-    return None if f is None else f * 1e4
-
-
-class Catalog:
-    """Per-process venue catalog cache with a TTL."""
-
-    def __init__(self, ttl_sec: float = CATALOG_TTL_SEC) -> None:
-        self.ttl_sec = ttl_sec
-        self._cache: Dict[str, tuple] = {}      # venue -> (ts, listings)
-
-    def get(self, venue: str) -> Optional[List[MarketListing]]:
-        hit = self._cache.get(venue)
-        if hit and time.time() - hit[0] <= self.ttl_sec:
-            return hit[1]
-        return None
-
-    def put(self, venue: str, listings: List[MarketListing]) -> None:
-        self._cache[venue] = (time.time(), listings)
-
-    def invalidate(self, venue: Optional[str] = None) -> None:
-        if venue is None:
-            self._cache.clear()
-        else:
-            self._cache.pop(venue, None)
-
-
-DEFAULT_CATALOG = Catalog()
-
-
-async def _hl_info(session: aiohttp.ClientSession, payload: dict) -> dict:
-    async with session.post(f"{HL_API_URL}/info", json=payload,
-                            timeout=HTTP_TIMEOUT) as r:
-        r.raise_for_status()
-        return await r.json()
-
-
 async def list_markets(session: aiohttp.ClientSession, venue: str,
                        catalog: Catalog = DEFAULT_CATALOG) \
         -> List[MarketListing]:
@@ -168,168 +77,10 @@ async def list_markets(session: aiohttp.ClientSession, venue: str,
     cached = catalog.get(venue)
     if cached is not None:
         return cached
-    dex = venue_dex(venue)
-    if venue == "hl" or dex:
-        out = await _list_hl(session, venue, dex)
-    elif venue in LIGHTER_PROFILES:
-        out = await _list_lighter(session, venue)
-    elif venue == "katana":
-        out = await _list_katana(session)
-    elif venue == "backpack":
-        out = await _list_backpack(session)
-    elif venue == "bulk":
-        out = await _list_bulk(session)
-    else:
-        raise ValueError(f"unknown venue {venue!r} "
-                         f"(known: {VENUE_KEYS} or hl:<dex>)")
+    impl = venue_registry.catalog_impl(venue)
+    out = await impl(session, venue, venue_dex(venue))
     catalog.put(venue, out)
     return out
-
-
-async def _list_hl(session, venue: str, dex: str) -> List[MarketListing]:
-    if dex:
-        meta = await _hl_info(session, {"type": "meta", "dex": dex})
-    else:
-        meta = await _hl_info(session, {"type": "meta"})
-    out: List[MarketListing] = []
-    for a in meta.get("universe") or []:
-        name = str(a.get("name") or "")
-        if not name:
-            continue
-        # dex universes name entries either bare or "dex:SYM" — keep the
-        # canonical symbol bare and remember the subscription name
-        bare = name.split(":", 1)[1] if ":" in name else name
-        if a.get("isDelisted"):
-            continue
-        out.append(MarketListing(
-            venue=venue, symbol=bare, market=name,
-            quote="USDC",
-            max_leverage=_f(a.get("maxLeverage")),
-            min_base=_f(10 ** -int(a.get("szDecimals") or 0)),
-            fee_source="none",
-        ))
-    return out
-
-
-async def _list_lighter(session, venue: str) -> List[MarketListing]:
-    prof = LIGHTER_PROFILES[venue]
-    url = prof.api_url.rstrip("/") + "/api/v1/orderBooks"
-    async with session.get(url, timeout=HTTP_TIMEOUT) as r:
-        r.raise_for_status()
-        data = await r.json()
-    out = []
-    for ob in data.get("order_books") or []:
-        sym = str(ob.get("symbol") or "")
-        if not sym or ob.get("status") != "active":
-            continue
-        out.append(MarketListing(
-            venue=venue, symbol=sym, market=f"{sym}#{ob.get('market_id')}",
-            quote="USDG" if venue == "lighter-rh" else "USDC",
-            taker_fee_bps=_bps(ob.get("taker_fee")),
-            maker_fee_bps=_bps(ob.get("maker_fee")),
-            min_base=_f(ob.get("min_base_amount")),
-            market_id=int(ob.get("market_id")),
-            fee_source="api",
-        ))
-    return out
-
-
-async def _list_katana(session) -> List[MarketListing]:
-    from .venue_katana import PROD_REST
-    async with session.get(f"{PROD_REST}/markets",
-                           timeout=HTTP_TIMEOUT) as r:
-        r.raise_for_status()
-        raw = await r.json()
-    entries = raw.get("data") if isinstance(raw, dict) else raw
-    out = []
-    for m in entries or []:
-        market = str(m.get("market") or "")
-        if not market:
-            continue
-        # the engine requires status=="active" (venue_katana.load_market);
-        # tolerate a missing field, reject a non-active present one
-        st = m.get("status")
-        if st is not None and str(st).lower() != "active":
-            continue
-        out.append(MarketListing(
-            venue="katana", symbol=market[:-4] if market.endswith("-USD")
-            else market, market=market,
-            quote="USDC",
-            taker_fee_bps=_bps(m.get("takerFeeRate")),
-            maker_fee_bps=_bps(m.get("makerFeeRate")),
-            tick=_f(m.get("tickSize")),
-            step=_f(m.get("stepSize")),
-            min_base=_f(m.get("takerOrderMinimum")),
-            max_leverage=_f(m.get("maxLeverage")),
-            fee_source="api" if m.get("takerFeeRate") is not None
-            else "none",
-        ))
-    return out
-
-
-async def _list_backpack(session) -> List[MarketListing]:
-    from .venue_backpack import PROD_REST
-    async with session.get(f"{PROD_REST}/api/v1/markets",
-                           timeout=HTTP_TIMEOUT) as r:
-        r.raise_for_status()
-        raw = await r.json()
-    out = []
-    for m in raw if isinstance(raw, list) else []:
-        if m.get("marketType") != "PERP":
-            continue
-        if m.get("orderBookState") != "Open":
-            continue
-        sym = str(m.get("symbol") or "")
-        base = sym
-        for suf in ("_USDC_PERP", "_PERP", "_USDC"):
-            if base.endswith(suf):
-                base = base[:-len(suf)]
-                break
-        flt = m.get("filters") or {}
-        out.append(MarketListing(
-            venue="backpack", symbol=base, market=sym,
-            quote="USDC",
-            tick=_f((flt.get("price") or {}).get("tickSize")),
-            step=_f((flt.get("quantity") or {}).get("stepSize")),
-            min_base=_f((flt.get("quantity") or {}).get("minQuantity")),
-            min_notional=_f(m.get("minNotional")),
-            fee_source="none",
-        ))
-    return out
-
-
-async def _list_bulk(session) -> List[MarketListing]:
-    from .venue_bulk import PROD_REST
-    async with session.get(f"{PROD_REST}/exchangeInfo",
-                           timeout=HTTP_TIMEOUT) as r:
-        r.raise_for_status()
-        raw = await r.json()
-    out = []
-    for m in raw if isinstance(raw, list) else []:
-        sym = str(m.get("symbol") or "")
-        if not sym or m.get("status") != "TRADING":
-            continue
-        base = sym[:-4] if sym.endswith("-USD") else sym
-        out.append(MarketListing(
-            venue="bulk", symbol=base, market=sym,
-            quote="USDC",
-            tick=_f(m.get("tickSize")),
-            step=_f(m.get("sizeIncrement")),
-            min_notional=_f(m.get("minNotional")),
-            max_leverage=_f(m.get("maxLeverage")),
-            fee_source="none",
-        ))
-    return out
-
-
-def find_listing(listings: List[MarketListing], symbol: str) \
-        -> Optional[MarketListing]:
-    """Exact-then-case-insensitive match on the canonical symbol."""
-    want = symbol.strip().upper()
-    for l in listings:
-        if l.symbol.upper() == want:
-            return l
-    return None
 
 
 async def resolve_venue(session: aiohttp.ClientSession, venue: str,
@@ -343,11 +94,6 @@ async def resolve_venue(session: aiohttp.ClientSession, venue: str,
     """
     listings = await list_markets(session, venue, catalog)
     return find_listing(listings, symbol)
-
-
-def pair_keys(venues: List[str]) -> List[tuple]:
-    """Unordered venue pairs, stable order."""
-    return [(a, b) for i, a in enumerate(venues) for b in venues[i + 1:]]
 
 
 async def universe(session: aiohttp.ClientSession, symbol: str,
@@ -400,33 +146,10 @@ def fee_bps_for(listing: MarketListing,
 
 
 def feed_factory(listing: MarketListing, book, notify, session=None):
-    """The public book feed for one listing — the ONLY place that knows
-    each venue's feed constructor signature (mirrors basis_probe.resolve).
-    """
-    from .feeds import (BackpackBookFeed, BulkBookFeed, HLBookFeed,
-                        KatanaBookFeed, LighterBookFeed)
-    from .config import HL_WS_URL
-    v = listing.venue
-    if v == "hl" or venue_dex(v):
-        return HLBookFeed(f"{v}:{listing.symbol}", HL_WS_URL,
-                          listing.market, book, notify)
-    if v in ("lighter", "lighter-rh"):
-        prof = LIGHTER_PROFILES[v]
-        return LighterBookFeed(f"{v}:{listing.symbol}", prof.ws_url,
-                               int(listing.market_id), book, notify)
-    if v == "katana":
-        from .venue_katana import PROD_REST, PROD_WS
-        return KatanaBookFeed(f"{v}:{listing.symbol}", PROD_REST, PROD_WS,
-                              listing.market, book, notify, session=session)
-    if v == "backpack":
-        from .venue_backpack import PROD_REST, PROD_WS
-        return BackpackBookFeed(f"{v}:{listing.symbol}", PROD_REST, PROD_WS,
-                                listing.market, book, notify, session=session)
-    if v == "bulk":
-        from .venue_bulk import PROD_WS
-        return BulkBookFeed(f"{v}:{listing.symbol}", PROD_WS,
-                            listing.market, book, notify)
-    raise ValueError(f"no feed factory for venue {v!r}")
+    """The public book feed for one listing — implementation comes from the
+    venue's own ``make_public_feed`` hook (see venue_registry)."""
+    return venue_registry.make_public_feed(listing, book, notify,
+                                           session=session)
 
 
 async def _cli() -> int:
