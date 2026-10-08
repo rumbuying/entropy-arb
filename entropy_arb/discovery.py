@@ -38,9 +38,8 @@ from typing import Dict, List, Optional
 import aiohttp
 
 from . import venue_registry
-from .markets import (DEFAULT_CATALOG, HTTP_TIMEOUT, Catalog, MarketListing,
-                      _bps, _f, find_listing, pair_keys, symbol_fs, venue_dex,
-                      venue_fs)
+from .markets import (DEFAULT_CATALOG, Catalog, MarketListing, _bps, _f,
+                      find_listing, pair_keys, symbol_fs, venue_dex, venue_fs)
 
 VENUE_KEYS = venue_registry.discovery_keys()
 

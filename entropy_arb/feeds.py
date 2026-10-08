@@ -39,6 +39,7 @@ try:
 except ImportError:
     from websockets import connect as ws_connect  # type: ignore
 
+from .venues_common import SeqBookFeedBase
 from .book import OrderBook
 
 log = logging.getLogger("feeds")
@@ -219,7 +220,7 @@ class HLBookFeed:
 
 
 
-class KatanaBookFeed:
+class KatanaBookFeed(SeqBookFeedBase):
     """Katana Perps L2 order book for one market.
 
     Standard snapshot+diff sync: the l2orderbook websocket delivers every
@@ -227,110 +228,57 @@ class KatanaBookFeed:
     (GET /v1/orderbook?market=X) carries the sequence it was taken at. The
     book is live when diffs arrive at exactly snapshot_seq + 1, +2, ...
 
-    Ordering discipline (this is what makes the book trustworthy):
-
-    * the websocket is subscribed FIRST, the snapshot taken SECOND, and any
-      diffs that arrive while the snapshot is in flight are buffered;
-    * when the snapshot lands, buffered diffs with seq <= snapshot_seq are
-      dropped and the rest replayed in order — so a busy market cannot put
-      us in a resnapshot race;
-    * a skipped sequence mid-stream means we lost a level update — the book
-      is now a fiction. Drop it and resnapshot rather than quote off a ghost
-      (the zkLighter nonce-gap discipline), single-flight and rate-guarded.
+    Ordering discipline (the SeqBookFeedBase contract — subscribe first,
+    buffer racing diffs, replay the contiguous run, resnapshot on any
+    gap) is what makes the book trustworthy; see venues_common.
 
     Levels arrive as [price, quantity, numOrders] tuples of 8-decimal
     strings; a zero quantity removes the level.
     """
 
     APP_PING_SEC = 10.0          # server closes idle connections
-    SNAPSHOT_MIN_GAP_SEC = 2.0   # never resnapshot faster than this (429s)
-    BUFFER_MAX = 8192
+    WS_PING_INTERVAL = 15
+    WS_PING_TIMEOUT = 15
 
     def __init__(self, name: str, rest_url: str, ws_url: str, market: str,
                  book: OrderBook, notify: Callable[[], None],
                  session: Optional[aiohttp.ClientSession] = None) -> None:
-        self.name = name
+        super().__init__(name, book, notify, session=session)
         self.rest_url = rest_url.rstrip("/")
         self.ws_url = ws_url
         self.market = market
-        self.book = book
-        self.notify = notify
-        self._own_session = session is None
-        self._session = session
-        self._sequence: Optional[int] = None
-        self._pending: list = []          # [(seq, bids, asks)] while unsynced
-        self._snap_at = 0.0               # last snapshot start (monotonic)
-        self._snapped = False
-
-    # ------------------------------------------------------------------ rest
+        self._ptask: Optional[asyncio.Task] = None
 
     async def _fetch_snapshot(self):
-        sess = self._session
-        async with sess.get(
-                f"{self.rest_url}/orderbook", params={"market": self.market},
-                timeout=aiohttp.ClientTimeout(total=10)) as r:
-            if r.status == 429:
-                raise RuntimeError("RATE_LIMITED: snapshot 429")
-            r.raise_for_status()
-            return await r.json()
+        return await self._snapshot_json(
+            f"{self.rest_url}/orderbook", params={"market": self.market})
 
-    async def _sync(self) -> bool:
-        """(Re)take the snapshot and replay buffered diffs over it.
+    async def _on_connected(self, ws) -> None:
+        await ws.send(json.dumps({
+            "method": "subscribe", "markets": [self.market],
+            "subscriptions": ["l2orderbook"]}))
 
-        Returns True when the book is live at a sequence the ws stream can
-        continue from. Single-flight; rate-guarded; never throws."""
-        now = time.monotonic()
-        wait = self._snap_at + self.SNAPSHOT_MIN_GAP_SEC - now
-        if wait > 0:
-            await asyncio.sleep(wait)
-        self._snap_at = time.monotonic()
-        try:
-            ob = await self._fetch_snapshot()
-        except Exception as e:
-            log.warning("[%s] snapshot failed: %r", self.name, e)
-            return False
-        self.book.clear()
-        self._apply_levels(ob.get("bids"), ob.get("asks"))
-        self._sequence = int(ob.get("sequence") or 0)
-        self._snapped = True
-        # replay the buffer: drop covered sequences, apply the contiguous
-        # run, and if a gap remains the snapshot was already too old
-        kept: list = []
-        for s, bids, asks in self._pending:
-            if s <= self._sequence:
-                continue
-            if s == self._sequence + 1:
-                self._sequence = s
-                self._apply_levels(bids, asks)
-            else:
-                kept.append((s, bids, asks))
-                break                   # buffer is seq-ordered: gap ahead
-        if kept:
-            self._pending = kept
-            self._sequence = None
-            self.book.clear()
-            log.warning("[%s] snapshot already behind buffer (next seq %d) "
-                        "— resnapshotting", self.name, kept[0][0])
-            return False
-        self._pending = []
-        self.book.ready = True
-        self.book.last_update_ts = time.time()
-        self.book.touch()
-        self.notify()
-        log.info("[%s] synced at seq=%d: %d bids / %d asks", self.name,
-                 self._sequence, len(self.book.bids), len(self.book.asks))
-        return True
+        async def _pinger() -> None:
+            while True:
+                await asyncio.sleep(self.APP_PING_SEC)
+                await ws.send(json.dumps({"method": "ping"}))
 
-    # ------------------------------------------------------------- websocket
+        self._ptask = asyncio.create_task(_pinger())
 
-    def _apply_levels(self, bids, asks) -> None:
-        for levels, side in ((bids, self.book.bids), (asks, self.book.asks)):
-            for lvl in levels or []:
-                px, sz = float(lvl[0]), float(lvl[1])
-                if sz <= 0:
-                    side.pop(px, None)
-                else:
-                    side[px] = sz
+    def _reset_for_reconnect(self) -> None:
+        if self._ptask is not None:
+            self._ptask.cancel()
+            self._ptask = None
+
+    def _on_message(self, msg: dict) -> None:
+        t = msg.get("type")
+        if t == "l2orderbook":
+            self._handle_l2(msg.get("data") or {})
+        elif t == "subscriptions":
+            log.info("[%s] l2orderbook stream ready", self.name)
+        elif t == "error":
+            log.warning("[%s] ws error frame: %s", self.name,
+                        str(msg.get("data"))[:200])
 
     def _handle_l2(self, d: dict) -> None:
         # long form: market/sequence/bids/asks; short form: m/u/b/a
@@ -340,106 +288,11 @@ class KatanaBookFeed:
         if seq is None:
             return
         seq = int(seq)
-        if self._sequence is not None:
-            if seq <= self._sequence:
-                return              # stale/duplicate
-            if seq == self._sequence + 1:
-                self._sequence = seq
-                self._apply_levels(d.get("bids") or d.get("b"),
-                                   d.get("asks") or d.get("a"))
-                self.book.last_update_ts = time.time()
-                self.notify()
-                return
-            log.warning("[%s] sequence gap (had %d, got %d) — resyncing",
-                        self.name, self._sequence, seq)
-            self._sequence = None
-            self.book.ready = False
-            self.book.clear()
-            self._pending = [(seq, d.get("bids") or d.get("b"),
-                              d.get("asks") or d.get("a"))]
-            self.notify()
-            asyncio.get_running_loop().create_task(self._resync_task())
-            return
-        # unsynced (snapshot in flight or pending): buffer the diff
-        if len(self._pending) < self.BUFFER_MAX:
-            self._pending.append((seq, d.get("bids") or d.get("b"),
-                                  d.get("asks") or d.get("a")))
-        else:
-            log.warning("[%s] diff buffer overflow — full resync", self.name)
-            self._pending = []
-            asyncio.get_running_loop().create_task(self._resync_task())
-
-    async def _resync_task(self) -> None:
-        for _ in range(3):
-            if await self._sync():
-                return
-        log.error("[%s] could not re-sync order book — feed stays blind "
-                  "until the next reconnect", self.name)
-
-    # ------------------------------------------------------------------- run
-
-    async def run(self, stop: asyncio.Event) -> None:
-        if self._own_session:
-            self._session = aiohttp.ClientSession()
-        backoff = 1.0
-        while not stop.is_set():
-            ptask = None
-            try:
-                async with ws_connect(self.ws_url, max_size=2**23,
-                                      open_timeout=10, ping_interval=15,
-                                      ping_timeout=15) as ws:
-                    log.info("[%s] connected (%s)", self.name, self.ws_url)
-                    self._sequence = None
-                    self._pending = []
-                    await ws.send(json.dumps({
-                        "method": "subscribe", "markets": [self.market],
-                        "subscriptions": ["l2orderbook"]}))
-
-                    async def _pinger() -> None:
-                        while True:
-                            await asyncio.sleep(self.APP_PING_SEC)
-                            await ws.send(json.dumps({"method": "ping"}))
-
-                    ptask = asyncio.create_task(_pinger())
-                    # subscribe FIRST, snapshot SECOND: diffs that raced the
-                    # snapshot are buffered by _handle_l2 and replayed
-                    asyncio.get_running_loop().create_task(
-                        self._resync_task())
-                    async for raw in ws:
-                        backoff = 1.0
-                        self.book.touch()
-                        msg = json.loads(raw)
-                        t = msg.get("type")
-                        if t == "l2orderbook":
-                            self._handle_l2(msg.get("data") or {})
-                        elif t == "subscriptions":
-                            log.info("[%s] l2orderbook stream ready", self.name)
-                        elif t == "error":
-                            log.warning("[%s] ws error frame: %s", self.name,
-                                        str(msg.get("data"))[:200])
-                        if stop.is_set():
-                            break
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                log.warning("[%s] ws error: %s — reconnect in %.0fs",
-                            self.name, e, backoff)
-            finally:
-                if ptask is not None:
-                    ptask.cancel()
-            self.book.ready = False
-            self._sequence = None
-            self._pending = []
-            self.notify()
-            if stop.is_set():
-                break
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 30.0)
-        if self._own_session and self._session is not None:
-            await self._session.close()
+        self.offer(seq, seq, d.get("bids") or d.get("b"),
+                   d.get("asks") or d.get("a"))
 
 
-class BackpackBookFeed:
+class BackpackBookFeed(SeqBookFeedBase):
     """Backpack Exchange L2 order book for one perp market (SOL_USDC_PERP).
 
     The `depth.<SYMBOL>` websocket delivers incremental updates with the
@@ -447,117 +300,50 @@ class BackpackBookFeed:
     tagged with a U..u update-id range; the REST /api/v1/depth snapshot
     carries the lastUpdateId it was taken at. The book is live when the
     first applicable event's U equals snapshot_lastUpdateId + 1, and every
-    later event's U equals the previous u + 1.
+    later event's u equals the previous u + 1.
 
-    Ordering discipline (identical to KatanaBookFeed — see that class):
-
-    * the websocket is subscribed FIRST, the snapshot taken SECOND, and any
-      events that arrive while the snapshot is in flight are buffered;
-    * when the snapshot lands, buffered events fully covered by it are
-      dropped and the contiguous run is replayed in order;
-    * a skipped update id mid-stream means we lost a level update — the
-      book is now a fiction. Drop it and resnapshot rather than quote off a
-      ghost, single-flight and rate-guarded.
+    Ordering discipline: the SeqBookFeedBase contract (identical to
+    KatanaBookFeed — subscribe first, buffer, replay, resnapshot on gaps).
 
     bookTicker is subscribed alongside depth purely as a liveness signal:
     a quiet book produces no depth frames, and any inbound frame touches
     the connection-freshness clock.
     """
 
-    SNAPSHOT_MIN_GAP_SEC = 2.0   # never resnapshot faster than this (429s)
-    BUFFER_MAX = 8192
-
     def __init__(self, name: str, rest_url: str, ws_url: str, market: str,
                  book: OrderBook, notify: Callable[[], None],
                  session: Optional[aiohttp.ClientSession] = None) -> None:
-        self.name = name
+        super().__init__(name, book, notify, session=session)
         self.rest_url = rest_url.rstrip("/")
         self.ws_url = ws_url
         self.market = market
-        self.book = book
-        self.notify = notify
-        self._own_session = session is None
-        self._session = session
-        self._sequence: Optional[int] = None   # last applied update id (u)
-        self._pending: list = []          # [(U, u, bids, asks)] while unsynced
-        self._snap_at = 0.0               # last snapshot start (monotonic)
-        self._snapped = False
 
-    # ------------------------------------------------------------------ rest
-
-    async def _fetch_snapshot(self):
-        sess = self._session
-        async with sess.get(
-                f"{self.rest_url}/api/v1/depth",
-                params={"symbol": self.market, "limit": "1000"},
-                timeout=aiohttp.ClientTimeout(total=10)) as r:
-            if r.status == 429:
-                raise RuntimeError("RATE_LIMITED: snapshot 429")
-            r.raise_for_status()
-            return await r.json()
-
-    async def _sync(self) -> bool:
-        """(Re)take the snapshot and replay buffered events over it.
-
-        Returns True when the book is live at an update id the ws stream can
-        continue from. Single-flight; rate-guarded; never throws."""
-        now = time.monotonic()
-        wait = self._snap_at + self.SNAPSHOT_MIN_GAP_SEC - now
-        if wait > 0:
-            await asyncio.sleep(wait)
-        self._snap_at = time.monotonic()
+    def _snapshot_seq(self, ob: dict) -> int:
         try:
-            ob = await self._fetch_snapshot()
-        except Exception as e:
-            log.warning("[%s] snapshot failed: %r", self.name, e)
-            return False
-        self.book.clear()
-        self._apply_levels(ob.get("bids"), ob.get("asks"))
-        try:
-            self._sequence = int(ob.get("lastUpdateId"))
+            return int(ob.get("lastUpdateId"))
         except (TypeError, ValueError):
             log.warning("[%s] snapshot without lastUpdateId — resyncing",
                         self.name)
-            return False
-        self._snapped = True
-        # replay the buffer: drop fully-covered events, apply the contiguous
-        # run, and if a gap remains the snapshot was already too old
-        kept: list = []
-        for U, u, bids, asks in self._pending:
-            if u <= self._sequence:
-                continue                # event fully covered by the snapshot
-            if U == self._sequence + 1:
-                self._apply_levels(bids, asks)
-                self._sequence = u
-            else:
-                kept.append((U, u, bids, asks))
-                break                   # buffer is order-arrival: gap ahead
-        if kept:
-            self._pending = kept
-            self._sequence = None
-            self.book.clear()
-            log.warning("[%s] snapshot already behind buffer (next U %d) "
-                        "— resnapshotting", self.name, kept[0][0])
-            return False
-        self._pending = []
-        self.book.ready = True
-        self.book.last_update_ts = time.time()
-        self.book.touch()
-        self.notify()
-        log.info("[%s] synced at update_id=%d: %d bids / %d asks", self.name,
-                 self._sequence, len(self.book.bids), len(self.book.asks))
-        return True
+            raise
 
-    # ------------------------------------------------------------- websocket
+    async def _fetch_snapshot(self):
+        return await self._snapshot_json(
+            f"{self.rest_url}/api/v1/depth",
+            params={"symbol": self.market, "limit": "1000"})
 
-    def _apply_levels(self, bids, asks) -> None:
-        for levels, side in ((bids, self.book.bids), (asks, self.book.asks)):
-            for lvl in levels or []:
-                px, sz = float(lvl[0]), float(lvl[1])
-                if sz <= 0:
-                    side.pop(px, None)
-                else:
-                    side[px] = sz
+    async def _on_connected(self, ws) -> None:
+        # the server sends a ws ping every 60s and expects the pong within
+        # 120s — the websockets library answers both sides of that
+        # handshake itself
+        await ws.send(json.dumps({
+            "method": "SUBSCRIBE",
+            "params": [f"depth.{self.market}", f"bookTicker.{self.market}"]}))
+
+    def _on_message(self, msg: dict) -> None:
+        stream = str(msg.get("stream") or "")
+        if stream.startswith("depth"):
+            self._handle_depth(msg.get("data") or {})
+        # bookTicker / anything else: liveness touch only
 
     def _handle_depth(self, d: dict) -> None:
         if str(d.get("s") or "") != self.market:
@@ -566,90 +352,7 @@ class BackpackBookFeed:
             U, u = int(d.get("U")), int(d.get("u"))
         except (TypeError, ValueError):
             return
-        bids, asks = d.get("b"), d.get("a")
-        if self._sequence is not None:
-            if u <= self._sequence:
-                return              # stale/duplicate (fully covered)
-            if U == self._sequence + 1:
-                self._sequence = u
-                self._apply_levels(bids, asks)
-                self.book.last_update_ts = time.time()
-                self.notify()
-                return
-            log.warning("[%s] update-id gap (had %d, got U=%d) — resyncing",
-                        self.name, self._sequence, U)
-            self._sequence = None
-            self.book.ready = False
-            self.book.clear()
-            self._pending = [(U, u, bids, asks)]
-            self.notify()
-            asyncio.get_running_loop().create_task(self._resync_task())
-            return
-        # unsynced (snapshot in flight or pending): buffer the event
-        if len(self._pending) < self.BUFFER_MAX:
-            self._pending.append((U, u, bids, asks))
-        else:
-            log.warning("[%s] diff buffer overflow — full resync", self.name)
-            self._pending = []
-            asyncio.get_running_loop().create_task(self._resync_task())
-
-    async def _resync_task(self) -> None:
-        for _ in range(3):
-            if await self._sync():
-                return
-        log.error("[%s] could not re-sync order book — feed stays blind "
-                  "until the next reconnect", self.name)
-
-    # ------------------------------------------------------------------- run
-
-    async def run(self, stop: asyncio.Event) -> None:
-        if self._own_session:
-            self._session = aiohttp.ClientSession()
-        backoff = 1.0
-        while not stop.is_set():
-            try:
-                async with ws_connect(self.ws_url, max_size=2**23,
-                                      open_timeout=10, ping_interval=20,
-                                      ping_timeout=20) as ws:
-                    log.info("[%s] connected (%s)", self.name, self.ws_url)
-                    self._sequence = None
-                    self._pending = []
-                    # the server sends a ws ping every 60s and expects the
-                    # pong within 120s — the websockets library answers both
-                    # sides of that handshake itself
-                    await ws.send(json.dumps({
-                        "method": "SUBSCRIBE",
-                        "params": [f"depth.{self.market}",
-                                   f"bookTicker.{self.market}"]}))
-                    # subscribe FIRST, snapshot SECOND: events that raced the
-                    # snapshot are buffered by _handle_depth and replayed
-                    asyncio.get_running_loop().create_task(
-                        self._resync_task())
-                    async for raw in ws:
-                        backoff = 1.0
-                        self.book.touch()
-                        msg = json.loads(raw)
-                        stream = str(msg.get("stream") or "")
-                        if stream.startswith("depth"):
-                            self._handle_depth(msg.get("data") or {})
-                        # bookTicker / anything else: liveness touch only
-                        if stop.is_set():
-                            break
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                log.warning("[%s] ws error: %s — reconnect in %.0fs",
-                            self.name, e, backoff)
-            self.book.ready = False
-            self._sequence = None
-            self._pending = []
-            self.notify()
-            if stop.is_set():
-                break
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 30.0)
-        if self._own_session and self._session is not None:
-            await self._session.close()
+        self.offer(U, u, d.get("b"), d.get("a"))
 
 
 class BulkBookFeed:

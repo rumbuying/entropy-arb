@@ -27,6 +27,7 @@ try:
 except ImportError:
     from websockets import connect as ws_connect  # type: ignore
 
+from .venues_common import fnum as _num
 from .book import OrderBook
 from .config import LIGHTER_PROFILES, VenueConf
 from .feeds import LighterBookFeed
@@ -38,12 +39,7 @@ AUTH_REFRESH_SEC = 8 * 60
 REST_TIMEOUT = 10.0
 
 
-def _num(x) -> Optional[float]:
-    """float(x) or None — venue payloads use strings and omit fields."""
-    try:
-        return float(x)
-    except (TypeError, ValueError):
-        return None
+
 
 
 NONCE_ERROR_CODE = 21104

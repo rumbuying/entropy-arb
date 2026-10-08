@@ -46,18 +46,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
 import os
 import time
 from typing import Optional
 
 import aiohttp
 
-try:                                    # websockets >= 13 (asyncio client)
-    from websockets.asyncio.client import connect as ws_connect
-except ImportError:                     # pragma: no cover — older websockets
-    from websockets import connect as ws_connect  # type: ignore
+from .venues_common import (classify_http, fnum, OrdersFeedBase, px_round_grid,
+                            round_grid)
 
+
+def _f(v, default: float = 0.0) -> float:
+    """Lenient wire-value float (None / '' / garbage -> default)."""
+    return fnum(v, default)
 from .book import OrderBook
 from .config import BulkCreds, VenueConf
 from .feeds import BulkBookFeed
@@ -80,12 +81,7 @@ TIF_IOC, TIF_ALO = "IOC", "ALO"
 POSTONLY_REJECTED = ("rejectedCrossing",)
 
 
-def _f(v, default: float = 0.0) -> float:
-    """Best-effort float from a wire value (None / '' / garbage -> default)."""
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return default
+
 
 
 class BulkSigner:
@@ -196,12 +192,9 @@ class BulkVenue:
                     f"{self.rest_url}/account", json=body,
                     timeout=aiohttp.ClientTimeout(total=REST_TIMEOUT)) as r:
                 text = await r.text()
-                if r.status == 429:
-                    return None, f"RATE_LIMITED: HTTP 429 {text[:150]}", False
-                if 400 <= r.status < 500:
-                    return None, f"HTTP {r.status}: {text[:250]}", False
-                if r.status >= 500:
-                    return None, None, True
+                if r.status >= 400:
+                    err, unresolved = classify_http(r.status, text)
+                    return None, err, unresolved
                 try:
                     body = json.loads(text)
                 except json.JSONDecodeError:
@@ -309,14 +302,10 @@ class BulkVenue:
     # ------------------------------------------------------------ price grid
 
     def px_round(self, px: float, round_up: bool) -> float:
-        f = 10 ** self.price_decimals
-        v = math.ceil(px * f - 1e-9) / f if round_up \
-            else math.floor(px * f + 1e-9) / f
-        return round(v, 12)
+        return px_round_grid(px, self.price_decimals, round_up, ndigits=12)
 
     def _qty_round(self, qty: float) -> float:
-        f = 10 ** self.size_decimals
-        return math.floor(qty * f + 1e-9) / f
+        return round_grid(qty, self.size_decimals, up=False)
 
     # ------------------------------------------------------------- execution
 
@@ -670,17 +659,16 @@ class BulkVenue:
         pass
 
 
-class BulkOrdersFeed:
+class BulkOrdersFeed(OrdersFeedBase):
     """Private account stream (ws `account.<pubkey>` topic).
 
     Source of FillEvent for the maker contract. bulk requires NO signature
     to subscribe — the account pubkey is the only credential (the venue
     treats account state as public data).
 
-    Idempotency is the whole point of this class (the engine hedges exactly
-    what it is told was filled): per-fill `tradeId` dedupes ("slot:seq",
-    stable across reconnects); the cumulative fillSz per order is the
-    fallback. Both maps live on the feed instance and survive reconnects.
+    Idempotency lives in OrdersFeedBase (per-fill `tradeId` dedupes,
+    "slot:seq" stable across reconnects; the cumulative fillSz per order is
+    the fallback — both survive reconnects).
 
     The server pushes the full accountSnapshot right after subscribing —
     the deterministic "private stream is live" signal that gates maker
@@ -692,20 +680,17 @@ class BulkOrdersFeed:
     against a live account before trusting maker mode.
     """
 
-    SEEN_FILLS_CAP = 2048
-    ORDERS_CAP = 4096
+    STREAM_LABEL = "account"
 
     def __init__(self, name: str, ws_url: str, market: str, user: str,
                  on_fill=None) -> None:
-        self.name = name
+        super().__init__(name, market, on_fill)
         self.ws_url = ws_url
-        self.market = market
         self.user = user
-        self.on_fill = on_fill
-        self.ready = asyncio.Event()
-        self.open_orders: dict = {}     # order_id -> live order snapshot
-        self._executed: dict = {}       # order_id -> cumulative filled qty
-        self._seen_fills: dict = {}     # order_id -> {trade_id, ...}
+
+    def _subscribe_frame(self):
+        return {"method": "subscribe",
+                "subscription": [{"type": "account", "user": self.user}]}
 
     # --------------------------------------------------------- fill mapping
 
@@ -717,16 +702,11 @@ class BulkOrdersFeed:
         id is present."""
         tid = d.get("tradeId")
         if tid is not None:
-            key = str(tid)
-            seen = self._seen_fills.setdefault(oid, set())
-            if key in seen:
+            if not self.new_fill_id(oid, tid):
                 return None
             q = abs(_f(d.get("size")))
             if q <= 1e-12:
                 return None         # a fill event without quantity: nothing
-            seen.add(key)
-            if len(seen) > self.SEEN_FILLS_CAP:
-                seen.clear()
             return q, _f(d.get("price")), _f(d.get("fee"))
         # fallback: cumulative delta from orderUpdate.fillSz (signed)
         z = abs(_f(d.get("fillSz")))
@@ -738,12 +718,6 @@ class BulkOrdersFeed:
             px = _f(d.get("vwap")) or _f(d.get("px"))
             return delta, px, 0.0
         return None
-
-    def _trim(self) -> None:
-        while len(self._executed) > self.ORDERS_CAP:
-            self._executed.pop(next(iter(self._executed)), None)
-        while len(self._seen_fills) > self.ORDERS_CAP:
-            self._seen_fills.pop(next(iter(self._seen_fills)), None)
 
     # ------------------------------------------------------------ dispatch
 
@@ -781,11 +755,7 @@ class BulkOrdersFeed:
                 ts=_f(d.get("timestamp")) / 1e9,
                 status="fill", update="fill",
                 error_code=str(d.get("reasonCode") or ""))
-            try:
-                if self.on_fill is not None:
-                    self.on_fill(ev)
-            except Exception:
-                log.exception("[%s] fill callback failed", self.name)
+            self.emit_fill(ev)
 
     def _handle_order(self, d: dict) -> None:
         sym = str(d.get("sym") or d.get("symbol") or "")
@@ -804,11 +774,7 @@ class BulkOrdersFeed:
                 order_id=oid, client_order_id="", side=side,
                 qty_delta=q, px=px, fee=0.0,
                 ts=_f(d.get("ts")) / 1e9, status=status, update="orderUpdate")
-            try:
-                if self.on_fill is not None:
-                    self.on_fill(ev)
-            except Exception:
-                log.exception("[%s] fill callback failed", self.name)
+            self.emit_fill(ev)
         terminal = status.startswith("cancelled") or \
             status.startswith("rejected") or \
             status in ("filled", "partiallyFilled", "triggerFailed",
@@ -834,43 +800,9 @@ class BulkOrdersFeed:
         if kind == "account":
             self._handle(d)
             # any account traffic proves the private stream is live
-            if not self.ready.is_set():
-                log.info("[%s] account stream ready", self.name)
-                self.ready.set()
+            self.mark_ready()
         elif kind == "subscriptionResponse":
             pass                        # subscription ack, not data yet
-
-    # ------------------------------------------------------------------- run
-
-    async def run(self, stop: asyncio.Event) -> None:
-        backoff = 1.0
-        while not stop.is_set():
-            try:
-                async with ws_connect(self.ws_url, max_size=2**23,
-                                      open_timeout=10, ping_interval=20,
-                                      ping_timeout=20) as ws:
-                    await ws.send(json.dumps({
-                        "method": "subscribe",
-                        "subscription": [{"type": "account",
-                                          "user": self.user}]}))
-                    async for raw in ws:
-                        backoff = 1.0
-                        msg = json.loads(raw)
-                        if isinstance(msg, dict):
-                            self._handle_envelope(msg)
-                        if stop.is_set():
-                            break
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                log.warning("[%s] account ws error: %s — retry in %.0fs",
-                            self.name, e, backoff)
-            self.ready.clear()
-            if stop.is_set():
-                break
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 30.0)
-        log.info("[%s] account stream stopped", self.name)
 
 
 # ------------------------------------------------------------ registry hooks

@@ -51,18 +51,20 @@ import asyncio
 import base64
 import json
 import logging
-import math
 import os
 import time
 from typing import Optional
 
 import aiohttp
 
-try:                                    # websockets >= 13 (asyncio client)
-    from websockets.asyncio.client import connect as ws_connect
-except ImportError:                     # pragma: no cover — older websockets
-    from websockets import connect as ws_connect  # type: ignore
+from .venues_common import (fnum, grid_str as _fmt, OrdersFeedBase,
+                            px_round_grid,
+                            step_decimals as _decimals)
 
+
+def _f(v, default: float = 0.0) -> float:
+    """Lenient wire-value float (None / '' / garbage -> default)."""
+    return fnum(v, default)
 from .book import OrderBook
 from .config import BackpackCreds, VenueConf
 from .feeds import BackpackBookFeed
@@ -87,28 +89,7 @@ ST_CANCELLED, ST_EXPIRED = "Cancelled", "Expired"
 POSTONLY_REASONS = ("PostOnlyTaker", "PostOnlyMode")
 
 
-def _decimals(step_str: str) -> int:
-    """'0.01' -> 2, '1.0' -> 1, '1' -> 0."""
-    s = str(step_str)
-    frac = s.split(".")[-1] if "." in s else ""
-    return len(frac.rstrip("0"))
 
-
-def _f(v, default: float = 0.0) -> float:
-    """Best-effort float from a wire value (None / '' / garbage -> default)."""
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return default
-
-
-def _fmt(value: float, decimals: int, up: bool) -> str:
-    """Quantize to the tick/step grid and render a plain decimal string
-    (never scientific notation — the venue parses decimal strings)."""
-    f = 10 ** decimals
-    v = math.ceil(value * f - 1e-9) / f if up \
-        else math.floor(value * f + 1e-9) / f
-    return f"{v:.{decimals}f}"
 
 
 def _signing_string(instruction: str, params: Optional[dict],
@@ -401,10 +382,7 @@ class BackpackVenue:
     # ------------------------------------------------------------ price grid
 
     def px_round(self, px: float, round_up: bool) -> float:
-        f = 10 ** self.price_decimals
-        v = math.ceil(px * f - 1e-9) / f if round_up \
-            else math.floor(px * f + 1e-9) / f
-        return round(v, 12)
+        return px_round_grid(px, self.price_decimals, round_up, ndigits=12)
 
     def _qty_str(self, qty: float) -> str:
         return _fmt(qty, self.size_decimals, up=False)
@@ -671,7 +649,7 @@ class BackpackVenue:
         pass
 
 
-class BackpackOrdersFeed:
+class BackpackOrdersFeed(OrdersFeedBase):
     """Authenticated private order stream (ws `account.orderUpdate` +
     `account.positionUpdate` on one signed connection).
 
@@ -680,35 +658,37 @@ class BackpackOrdersFeed:
     `instruction=subscribe&timestamp=<ms>&window=<ms>` sent as
     [verifyingKey, signature, timestamp, window] — fresh per connect.
 
-    Idempotency is the whole point of this class (the engine hedges exactly
-    what it is told was filled):
-
-      * per-fill tradeId `t` from orderFill events (primary), and
-      * the cumulative executed quantity `z` per order (fallback when the
-        venue omits the fill id).
-
-    Both maps live on the feed instance and survive reconnects, so a dropped
-    connection does not re-emit already-hedged quantity. The
-    positionUpdate stream serves double duty: the venue pushes the current
-    open-position snapshot right after subscribing, which is the
-    deterministic readiness signal for the maker path.
+    Idempotency lives in OrdersFeedBase (per-fill tradeId `t` primary, the
+    cumulative executed quantity `z` per order as fallback; both survive
+    reconnects, so a dropped connection does not re-emit already-hedged
+    quantity). The positionUpdate stream serves double duty: the venue
+    pushes the current open-position snapshot right after subscribing,
+    which is the deterministic readiness signal for the maker path.
     """
 
-    SEEN_FILLS_CAP = 2048
-    ORDERS_CAP = 4096
     SUB_STREAMS = ("account.orderUpdate", "account.positionUpdate")
+    SIGNATURE_AGE_SEC = 8 * 3600   # refresh the signed subscribe periodically
 
     def __init__(self, name: str, ws_url: str, market: str,
                  signer: BackpackSigner, on_fill=None) -> None:
-        self.name = name
+        super().__init__(name, market, on_fill)
         self.ws_url = ws_url
-        self.market = market
         self.signer = signer
-        self.on_fill = on_fill
-        self.ready = asyncio.Event()
-        self.open_orders: dict = {}     # order_id -> live order snapshot
-        self._executed: dict = {}       # order_id -> cumulative executed qty
-        self._seen_fills: dict = {}     # order_id -> {trade_id, ...}
+
+    def _subscribe_frame(self):
+        ts = int(time.time() * 1000) + self.signer.time_offset_ms
+        return {"method": "SUBSCRIBE",
+                "params": list(self.SUB_STREAMS),
+                "signature": [
+                    self.signer.api_key,
+                    self.signer.sign("subscribe", None, ts),
+                    str(ts), str(self.signer.window)]}
+
+    def _should_reconnect(self, connected_at: float) -> bool:
+        # periodic fresh-signature reconnect (the signed subscribe ages
+        # with the clock window)
+        return (time.time() - connected_at > self.SIGNATURE_AGE_SEC
+                and self.ready.is_set())
 
     # --------------------------------------------------------- fill mapping
 
@@ -721,16 +701,11 @@ class BackpackOrdersFeed:
         prev = self._executed.get(oid, 0.0)
         tid = d.get("t")
         if tid is not None:
-            key = str(tid)
-            seen = self._seen_fills.setdefault(oid, set())
-            if key in seen:
+            if not self.new_fill_id(oid, tid):
                 return None
             q = _f(d.get("l"))
             if q <= 1e-12:
                 return None         # a fill event without quantity: nothing
-            seen.add(key)
-            if len(seen) > self.SEEN_FILLS_CAP:
-                seen.clear()
             self._executed[oid] = max(prev, z)
             self._trim()
             return q, _f(d.get("L")), _f(d.get("n"))
@@ -741,12 +716,6 @@ class BackpackOrdersFeed:
             px = _f(d.get("L")) or _f(d.get("p"))
             return delta, px, _f(d.get("n"))
         return None
-
-    def _trim(self) -> None:
-        while len(self._executed) > self.ORDERS_CAP:
-            self._executed.pop(next(iter(self._executed)), None)
-        while len(self._seen_fills) > self.ORDERS_CAP:
-            self._seen_fills.pop(next(iter(self._seen_fills)), None)
 
     def _handle(self, d: dict) -> None:
         if not isinstance(d, dict):
@@ -765,17 +734,12 @@ class BackpackOrdersFeed:
         got = self._extract_fill(oid, d)
         if got is not None:
             q, px, fee = got
-            fill = FillEvent(
+            self.emit_fill(FillEvent(
                 order_id=oid,
                 client_order_id=str(d.get("c") or ""),
                 side=side, qty_delta=q, px=px, fee=fee,
                 ts=_f(d.get("E")) / 1e6,
-                status=status, update=ev, error_code=ec)
-            try:
-                if self.on_fill is not None:
-                    self.on_fill(fill)
-            except Exception:
-                log.exception("[%s] fill callback failed", self.name)
+                status=status, update=ev, error_code=ec))
         if ev in ("orderCancelled", "orderExpired") or \
                 status in (ST_FILLED, ST_CANCELLED, ST_EXPIRED,
                            "TriggerFailed"):
@@ -792,62 +756,16 @@ class BackpackOrdersFeed:
 
     # ------------------------------------------------------------------- run
 
-    async def run(self, stop: asyncio.Event) -> None:
-        backoff = 1.0
-        while not stop.is_set():
-            try:
-                ts = int(time.time() * 1000) + self.signer.time_offset_ms
-                sub = {"method": "SUBSCRIBE",
-                       "params": list(self.SUB_STREAMS),
-                       "signature": [
-                           self.signer.api_key,
-                           self.signer.sign("subscribe", None, ts),
-                           str(ts), str(self.signer.window)]}
-                connected_at = time.time()
-                async with ws_connect(self.ws_url, max_size=2**23,
-                                      open_timeout=10, ping_interval=20,
-                                      ping_timeout=20) as ws:
-                    await ws.send(json.dumps(sub))
-                    async for raw in ws:
-                        backoff = 1.0
-                        msg = json.loads(raw)
-                        if not isinstance(msg, dict):
-                            continue
-                        stream = str(msg.get("stream") or "")
-                        if stream == "account.orderUpdate":
-                            self._handle(msg.get("data") or {})
-                        elif stream == "account.positionUpdate":
-                            # the venue's initial open-position snapshot —
-                            # deterministic proof the private stream is live
-                            if not self.ready.is_set():
-                                log.info("[%s] orders stream ready",
-                                         self.name)
-                                self.ready.set()
-                        elif stream:
-                            if not self.ready.is_set():
-                                log.info("[%s] orders stream ready (%s)",
-                                         self.name, stream)
-                                self.ready.set()
-                        if stop.is_set():
-                            break
-                        if (time.time() - connected_at > 8 * 3600
-                                and self.ready.is_set()):
-                            # periodic fresh-signature reconnect (the signed
-                            # subscribe ages with the clock window)
-                            log.info("[%s] refreshing orders ws signature",
-                                     self.name)
-                            break
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                log.warning("[%s] orders ws error: %s — retry in %.0fs",
-                            self.name, e, backoff)
-            self.ready.clear()
-            if stop.is_set():
-                break
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 30.0)
-        log.info("[%s] orders stream stopped", self.name)
+    def _handle_envelope(self, msg: dict) -> None:
+        stream = str(msg.get("stream") or "")
+        if stream == "account.orderUpdate":
+            self._handle(msg.get("data") or {})
+        elif stream == "account.positionUpdate":
+            # the venue's initial open-position snapshot —
+            # deterministic proof the private stream is live
+            self.mark_ready()
+        elif stream:
+            self.mark_ready(stream)
 
 
 # ------------------------------------------------------------ registry hooks

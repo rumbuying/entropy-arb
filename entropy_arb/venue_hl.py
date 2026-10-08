@@ -22,6 +22,7 @@ from typing import Optional
 
 import aiohttp
 
+from .venues_common import classify_http, fnum as _num
 from .book import OrderBook
 from .config import VenueConf
 from .feeds import HLBookFeed
@@ -31,12 +32,7 @@ log = logging.getLogger("hl")
 INFO_TIMEOUT = 10.0
 
 
-def _num(x) -> Optional[float]:
-    """float(x) or None — venue payloads use strings and omit fields."""
-    try:
-        return float(x)
-    except (TypeError, ValueError):
-        return None
+
 
 
 class NonceAllocator:
@@ -279,12 +275,9 @@ class HLVenue:
                     self.api_url + "/exchange", json=payload,
                     timeout=aiohttp.ClientTimeout(total=INFO_TIMEOUT)) as r:
                 text = await r.text()
-                if r.status == 429:
-                    return None, f"RATE_LIMITED: HTTP 429 {text[:150]}", False
-                if 400 <= r.status < 500:
-                    return None, f"HTTP {r.status}: {text[:250]}", False
-                if r.status >= 500:
-                    return None, None, True
+                if r.status >= 400:
+                    err, unresolved = classify_http(r.status, text)
+                    return None, err, unresolved
                 return json.loads(text), None, False
         except (asyncio.TimeoutError, aiohttp.ClientError, json.JSONDecodeError):
             return None, None, True

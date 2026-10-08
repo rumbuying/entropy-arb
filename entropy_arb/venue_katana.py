@@ -32,7 +32,6 @@ import hmac
 import json
 import os
 import logging
-import math
 import time
 import uuid
 from typing import Optional
@@ -44,6 +43,19 @@ try:                                    # websockets >= 13 (asyncio client)
 except ImportError:                     # pragma: no cover — older websockets
     from websockets import connect as ws_connect  # type: ignore
 
+from .venues_common import (classify_http, fnum, grid_str, px_round_grid,
+                            step_decimals as _pips_decimals)
+
+
+def _f(v, default: float = 0.0) -> float:
+    """Lenient wire-value float (None / '' / garbage -> default)."""
+    return fnum(v, default)
+
+
+def _pips(value: float, decimals: int, up: bool) -> str:
+    """Quantize to the pip grid and render the exchange's 8-decimal
+    string (8dp regardless of the grid)."""
+    return grid_str(value, decimals, up, dp=8)
 from .book import OrderBook
 from .config import KatanaCreds, VenueConf
 from .feeds import KatanaBookFeed
@@ -125,26 +137,7 @@ _CANCEL_BY_WALLET_TYPES = {
 }
 
 
-def _pips_decimals(step_str: str) -> int:
-    """'0.00010000' -> 4, '1.00000000' -> 0 (steps are 8dp zero-padded)."""
-    frac = step_str.split(".")[-1] if "." in step_str else ""
-    return len(frac.rstrip("0"))
 
-
-def _pips(value: float, decimals: int, up: bool) -> str:
-    """Quantize to the pip grid and render the exchange's 8-decimal string."""
-    f = 10 ** decimals
-    v = math.ceil(value * f - 1e-9) / f if up else \
-        math.floor(value * f + 1e-9) / f
-    return f"{v:.8f}"
-
-
-def _f(v, default: float = 0.0) -> float:
-    """Best-effort float from a wire value (None / '' / garbage -> default)."""
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return default
 
 
 def _signed_envelope(params: dict) -> dict:
@@ -424,10 +417,7 @@ class KatanaVenue:
     # ------------------------------------------------------------ price grid
 
     def px_round(self, px: float, round_up: bool) -> float:
-        f = 10 ** self.price_decimals
-        v = math.ceil(px * f - 1e-9) / f if round_up else \
-            math.floor(px * f + 1e-9) / f
-        return round(v, 8)
+        return px_round_grid(px, self.price_decimals, round_up, ndigits=8)
 
     def _qty_str(self, qty: float) -> str:
         return _pips(qty, self.size_decimals, up=False)
@@ -456,12 +446,9 @@ class KatanaVenue:
                           timeout=aiohttp.ClientTimeout(
                               total=REST_TIMEOUT)) as r:
                 text = await r.text()
-                if r.status == 429:
-                    return None, f"RATE_LIMITED: HTTP 429 {text[:150]}", False
-                if 400 <= r.status < 500:
-                    return None, f"HTTP {r.status}: {text[:250]}", False
-                if r.status >= 500:
-                    return None, None, True
+                if r.status >= 400:
+                    err, unresolved = classify_http(r.status, text)
+                    return None, err, unresolved
                 try:
                     return json.loads(text), None, False
                 except json.JSONDecodeError:
