@@ -280,6 +280,9 @@ entropy_arb/venue_lighter.py  zkLighter adapter (mainnet, Robinhood chain)
 entropy_arb/venue_katana.py   Katana Perps adapter (HMAC + EIP-712)
 entropy_arb/venue_backpack.py Backpack Exchange adapter (Ed25519-signed REST + ws)
 entropy_arb/venue_bulk.py        bulk.trade adapter (Solana Ed25519 tx signing via bulk-keychain)
+entropy_arb/venue_registry.py  THE venue registration point (spec table everything derives from)
+entropy_arb/venues_common.py   shared adapter plumbing (feed skeletons, rounding, error contract)
+ADD-A-VENUE.zh-CN.md           how to onboard a new exchange (one adapter + one registry entry)
 DEVOPS.zh-CN.md         dev & ops handbook (architecture, runbooks, venue checklist)
 entropy_arb/engine.py    the two-venue strategy loop
 entropy_arb/dashboard.py Rich terminal dashboard

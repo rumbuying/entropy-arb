@@ -248,6 +248,9 @@ entropy_arb/venue_lighter.py  zkLighter 适配器（主网、Robinhood 链）
 entropy_arb/venue_katana.py   Katana Perps 适配器（HMAC + EIP-712）
 entropy_arb/venue_backpack.py Backpack Exchange 适配器（Ed25519 签名 REST + ws）
 entropy_arb/venue_bulk.py        bulk.trade 适配器（Solana Ed25519 交易签名，依赖 bulk-keychain）
+entropy_arb/venue_registry.py  venue 注册表（唯一接入点，其余全部派生）
+entropy_arb/venues_common.py   适配器共享层（feed 骨架、精度取整、错误合同）
+ADD-A-VENUE.zh-CN.md           新交易所接入手册（1 个 adapter + 1 条注册）
 DEVOPS.zh-CN.md         开发运维手册（架构 / Runbook / 新增交易所清单）
 entropy_arb/engine.py    双交易所策略主循环
 entropy_arb/dashboard.py Rich 终端仪表盘

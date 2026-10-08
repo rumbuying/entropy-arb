@@ -252,21 +252,22 @@ python3 -m pytest tests/                 # 必须全绿；当前 179 passed
 个 shim（照 `tests/test_backpack_maker.py`）跑一遍即可，契约测试会失败而不是
 引擎在实盘里失败。
 
-### 5.3 新增一个 venue 的完整清单（照 backpack 抄）
+### 5.3 新增一个 venue 的完整清单
 
-1. `entropy_arb/venue_<x>.py`：Signer + Venue + OrdersFeed
-2. `entropy_arb/feeds.py`：BookFeed（snapshot+seq 或全量快照，gap 必须重同步）
-3. `config.py`：三个枚举（HEDGE/BASE/MAKER_VENUES 按能力）+ Creds + VenueConf
-   分支 + `creds_complete`；`.env` 键与默认费率（**显式写、可核实**）
-4. `engine.py::_make_venue` 一行分支
-5. `console/secrets.py`（键校验+venue 要求）、`console/server.py`（`needed`
-   表）、`webui/secrets.js`（卡片+诊断组）、`webui/runs.js`+`profiles.js`
-   （下拉）、`webui/i18n.js`（en+zh）
-6. `tools/basis_probe.py` 采集分支
-7. `tests/test_<x>.py` + `tests/test_<x>_maker.py`（契约 shim）
-8. 试点 profile ×2（挂单线/对冲线各一）
-9. README×2、`.env.example`、`config.example.yaml`
-10. **实盘前**：console 🩺 诊断（含挂撤单）→ 记录该所限频/费率到文档
+venue 已收敛为**单一注册点**（`entropy_arb/venue_registry.py`）：config 三元组、腿构造、
+engine/console 工厂、secrets 校验、funding 矩阵、discovery、v2 前端卡片与下拉全部从注册表
+派生。接入手册（含前置调研三问：断线撤单语义 / 私有流认证形态 / fill 判别实盘核对）见
+**[ADD-A-VENUE.zh-CN.md](ADD-A-VENUE.zh-CN.md)**。速查：
+
+1. `entropy_arb/venue_<x>.py`：Venue 合同 + 三个模块钩子（`make_venue` /
+   `make_public_feed` / `list_markets_catalog`），尽量用 `venues_common` 的基类
+2. `venue_registry.py`：一条 `VenueSpec`（+ `UI_CARDS` 卡片；lighter 式 per-leg 覆盖
+   才需要 `NEED_GROUP`）
+3. `config.py`：新 Creds dataclass（`.complete`）
+4. `tests/test_<x>.py` + 契约 shim；`test_venue_registry.py` 会自动查漏
+5. 样板：README×2、`.env.example`、`config.example.yaml`、试点 profile ×2
+6. **实盘前**：console 🩺 诊断（含挂撤单）→ 记录该所限频/费率到文档 → 私有 WS fill
+   判别实盘核对后才开 maker
 
 ### 5.4 maker 引擎要点
 
