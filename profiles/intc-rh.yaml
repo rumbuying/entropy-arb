@@ -12,9 +12,9 @@
 thresholds:
   # 占位值（record-only 不交易；live 前由 auto_band 校准）
   # 口径: premium = Backpack(INTC.US) / lighter-rh(INTC) − 1
-  midline_bps: -1.71
-  upper_bps: 11.63
-  lower_bps: 11.63
+  midline_bps: -2.22
+  upper_bps: 9.49
+  lower_bps: 9.49
 
 entropy:
   # INTC.US 在 Backpack 自动解析为 INTC.US_USDC_PERP

@@ -1,9 +1,9 @@
 # ANTH (io dex) vs ANTHROPIC (lighter-rh) — 盘前币对，先 RECORD-ONLY 采集
 # hedge.symbol 别名：两所对同一标的的不同命名
 thresholds:
-  midline_bps: -186.49
-  upper_bps: 15.75
-  lower_bps: 15.75
+  midline_bps: -182.97
+  upper_bps: 12.89
+  lower_bps: 12.89
 
 entropy:
   dex: io
