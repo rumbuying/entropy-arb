@@ -43,20 +43,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import aiohttp  # noqa: E402
 
+from entropy_arb import venue_registry  # noqa: E402
 from entropy_arb.book import OrderBook  # noqa: E402
-from entropy_arb.config import HL_WS_URL, LIGHTER_PROFILES  # noqa: E402
-from entropy_arb.feeds import (BackpackBookFeed, BulkBookFeed,  # noqa: E402
-                               HLBookFeed, KatanaBookFeed,  # noqa: E402
-                               LighterBookFeed)
+from entropy_arb.discovery import resolve_venue as _resolve_listing  # noqa: E402
 from entropy_arb.recorder import MinuteRecorder  # noqa: E402
-from entropy_arb.venue_backpack import PROD_REST as BACKPACK_REST  # noqa: E402
-from entropy_arb.venue_backpack import PROD_WS as BACKPACK_WS  # noqa: E402
-from entropy_arb.venue_bulk import PROD_REST as BULK_REST  # noqa: E402
-from entropy_arb.venue_bulk import PROD_WS as BULK_WS  # noqa: E402
-from entropy_arb.venue_katana import PROD_REST as KATANA_REST  # noqa: E402
-from entropy_arb.venue_katana import PROD_WS as KATANA_WS  # noqa: E402
 
-VENUES = ("hl", "lighter", "lighter-rh", "katana", "backpack", "bulk")
+VENUES = venue_registry.discovery_keys()
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=20)
 
 # one fetch per venue per process: /markets is rate-limited (429) and the
@@ -75,120 +67,40 @@ class Resolved:
         self.make = make          # (name, book, notify) -> feed
 
 
-async def _lighter_entry(session: aiohttp.ClientSession, venue: str,
-                         symbol: str) -> dict:
-    prof = LIGHTER_PROFILES[venue]
-    if venue not in _CACHE:
-        url = prof.api_url.rstrip("/") + "/api/v1/orderBooks"
-        async with session.get(url, timeout=HTTP_TIMEOUT) as r:
-            r.raise_for_status()
-            data = await r.json()
-        _CACHE[venue] = data.get("order_books") or []
-    for ob in _CACHE[venue]:
-        if ob.get("symbol") != symbol:
-            continue
-        if ob.get("status") != "active":
-            raise RuntimeError(f"{symbol} on {venue}: status={ob.get('status')}")
-        return ob
-    raise RuntimeError(f"{symbol} not found on {venue}")
+def _listing_note(l) -> str:
+    parts = []
+    if l.market_id is not None:
+        parts.append(f"id={l.market_id}")
+    if l.taker_fee_bps is not None:
+        parts.append(f"taker={l.taker_fee_bps:.2f}bp")
+    if l.maker_fee_bps is not None:
+        parts.append(f"maker={l.maker_fee_bps:.2f}bp")
+    if l.tick is not None:
+        parts.append(f"tick={l.tick}")
+    if l.step is not None:
+        parts.append(f"step={l.step}")
+    if l.min_base is not None:
+        parts.append(f"min={l.min_base}")
+    if l.min_notional is not None:
+        parts.append(f"min_ntl={l.min_notional}")
+    if l.max_leverage is not None:
+        parts.append(f"max_lev={l.max_leverage}")
+    return " ".join(parts) or "ok"
 
 
 async def resolve(session: aiohttp.ClientSession, venue: str,
                   symbol: str) -> Resolved:
-    if venue == "hl":
-        def make(name, book, notify):
-            return HLBookFeed(name, HL_WS_URL, symbol, book, notify)
-        return Resolved(venue, symbol, symbol, "HL main dex", make)
+    """Resolve one symbol on one venue via the shared discovery catalog and
+    the venue registry's feed factory — no per-venue branches here."""
+    listing = await _resolve_listing(session, venue, symbol)
+    if listing is None:
+        raise RuntimeError(f"{symbol} not listed on {venue}")
 
-    if venue == "katana":
-        market = f"{symbol}-USD"
-        if "katana-markets" not in _CACHE:
-            async with session.get(f"{KATANA_REST}/markets",
-                                   timeout=HTTP_TIMEOUT) as r:
-                r.raise_for_status()
-                raw = await r.json()
-            entries = raw.get("data") if isinstance(raw, dict) else raw
-            _CACHE["katana-markets"] = entries or []
-        entries = _CACHE["katana-markets"]
-        entry = next((m for m in entries if m.get("market") == market), None)
-        if entry is None:
-            raise RuntimeError(f"{market} not on Katana (have: "
-                               f"{[m.get('market') for m in entries]})")
-        note = (f"taker={float(entry.get('takerFeeRate') or 0) * 1e4:.2f}bp "
-                f"maker={float(entry.get('makerFeeRate') or 0) * 1e4:.2f}bp")
-
-        def make(name, book, notify):
-            return KatanaBookFeed(name, KATANA_REST, KATANA_WS, market, book,
-                                  notify, session=session)
-        return Resolved(venue, symbol, market, note, make)
-
-    if venue == "backpack":
-        if "backpack-markets" not in _CACHE:
-            async with session.get(f"{BACKPACK_REST}/api/v1/markets",
-                                   timeout=HTTP_TIMEOUT) as r:
-                r.raise_for_status()
-                raw = await r.json()
-            _CACHE["backpack-markets"] = raw if isinstance(raw, list) else []
-        entries = _CACHE["backpack-markets"]
-        candidates = {symbol, f"{symbol}_USDC_PERP"}
-        entry = next((m for m in entries
-                      if str(m.get("symbol", "")).upper() in candidates
-                      and m.get("marketType") == "PERP"), None)
-        if entry is None:
-            raise RuntimeError(f"{symbol} not on Backpack perps")
-        if entry.get("orderBookState") != "Open":
-            raise RuntimeError(f"{entry['symbol']}: orderBookState="
-                               f"{entry.get('orderBookState')}")
-        market = entry["symbol"]
-        flt = entry.get("filters") or {}
-        note = (f"tick={((flt.get('price') or {}).get('tickSize'))} "
-                f"step={((flt.get('quantity') or {}).get('stepSize'))} "
-                f"min={((flt.get('quantity') or {}).get('minQuantity'))}")
-
-        def make(name, book, notify):
-            return BackpackBookFeed(name, BACKPACK_REST, BACKPACK_WS, market,
-                                    book, notify, session=session)
-        return Resolved(venue, symbol, market, note, make)
-
-    if venue == "bulk":
-        if "bulk-markets" not in _CACHE:
-            async with session.get(f"{BULK_REST}/exchangeInfo",
-                                   timeout=HTTP_TIMEOUT) as r:
-                r.raise_for_status()
-                raw = await r.json()
-            _CACHE["bulk-markets"] = raw if isinstance(raw, list) else []
-        entries = _CACHE["bulk-markets"]
-        candidates = {symbol, f"{symbol}-USD"}
-        entry = next((m for m in entries
-                      if str(m.get("symbol", "")).upper() in candidates), None)
-        if entry is None:
-            raise RuntimeError(f"{symbol} not on bulk")
-        if entry.get("status") != "TRADING":
-            raise RuntimeError(f"{entry['symbol']}: status="
-                               f"{entry.get('status')}")
-        market = entry["symbol"]
-        note = (f"tick={entry.get('tickSize')} "
-                f"step={entry.get('sizeIncrement')} "
-                f"min_ntl={entry.get('minNotional')} "
-                f"max_lev={entry.get('maxLeverage')}")
-
-        def make(name, book, notify):
-            return BulkBookFeed(name, BULK_WS, market, book, notify)
-        return Resolved(venue, symbol, market, note, make)
-
-    if venue in ("lighter", "lighter-rh"):
-        ob = await _lighter_entry(session, venue, symbol)
-        prof = LIGHTER_PROFILES[venue]
-        mid = int(ob["market_id"])
-        note = (f"id={mid} taker={float(ob.get('taker_fee') or 0) * 1e4:.2f}bp "
-                f"maker={float(ob.get('maker_fee') or 0) * 1e4:.2f}bp "
-                f"min_base={ob.get('min_base_amount')}")
-
-        def make(name, book, notify):
-            return LighterBookFeed(name, prof.ws_url, mid, book, notify)
-        return Resolved(venue, symbol, f"{symbol}#{mid}", note, make)
-
-    raise RuntimeError(f"unknown venue {venue!r} (choose from {VENUES})")
+    def make(name, book, notify):
+        return venue_registry.make_public_feed(listing, book, notify,
+                                               session=session)
+    return Resolved(listing.venue, symbol, listing.market,
+                    _listing_note(listing), make)
 
 
 async def main() -> int:

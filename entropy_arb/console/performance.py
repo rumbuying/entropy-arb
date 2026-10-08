@@ -17,6 +17,7 @@ Honesty rules wired in:
 """
 from __future__ import annotations
 
+from .. import venue_registry
 import json
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
@@ -173,7 +174,8 @@ def performance_for_strategy(storage, *, strategy_id: str,
     # API — the component covers the verified legs only
     strategy_row = storage.get_strategy(strategy_id)
     if strategy_row and funding_seen:
-        supported = {"katana", "bulk"}      # venues with a verified funding API
+        supported = {k for k, vs in venue_registry.VENUES.items()
+                     if vs.funding_supported}
         for vk in (strategy_row.get("base_venue"),
                    strategy_row.get("hedge_venue")):
             if vk and vk not in supported:

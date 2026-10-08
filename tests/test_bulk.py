@@ -66,7 +66,7 @@ def _conf(cap=200.0):
     return VenueConf(
         key="hedge", kind="bulk", label="BULK", symbol=MARKET,
         fee_bps=3.5, cap_usd=cap, orders_per_min=30,
-        bulk_creds=BulkCreds(secret_key="58secret"))
+        creds=BulkCreds(secret_key="58secret"))
 
 
 def _venue(session, cap=200.0):
@@ -481,8 +481,8 @@ def test_config_wiring():
     # the -USD suffix is resolved by load_market against /exchangeInfo,
     # not rewritten at config time (mirrors katana)
     assert cfg.hedge.symbol == "BTC"
-    assert cfg.hedge.bulk_creds is not None
-    assert not cfg.hedge.bulk_creds.complete   # no keys in os.devnull
+    assert cfg.hedge.creds is not None
+    assert not cfg.hedge.creds.complete   # no keys in os.devnull
     assert cfg.hedge.fee_bps == 3.5            # tier-0 taker default
 
     cfg2 = load_config(y.name, os.devnull, symbol="BTC", hedge_venue="tradexyz",

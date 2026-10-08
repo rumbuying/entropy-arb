@@ -43,7 +43,7 @@ def _conf(cap=200.0):
     return VenueConf(
         key="hedge", kind="backpack", label="BACKPACK", symbol=MARKET,
         fee_bps=5.0, cap_usd=cap, orders_per_min=120,
-        backpack_creds=BackpackCreds(api_key=API_KEY, api_secret=API_SECRET))
+        creds=BackpackCreds(api_key=API_KEY, api_secret=API_SECRET))
 
 
 def _venue(session, cap=200.0):
@@ -77,7 +77,7 @@ def test_signing_string_is_exact():
 
 
 def test_signature_verifies_under_the_api_key():
-    signer = BackpackSigner(_conf().backpack_creds)
+    signer = BackpackSigner(_conf().creds)
     assert signer.api_key == API_KEY
     params = {"symbol": MARKET, "timeInForce": "IOC"}
     ts = 1700000000000
@@ -479,14 +479,14 @@ def test_config_wiring():
     cfg = load_config(y.name, os.devnull, symbol="SOL", hedge_venue="backpack")
     assert cfg.hedge.kind == "backpack" and cfg.hedge.label == "BACKPACK"
     assert cfg.hedge.symbol == "SOL_USDC_PERP"
-    assert cfg.hedge.backpack_creds is not None
-    assert not cfg.hedge.backpack_creds.complete   # no keys in os.devnull
+    assert cfg.hedge.creds is not None
+    assert not cfg.hedge.creds.complete   # no keys in os.devnull
     assert cfg.hedge.fee_bps == 5.0                # tier-1 default (verify!)
 
     cfg2 = load_config(y.name, os.devnull, symbol="SOL", hedge_venue="lighter",
                        base_venue="backpack")
     assert cfg2.entropy.kind == "backpack" and cfg2.hedge.kind == "lighter"
-    assert cfg2.entropy.backpack_creds is not None
+    assert cfg2.entropy.creds is not None
 
     # same venue on both legs stays forbidden
     from entropy_arb.config import ConfigError

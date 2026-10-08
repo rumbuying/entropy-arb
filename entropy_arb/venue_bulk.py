@@ -253,7 +253,7 @@ class BulkVenue:
                            f"(candidates: {sorted(candidates)})")
 
     def init_signer(self) -> None:
-        c = self.conf.bulk_creds
+        c = self.conf.creds
         assert c is not None and c.complete, f"[{self.name}] missing credentials"
         self.signer = BulkSigner(c, self.domain)
         log.info("[%s] %s (%s)", self.name, self.signer.describe(),

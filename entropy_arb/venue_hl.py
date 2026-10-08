@@ -163,7 +163,7 @@ class HLVenue:
         raise RuntimeError(f"[{self.name}] {want} not found")
 
     def init_signer(self) -> None:
-        c = self.conf.hl_creds
+        c = self.conf.creds
         assert c is not None and c.complete, f"[{self.name}] missing credentials"
         try:
             from hyperliquid.utils import signing as hl_signing
@@ -327,7 +327,7 @@ class HLVenue:
     def _query_address(self):
         if self.account is not None:
             return self.account.query_address
-        c = self.conf.hl_creds
+        c = self.conf.creds
         return c.account_address.lower() if c and c.account_address else None
 
     async def fetch_equity(self):

@@ -63,6 +63,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import aiohttp  # noqa: E402
 import yaml  # noqa: E402
 
+from entropy_arb import venue_registry  # noqa: E402
 from entropy_arb.book import OrderBook  # noqa: E402
 from entropy_arb.discovery import (DEFAULT_CATALOG, MarketListing,  # noqa: E402
                                    feed_factory, universe)
@@ -70,7 +71,7 @@ from entropy_arb.venue_bars import VenueMinuteRecorder, venue_bar_path  # noqa: 
 
 log = logging.getLogger("star-probe")
 
-VENUES_ALL = ("hl", "lighter", "lighter-rh", "katana", "backpack", "bulk")
+VENUES_ALL = venue_registry.discovery_keys()
 
 DEFAULT_DEPTH_LEVELS = 3
 DEFAULT_MAX_SPREAD_BPS = 50.0

@@ -256,7 +256,7 @@ class LighterVenue:
                            f"{self.profile.name}")
 
     def init_signer(self) -> None:
-        c = self.conf.lighter_creds
+        c = self.conf.creds
         assert c is not None and c.complete, f"[{self.name}] missing credentials"
         try:
             from lighter import SignerClient
@@ -285,7 +285,7 @@ class LighterVenue:
         if live:
             self.orders_feed = AccountOrdersFeed(
                 self.name, self.profile.ws_url, self.market_id,
-                self.conf.lighter_creds.account_index, self.signer)
+                self.conf.creds.account_index, self.signer)
             tasks.append(asyncio.create_task(self.orders_feed.run(stop),
                                              name=f"acct-{self.key}"))
         return tasks
@@ -386,7 +386,7 @@ class LighterVenue:
     # -------------------------------------------------------------- accounts
 
     async def _account(self) -> Optional[dict]:
-        c = self.conf.lighter_creds
+        c = self.conf.creds
         if c is None or c.account_index is None:
             return None
         data = await self._get("/api/v1/account",
@@ -409,7 +409,7 @@ class LighterVenue:
         Called between the two attempts of `_submit_with_nonce_retry`; never
         raises, so it can't mask the order error it is trying to recover from.
         """
-        creds = self.conf.lighter_creds
+        creds = self.conf.creds
         manager = getattr(self.signer, "nonce_manager", None)
         if manager is None or creds is None or creds.api_key_index is None:
             return

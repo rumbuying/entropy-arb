@@ -355,7 +355,7 @@ def test_make_venue_hl_has_real_api_url():
     async def run():
         import aiohttp
         vc = VenueConf(label="ENTROPY", kind="hl", hl_dex="io",
-                       hl_creds=HLCreds(None, None), key="entropy",
+                       creds=HLCreds(None, None), key="entropy",
                        symbol="ANTH", fee_bps=0.0, cap_usd=1000.0,
                        orders_per_min=120)
         session = aiohttp.ClientSession()

@@ -47,7 +47,7 @@ async def main() -> int:
 
     conf = VenueConf(key="hedge", kind="backpack", label="BACKPACK",
                      symbol=args.symbol, fee_bps=5.0, cap_usd=1000.0,
-                     orders_per_min=60, backpack_creds=creds)
+                     orders_per_min=60, creds=creds)
     async with aiohttp.ClientSession() as session:
         v = BackpackVenue(conf, session, settle_timeout_sec=5.0)
         await v.load_market()

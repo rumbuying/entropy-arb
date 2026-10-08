@@ -29,7 +29,7 @@ def _conf(cap=200.0):
     return VenueConf(
         key="hedge", kind="backpack", label="BACKPACK", symbol=MARKET,
         fee_bps=5.0, cap_usd=cap, orders_per_min=120,
-        backpack_creds=BackpackCreds(api_key=API_KEY, api_secret=API_SECRET))
+        creds=BackpackCreds(api_key=API_KEY, api_secret=API_SECRET))
 
 
 def _venue(session):

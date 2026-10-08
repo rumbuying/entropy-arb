@@ -32,7 +32,7 @@ def _conf(cap=200.0):
     return VenueConf(
         key="hedge", kind="katana", label="KATANA", symbol=MARKET,
         fee_bps=1.9, cap_usd=cap, orders_per_min=30,
-        katana_creds=KatanaCreds(
+        creds=KatanaCreds(
             api_key="1e7c4f52-4af7-4e1b-aa94-94fac8d931aa",
             api_secret="ufuh3ywgg854aq7m73oy6gnnpj5ar9a67szuw5lclbz77zqu0j",
             private_key=TEST_KEY))

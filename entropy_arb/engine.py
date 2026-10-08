@@ -30,11 +30,7 @@ from .maker import (FillEvent, MakerQuote, clamp_to_maker_book,
                     inventory_skew_bps, quote_prices, requote_reason,
                     vol_widen_bps)
 from .recorder import MinuteRecorder
-from .venue_backpack import BackpackVenue
-from .venue_bulk import BulkVenue
-from .venue_hl import HLVenue
-from .venue_katana import KatanaVenue
-from .venue_lighter import LighterVenue
+from . import venue_registry
 
 log = logging.getLogger("engine")
 
@@ -245,16 +241,9 @@ class Engine:
                      "band=[-%.2f, +%.2f]", self.config_path, mid, lo, up)
 
     def _make_venue(self, vc):
-        if vc.kind == "lighter":
-            return LighterVenue(vc, self.session, self.cfg.settle_timeout_sec)
-        if vc.kind == "katana":
-            return KatanaVenue(vc, self.session, self.cfg.settle_timeout_sec)
-        if vc.kind == "backpack":
-            return BackpackVenue(vc, self.session, self.cfg.settle_timeout_sec)
-        if vc.kind == "bulk":
-            return BulkVenue(vc, self.session, self.cfg.settle_timeout_sec)
-        return HLVenue(vc, self.cfg.hl_api_url, self.cfg.hl_ws_url,
-                       self.session, self.cfg.settle_timeout_sec)
+        # the single registry factory — the console shares it (venue_registry)
+        return venue_registry.make_venue_client(
+            vc, self.session, self.cfg.settle_timeout_sec)
 
     async def _run_inner(self) -> None:
         cfg = self.cfg

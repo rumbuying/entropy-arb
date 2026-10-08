@@ -72,7 +72,7 @@ def test_secrets_roundtrip_and_masking(tmp_path):
 
 def test_secrets_per_leg_lighter_venues(tmp_path):
     """The console's live pre-flight must see the per-leg override the same
-    way config.lighter_creds resolves it."""
+    way config.creds resolves it."""
     env = tmp_path / ".env"
     shared = ("LIGHTER_ACCOUNT_INDEX=11111\n"
               "LIGHTER_API_KEY_INDEX=7\n"

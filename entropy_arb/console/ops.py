@@ -29,14 +29,8 @@ from typing import Callable, Optional
 import aiohttp
 
 from ..book import floor_step
-from ..config import (LIGHTER_PROFILES, BackpackCreds, BulkCreds, ConfigError,
-                      HLCreds, KatanaCreds, VenueConf, lighter_creds,
-                      load_config)
-from ..venue_backpack import BackpackVenue
-from ..venue_bulk import BulkVenue
-from ..venue_hl import HLVenue
-from ..venue_katana import KatanaVenue
-from ..venue_lighter import LighterVenue
+from ..config import ConfigError, VenueConf, load_config
+from .. import venue_registry
 
 log = logging.getLogger("ops")
 
@@ -48,19 +42,9 @@ FLATTEN_MAX_ROUNDS = 5
 
 def _make_venue(vc: VenueConf, session: aiohttp.ClientSession,
                 settle_timeout: float):
-    """Same mapping as Engine._make_venue — one place, kept in sync."""
-    if vc.kind == "lighter":
-        return LighterVenue(vc, session, settle_timeout)
-    if vc.kind == "katana":
-        return KatanaVenue(vc, session, settle_timeout)
-    if vc.kind == "backpack":
-        return BackpackVenue(vc, session, settle_timeout)
-    if vc.kind == "bulk":
-        return BulkVenue(vc, session, settle_timeout)
-    # HL endpoints come from the config module (the engine reads them off
-    # the loaded Config; ops builds VenueConfs directly)
-    from ..config import HL_API_URL, HL_WS_URL
-    return HLVenue(vc, HL_API_URL, HL_WS_URL, session, settle_timeout)
+    """The registry factory — literally the same one Engine._make_venue
+    calls (venue_registry.make_venue_client)."""
+    return venue_registry.make_venue_client(vc, session, settle_timeout)
 
 
 # ------------------------------------------------------------- diagnostics
@@ -68,47 +52,10 @@ def _make_venue(vc: VenueConf, session: aiohttp.ClientSession,
 def _diag_conf(venue: str, symbol: str, role: str, dex: str, env_file: str) \
         -> VenueConf:
     """The VenueConf the engine would build for this leg, straight from .env
-    (same env resolution, defaults for fee/caps — diagnostics cares about
-    reachability, not economics). role only matters for Lighter's per-leg
-    credential overrides."""
-    key = "hedge" if role == "hedge" else "entropy"
-    base = dict(key=key, symbol=(symbol or "").strip().upper(),
-                fee_bps=0.0, cap_usd=1000.0, orders_per_min=120)
-    if venue == "hl":
-        if role == "hedge":                      # trade.xyz overrides
-            return VenueConf(label="XYZ", kind="hl", hl_dex=dex or "xyz",
-                             hl_creds=HLCreds(
-                                 os.getenv("HL_PRIVATE_KEY_XYZ")
-                                 or os.getenv("HL_PRIVATE_KEY"),
-                                 os.getenv("HL_ACCOUNT_ADDRESS_XYZ")
-                                 or os.getenv("HL_ACCOUNT_ADDRESS")), **base)
-        return VenueConf(label="ENTROPY", kind="hl", hl_dex=dex,
-                         hl_creds=HLCreds(os.getenv("HL_PRIVATE_KEY"),
-                                          os.getenv("HL_ACCOUNT_ADDRESS")),
-                         **base)
-    if venue in ("lighter", "lighter-rh"):
-        return VenueConf(label="LIGHTER" if venue == "lighter" else "RH",
-                         kind="lighter",
-                         lighter_profile=LIGHTER_PROFILES[venue],
-                         lighter_creds=lighter_creds(
-                             "HEDGE" if role == "hedge" else "BASE"), **base)
-    if venue == "katana":
-        return VenueConf(label="KATANA", kind="katana",
-                         katana_creds=KatanaCreds(
-                             os.getenv("KATANA_API_KEY"),
-                             os.getenv("KATANA_API_SECRET"),
-                             os.getenv("KATANA_PRIVATE_KEY"),
-                             os.getenv("KATANA_WALLET")), **base)
-    if venue == "backpack":
-        return VenueConf(label="BACKPACK", kind="backpack",
-                         backpack_creds=BackpackCreds(
-                             os.getenv("BACKPACK_API_KEY"),
-                             os.getenv("BACKPACK_API_SECRET")), **base)
-    if venue == "bulk":
-        return VenueConf(label="BULK", kind="bulk",
-                         bulk_creds=BulkCreds(
-                             os.getenv("BULK_SECRET_KEY")), **base)
-    raise ValueError(f"unknown venue {venue!r}")
+    (registry-driven: label/kind/creds resolution all come from the venue's
+    spec; role only matters for Lighter's per-leg credential overrides and
+    the trade.xyz legacy mapping — see venue_registry.diag_conf)."""
+    return venue_registry.diag_conf(venue, symbol, role, dex)
 
 
 # console-side balance probe cache: (venue, role, dex, symbol-upper) ->
@@ -213,10 +160,7 @@ async def run_diagnostics(venue: str, symbol: str, *, env_file: str,
             step("market", False, repr(e))
             return {"ok": False, "steps": steps}
 
-        if not (v.conf.backpack_creds and v.conf.backpack_creds.complete
-                or v.conf.katana_creds and v.conf.katana_creds.complete
-                or v.conf.lighter_creds and v.conf.lighter_creds.complete
-                or v.conf.hl_creds and v.conf.hl_creds.complete):
+        if not (v.conf.creds and v.conf.creds.complete):
             step("credentials", False,
                  "keys incomplete — save them in the API Keys tab first")
             return {"ok": False, "steps": steps}
@@ -342,10 +286,7 @@ async def run_flatten(*, profile: str, symbol: str, hedge: str, base: str,
             legs[key] = (v, slip)
         for v, _ in legs.values():
             await v.load_market()
-            if not (v.conf.backpack_creds and v.conf.backpack_creds.complete
-                    or v.conf.katana_creds and v.conf.katana_creds.complete
-                    or v.conf.lighter_creds and v.conf.lighter_creds.complete
-                    or v.conf.hl_creds and v.conf.hl_creds.complete):
+            if not (v.conf.creds and v.conf.creds.complete):
                 raise RuntimeError(f"[{v.name}] credentials incomplete")
             v.init_signer()
             tasks += v.start_tasks(stop, lambda: None, live=True)

@@ -335,6 +335,10 @@ def diag_conf(venue: str, symbol: str, role: str, dex: str):
     role=hedge dex=xyz — never venue "tradexyz", which raises here.
     """
     from .config import LIGHTER_PROFILES, VenueConf
+    if venue == "tradexyz":
+        # legacy contract: the UI maps tradeXYZ to venue=hl role=hedge
+        # dex=xyz; a direct tradexyz conf risks a wrong dex, so it raises
+        raise ValueError(f"unknown venue {venue!r}")
     is_xyz = venue == "hl" and role == "hedge"
     vs = spec("tradexyz") if is_xyz else spec(venue)
     return VenueConf(
@@ -348,3 +352,23 @@ def diag_conf(venue: str, symbol: str, role: str, dex: str):
                          if vs.kind == "lighter" else None),
         creds=creds_from_env(vs, role),
     )
+
+
+# ------------------------------------------------- secrets-page derivation
+
+def key_kinds() -> Dict[str, str]:
+    """env var -> format-kind id for every credential variable of every
+    venue (chain members included: the shared fallback and the {LEG}
+    overrides validate the same way)."""
+    out: Dict[str, str] = {}
+    for k in _ORDER:
+        for f in VENUES[k].creds:
+            for env in f.env:
+                for leg in ("BASE", "HEDGE"):
+                    out[env.replace("{LEG}", leg)] = f.key_kind
+    return out
+
+
+def venue_requirements() -> Dict[str, Tuple[str, ...]]:
+    """creds-group id -> minimal env keys that make the group tradeable."""
+    return {VENUES[k].creds_group: VENUES[k].requirements for k in _ORDER}

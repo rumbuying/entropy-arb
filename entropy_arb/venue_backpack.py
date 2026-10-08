@@ -337,7 +337,7 @@ class BackpackVenue:
                            f"(candidates: {sorted(candidates)})")
 
     def init_signer(self) -> None:
-        c = self.conf.backpack_creds
+        c = self.conf.creds
         assert c is not None and c.complete, f"[{self.name}] missing credentials"
         try:
             import cryptography.hazmat.primitives.asymmetric.ed25519  # noqa: F401

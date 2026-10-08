@@ -29,23 +29,27 @@ import yaml
 from dotenv import load_dotenv
 
 from .maker import MakerParams
+from .venue_registry import base_venues, build_leg_conf, hedge_venues, \
+    maker_venues
 
 HL_API_URL = "https://api.hyperliquid.xyz"
 HL_WS_URL = "wss://api.hyperliquid.xyz/ws"   # official ws — the only HL feed used
 
-HEDGE_VENUES = ("lighter", "lighter-rh", "tradexyz", "katana", "backpack",
-                "bulk")
+# The venue table lives in venue_registry (the single registration point:
+# adding an exchange = one VenueSpec entry + one adapter module). These
+# tuples derive from it; order there is the display order everywhere.
+HEDGE_VENUES = hedge_venues()
 
 # venues the BASE (entropy) leg may run on. Historically hard-wired to
 # Hyperliquid; "lighter" unlocks the Lighter-vs-Katana line where the whole
 # edge lives (BASIS-EXPLORE.md: Katana maker + Lighter taker ≈ 0.95bp toll).
 # "backpack" is the taker-hedge role in maker mode (e.g. Katana quotes hedged
 # on Backpack — see BACKPACK-PLAN.md).
-BASE_VENUES = ("hl", "lighter", "lighter-rh", "katana", "backpack", "bulk")
+BASE_VENUES = base_venues()
 
 # venues that implement the maker contract (maker_capable=True) and may run
 # with maker.enabled — the console pre-flights this at launch
-MAKER_VENUES = ("katana", "backpack", "bulk")
+MAKER_VENUES = maker_venues()
 
 
 @dataclass(frozen=True)
@@ -141,7 +145,7 @@ class BulkCreds:
 @dataclass
 class VenueConf:
     key: str                  # "entropy" | "hedge"
-    kind: str                 # "hl" | "lighter" | "katana"
+    kind: str                 # "hl" | "lighter" | "katana" | ...
     label: str                # human name for logs, e.g. "ENTROPY", "RH"
     symbol: str
     fee_bps: float
@@ -149,16 +153,12 @@ class VenueConf:
     orders_per_min: int
     # hl
     hl_dex: str = ""
-    hl_creds: Optional[HLCreds] = None
-    # lighter
+    # lighter endpoint profile (kind == "lighter")
     lighter_profile: Optional[LighterProfile] = None
-    lighter_creds: Optional[LighterCreds] = None
-    # katana
-    katana_creds: Optional[KatanaCreds] = None
-    # backpack
-    backpack_creds: Optional[BackpackCreds] = None
-    # bulk
-    bulk_creds: Optional[BulkCreds] = None
+    # credentials of the leg's venue — the dataclass follows VenueConf.kind
+    # (HLCreds/LighterCreds/KatanaCreds/BackpackCreds/BulkCreds); the
+    # per-kind field/env mapping lives in venue_registry
+    creds: Optional[object] = None
 
 
 @dataclass
@@ -214,22 +214,10 @@ class Config:
 
     @property
     def creds_complete(self) -> bool:
-        for v in (self.entropy, self.hedge):
-            if v.kind == "hl" and not (v.hl_creds and v.hl_creds.complete):
-                return False
-            if v.kind == "lighter" and not (v.lighter_creds
-                                            and v.lighter_creds.complete):
-                return False
-            if v.kind == "katana" and not (v.katana_creds
-                                           and v.katana_creds.complete):
-                return False
-            if v.kind == "backpack" and not (v.backpack_creds
-                                             and v.backpack_creds.complete):
-                return False
-            if v.kind == "bulk" and not (v.bulk_creds
-                                         and v.bulk_creds.complete):
-                return False
-        return True
+        # registry-driven: every REQUIRED cred field of each leg's kind
+        # must be set (venue_registry.creds_complete)
+        from .venue_registry import creds_complete
+        return all(creds_complete(v) for v in (self.entropy, self.hedge))
 
 
 # ----------------------------------------------------------------- YAML layer
@@ -414,45 +402,9 @@ def _env_i(name: str) -> Optional[int]:
     return int(v) if v not in (None, "") else None
 
 
-def _env_first_s(*names: str) -> Optional[str]:
-    """First name that is set — explicit leg-specific vars beat the shared
-    fallback. Presence is tested with `is not None` so a value like "0" wins
-    instead of falling through."""
-    for n in names:
-        v = _env_s(n)
-        if v is not None:
-            return v
-    return None
-
-
-def _env_first_i(*names: str) -> Optional[int]:
-    """Integer twin of _env_first_s (account index 0 is a valid value)."""
-    for n in names:
-        v = _env_i(n)
-        if v is not None:
-            return v
-    return None
-
-
-def lighter_creds(leg: str) -> LighterCreds:
-    """Credentials for one Lighter leg.
-
-    ``leg`` is "BASE" or "HEDGE". The leg-specific triple
-    (LIGHTER_BASE_* / LIGHTER_HEDGE_*) wins when present; otherwise the shared
-    LIGHTER_* triple is used, so single-account setups need no new variables.
-
-    Why per-leg: the two zkLighter deployments (mainnet chain 304 vs
-    Robinhood chain 466324) are separate accounts with separate API keys.
-    Trading Lighter-mainnet as the base leg while another worker hedges on
-    lighter-rh needs both key sets in the same .env — one shared triple would
-    make the two lines impossible to run side by side.
-    """
-    leg = leg.upper()
-    return LighterCreds(
-        _env_first_i(f"LIGHTER_{leg}_ACCOUNT_INDEX", "LIGHTER_ACCOUNT_INDEX"),
-        _env_first_i(f"LIGHTER_{leg}_API_KEY_INDEX", "LIGHTER_API_KEY_INDEX"),
-        _env_first_s(f"LIGHTER_{leg}_API_PRIVATE_KEY",
-                     "LIGHTER_API_PRIVATE_KEY"))
+def _env_i(name: str) -> Optional[int]:
+    v = os.getenv(name)
+    return int(v) if v not in (None, "") else None
 
 
 # -------------------------------------------------------------------- loading
@@ -568,138 +520,13 @@ def load_config(config_file: str = "config.yaml", env_file: str = ".env", *,
     # on Katana
     entropy_symbol = str(_get(raw, "entropy", "symbol", symbol)
                          or symbol).strip().upper()
-
-    if base_venue == "lighter" or base_venue == "lighter-rh":
-        entropy = VenueConf(
-            key="entropy", kind="lighter",
-            label="LIGHTER" if base_venue == "lighter" else "LIGHTER-RH",
-            symbol=entropy_symbol,
-            fee_bps=float(_get(raw, "entropy", "taker_fee_bps", 0.0)),
-            cap_usd=float(_get(raw, "entropy", "max_position_usd", 1000.0)),
-            orders_per_min=int(_get(raw, "entropy", "max_orders_per_min", 120)),
-            lighter_profile=LIGHTER_PROFILES[base_venue],
-            lighter_creds=lighter_creds("BASE"),
-        )
-    elif base_venue == "katana":
-        entropy = VenueConf(
-            key="entropy", kind="katana", label="KATANA",
-            symbol=entropy_symbol,
-            fee_bps=float(_get(raw, "entropy", "taker_fee_bps", 1.9)),
-            cap_usd=float(_get(raw, "entropy", "max_position_usd", 1000.0)),
-            orders_per_min=int(_get(raw, "entropy", "max_orders_per_min", 30)),
-            katana_creds=KatanaCreds(
-                _env_s("KATANA_API_KEY"),
-                _env_s("KATANA_API_SECRET"),
-                _env_s("KATANA_PRIVATE_KEY"),
-                _env_s("KATANA_WALLET")),
-        )
-    elif base_venue == "backpack":
-        entropy = VenueConf(
-            key="entropy", kind="backpack", label="BACKPACK",
-            symbol=entropy_symbol,
-            # tier-1 perp taker fee is 5.0bp on the EU entity — VERIFY your
-            # account's actual tier before trusting this default (the API
-            # serves it; the config number stays the explicit source of
-            # truth so a fee change can never silently move the thresholds)
-            fee_bps=float(_get(raw, "entropy", "taker_fee_bps", 5.0)),
-            cap_usd=float(_get(raw, "entropy", "max_position_usd", 1000.0)),
-            orders_per_min=int(_get(raw, "entropy", "max_orders_per_min", 120)),
-            backpack_creds=BackpackCreds(
-                _env_s("BACKPACK_API_KEY"),
-                _env_s("BACKPACK_API_SECRET")),
-        )
-    elif base_venue == "bulk":
-        entropy = VenueConf(
-            key="entropy", kind="bulk", label="BULK",
-            symbol=entropy_symbol,
-            # tier-0 taker fee is 3.5bp (GET /feeState serves the live tier
-            # ladder; maker is 0bp) — same explicit-source-of-truth rule as
-            # the other venues
-            fee_bps=float(_get(raw, "entropy", "taker_fee_bps", 3.5)),
-            cap_usd=float(_get(raw, "entropy", "max_position_usd", 1000.0)),
-            orders_per_min=int(_get(raw, "entropy", "max_orders_per_min", 30)),
-            bulk_creds=BulkCreds(_env_s("BULK_SECRET_KEY")),
-        )
-    else:
-        entropy = VenueConf(
-            key="entropy", kind="hl", label="ENTROPY",
-            symbol=entropy_symbol,
-            fee_bps=float(_get(raw, "entropy", "taker_fee_bps", 0.0)),
-            cap_usd=float(_get(raw, "entropy", "max_position_usd", 1000.0)),
-            orders_per_min=int(_get(raw, "entropy", "max_orders_per_min", 120)),
-            hl_dex=entropy_dex,
-            hl_creds=HLCreds(_env_s("HL_PRIVATE_KEY"),
-                             _env_s("HL_ACCOUNT_ADDRESS")),
-        )
+    entropy = build_leg_conf(base_venue, "base", entropy_symbol, raw,
+                             dex=entropy_dex)
 
     # hedge-leg ticker override: the two venues may name the same market
     # differently (e.g. entropy "ANTH" vs lighter-rh "ANTHROPIC")
     hedge_symbol = str(_get(raw, "hedge", "symbol", symbol) or symbol).strip().upper()
-
-    if hedge_venue == "tradexyz":
-        hedge = VenueConf(
-            key="hedge", kind="hl", label="XYZ",
-            symbol=hedge_symbol,
-            fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 1.0)),
-            cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
-            orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 120)),
-            hl_dex="xyz",
-            hl_creds=HLCreds(
-                _env_s("HL_PRIVATE_KEY_XYZ") or _env_s("HL_PRIVATE_KEY"),
-                _env_s("HL_ACCOUNT_ADDRESS_XYZ") or _env_s("HL_ACCOUNT_ADDRESS")),
-        )
-    elif hedge_venue == "katana":
-        hedge = VenueConf(
-            key="hedge", kind="katana", label="KATANA",
-            symbol=hedge_symbol,
-            # live market-level taker fee is ~1.9 bps (the API serves the
-            # exact value; the config number stays the explicit source of
-            # truth so a fee change can never silently move the thresholds)
-            fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 1.9)),
-            cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
-            orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 30)),
-            katana_creds=KatanaCreds(
-                _env_s("KATANA_API_KEY"),
-                _env_s("KATANA_API_SECRET"),
-                _env_s("KATANA_PRIVATE_KEY"),
-                _env_s("KATANA_WALLET")),
-        )
-    elif hedge_venue == "backpack":
-        hedge = VenueConf(
-            key="hedge", kind="backpack", label="BACKPACK",
-            symbol=hedge_symbol,
-            # tier-1 perp taker fee is 5.0bp on the EU entity — VERIFY your
-            # account's actual tier before trusting this default (同上：显式
-            # 配置是唯一事实源，接口值只做对照)
-            fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 5.0)),
-            cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
-            orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 120)),
-            backpack_creds=BackpackCreds(
-                _env_s("BACKPACK_API_KEY"),
-                _env_s("BACKPACK_API_SECRET")),
-        )
-    elif hedge_venue == "bulk":
-        hedge = VenueConf(
-            key="hedge", kind="bulk", label="BULK",
-            symbol=hedge_symbol,
-            # tier-0 taker fee is 3.5bp (GET /feeState serves the live tier
-            # ladder; maker is 0bp) — 同上：显式配置是唯一事实源，接口值只做对照
-            fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 3.5)),
-            cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
-            orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 30)),
-            bulk_creds=BulkCreds(_env_s("BULK_SECRET_KEY")),
-        )
-    else:
-        hedge = VenueConf(
-            key="hedge", kind="lighter",
-            label="LIGHTER" if hedge_venue == "lighter" else "RH",
-            symbol=hedge_symbol,
-            fee_bps=float(_get(raw, "hedge", "taker_fee_bps", 0.0)),
-            cap_usd=float(_get(raw, "hedge", "max_position_usd", 1000.0)),
-            orders_per_min=int(_get(raw, "hedge", "max_orders_per_min", 30)),
-            lighter_profile=LIGHTER_PROFILES[hedge_venue],
-            lighter_creds=lighter_creds("HEDGE"),
-        )
+    hedge = build_leg_conf(hedge_venue, "hedge", hedge_symbol, raw)
 
     return Config(
         symbol=symbol,

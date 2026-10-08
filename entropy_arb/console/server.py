@@ -20,6 +20,7 @@ from typing import Optional
 
 from aiohttp import WSMsgType, web
 
+from .. import venue_registry
 from ..config import BASE_VENUES, HEDGE_VENUES, MAKER_VENUES
 from . import ops
 from .operations import OperationError, OperationService
@@ -220,7 +221,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                      "hedge",
                                      "xyz" if hedge == "tradexyz" else ""))
                         for venue_kind, leg, leg_dex in legs:
-                            supported = venue_kind in ("katana", "bulk")
+                            supported = venue_registry.spec(
+                                venue_kind).funding_supported
                             if not supported:
                                 covered_notes.setdefault(
                                     (sid, venue_kind, leg), {
@@ -652,9 +654,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             return web.json_response(
                 {"error": "live start requires confirm=<symbol>"}, status=400)
         creds = secrets.status()["venues"]
-        needed = {"lighter": "lighter", "lighter-rh": "lighter-rh",
-                  "tradexyz": "tradexyz", "katana": "katana",
-                  "backpack": "backpack", "bulk": "bulk"}
+        needed = {k: venue_registry.spec(k).creds_group
+                  for k in venue_registry.hedge_venues()}
         if mode == "live":
             # the entropy leg's credential requirement follows --base; a
             # Lighter leg uses its per-leg override when one is present

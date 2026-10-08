@@ -70,8 +70,8 @@ def test_katana_hedge():
     assert cfg.hedge.label == "KATANA"
     assert cfg.hedge.symbol == "BTC-USD"
     assert cfg.hedge.fee_bps == 1.9
-    assert cfg.hedge.katana_creds is not None
-    assert not cfg.hedge.katana_creds.complete      # no keys in NO_ENV
+    assert cfg.hedge.creds is not None
+    assert not cfg.hedge.creds.complete      # no keys in NO_ENV
     assert cfg.hedge_venue == "katana"
 
 
@@ -192,15 +192,15 @@ def test_base_unknown_venue_rejected():
     expect_error(MINIMAL, "--base", hedge="katana", base="binance")
 
 
-def test_lighter_base_needs_lighter_creds():
+def test_lighter_base_needs_creds():
     # NO_ENV has no LIGHTER_* keys → creds_complete must be False for live
     cfg = load(MINIMAL, symbol="BTC", hedge="katana", base="lighter")
-    assert cfg.entropy.lighter_creds is not None
-    assert not cfg.entropy.lighter_creds.complete
+    assert cfg.entropy.creds is not None
+    assert not cfg.entropy.creds.complete
     assert not cfg.creds_complete
 
 
-def test_lighter_creds_per_leg(tmp_path):
+def test_creds_per_leg(tmp_path):
     """LIGHTER_BASE_*/LIGHTER_HEDGE_* override the shared LIGHTER_* triple so
     a Lighter-mainnet base leg can coexist with a lighter-rh hedge leg."""
     env = tmp_path / ".env"
@@ -216,21 +216,21 @@ def test_lighter_creds_per_leg(tmp_path):
         # base leg picks the leg-specific triple
         cfg = load_config(write_tmp(MINIMAL), str(env), symbol="ETH",
                           hedge_venue="katana", base_venue="lighter")
-        assert cfg.entropy.lighter_creds.account_index == 12345
-        assert cfg.entropy.lighter_creds.api_key_index == 3
-        assert cfg.entropy.lighter_creds.api_private_key == "0x" + "b" * 80
-        assert cfg.entropy.lighter_creds.complete
+        assert cfg.entropy.creds.account_index == 12345
+        assert cfg.entropy.creds.api_key_index == 3
+        assert cfg.entropy.creds.api_private_key == "0x" + "b" * 80
+        assert cfg.entropy.creds.complete
         # the rh worker keeps reading the shared triple (no cross-talk)
         cfg2 = load_config(write_tmp(MINIMAL), str(env), symbol="ANTH",
                            hedge_venue="lighter-rh", base_venue="hl")
-        assert cfg2.hedge.lighter_creds.account_index == 11111
-        assert cfg2.hedge.lighter_creds.api_private_key == "0x" + "a" * 80
+        assert cfg2.hedge.creds.account_index == 11111
+        assert cfg2.hedge.creds.api_private_key == "0x" + "a" * 80
     finally:
         os.environ.clear()
         os.environ.update(saved)
 
 
-def test_lighter_creds_fall_back_to_shared(tmp_path):
+def test_creds_fall_back_to_shared(tmp_path):
     env = tmp_path / ".env"
     env.write_text(
         "LIGHTER_ACCOUNT_INDEX=11111\n"
@@ -240,8 +240,8 @@ def test_lighter_creds_fall_back_to_shared(tmp_path):
     try:
         cfg = load_config(write_tmp(MINIMAL), str(env), symbol="ETH",
                           hedge_venue="katana", base_venue="lighter")
-        assert cfg.entropy.lighter_creds.account_index == 11111
-        assert cfg.entropy.lighter_creds.complete
+        assert cfg.entropy.creds.account_index == 11111
+        assert cfg.entropy.creds.complete
     finally:
         os.environ.clear()
         os.environ.update(saved)

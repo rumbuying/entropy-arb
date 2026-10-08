@@ -361,7 +361,7 @@ class KatanaVenue:
                            f"(candidates: {sorted(candidates)})")
 
     def init_signer(self) -> None:
-        c = self.conf.katana_creds
+        c = self.conf.creds
         assert c is not None and c.complete, f"[{self.name}] missing credentials"
         try:
             import eth_account  # noqa: F401  (lazy dependency check)
