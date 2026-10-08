@@ -1,0 +1,1788 @@
+{
+ "constants": {
+  "discovery": {
+   "DEFAULT_TAKER_FEE_BPS": {
+    "backpack": 2.5,
+    "bulk": 3.5,
+    "hl": 4.5,
+    "hl:io": 0.9,
+    "hl:xyz": 1.0,
+    "katana": null,
+    "lighter": 0.0,
+    "lighter-rh": 0.0
+   },
+   "VENUE_KEYS": [
+    "hl",
+    "lighter",
+    "lighter-rh",
+    "katana",
+    "backpack",
+    "bulk"
+   ]
+  },
+  "secrets": {
+   "KEY_KINDS": {
+    "BACKPACK_API_KEY": "b64_32",
+    "BACKPACK_API_SECRET": "b64_32",
+    "BULK_SECRET_KEY": "b58_key",
+    "HL_ACCOUNT_ADDRESS": "address",
+    "HL_ACCOUNT_ADDRESS_XYZ": "address",
+    "HL_PRIVATE_KEY": "private_key",
+    "HL_PRIVATE_KEY_XYZ": "private_key",
+    "KATANA_API_KEY": "uuid",
+    "KATANA_API_SECRET": "token",
+    "KATANA_PRIVATE_KEY": "private_key",
+    "KATANA_WALLET": "address",
+    "LIGHTER_ACCOUNT_INDEX": "int",
+    "LIGHTER_API_KEY_INDEX": "int",
+    "LIGHTER_API_PRIVATE_KEY": "hex_key",
+    "LIGHTER_BASE_ACCOUNT_INDEX": "int",
+    "LIGHTER_BASE_API_KEY_INDEX": "int",
+    "LIGHTER_BASE_API_PRIVATE_KEY": "hex_key",
+    "LIGHTER_HEDGE_ACCOUNT_INDEX": "int",
+    "LIGHTER_HEDGE_API_KEY_INDEX": "int",
+    "LIGHTER_HEDGE_API_PRIVATE_KEY": "hex_key"
+   },
+   "VENUE_REQUIREMENTS": {
+    "backpack": [
+     "BACKPACK_API_KEY",
+     "BACKPACK_API_SECRET"
+    ],
+    "bulk": [
+     "BULK_SECRET_KEY"
+    ],
+    "entropy": [
+     "HL_PRIVATE_KEY"
+    ],
+    "katana": [
+     "KATANA_API_KEY",
+     "KATANA_API_SECRET",
+     "KATANA_PRIVATE_KEY"
+    ],
+    "lighter": [
+     "LIGHTER_ACCOUNT_INDEX",
+     "LIGHTER_API_KEY_INDEX",
+     "LIGHTER_API_PRIVATE_KEY"
+    ],
+    "lighter-rh": [
+     "LIGHTER_ACCOUNT_INDEX",
+     "LIGHTER_API_KEY_INDEX",
+     "LIGHTER_API_PRIVATE_KEY"
+    ],
+    "tradexyz": [
+     "HL_PRIVATE_KEY"
+    ]
+   }
+  },
+  "tuples": {
+   "BASE_VENUES": [
+    "hl",
+    "lighter",
+    "lighter-rh",
+    "katana",
+    "backpack",
+    "bulk"
+   ],
+   "HEDGE_VENUES": [
+    "lighter",
+    "lighter-rh",
+    "tradexyz",
+    "katana",
+    "backpack",
+    "bulk"
+   ],
+   "MAKER_VENUES": [
+    "katana",
+    "backpack",
+    "bulk"
+   ]
+  }
+ },
+ "diag": {
+  "diag:backpack|base": {
+   "backpack_creds": {
+    "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+    "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+   },
+   "bulk_creds": null,
+   "cap_usd": 1000.0,
+   "fee_bps": 0.0,
+   "hl_creds": null,
+   "hl_dex": "",
+   "katana_creds": null,
+   "key": "entropy",
+   "kind": "backpack",
+   "label": "BACKPACK",
+   "lighter_creds": null,
+   "lighter_profile": null,
+   "orders_per_min": 120,
+   "symbol": "BTC"
+  },
+  "diag:backpack|hedge": {
+   "backpack_creds": {
+    "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+    "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+   },
+   "bulk_creds": null,
+   "cap_usd": 1000.0,
+   "fee_bps": 0.0,
+   "hl_creds": null,
+   "hl_dex": "",
+   "katana_creds": null,
+   "key": "hedge",
+   "kind": "backpack",
+   "label": "BACKPACK",
+   "lighter_creds": null,
+   "lighter_profile": null,
+   "orders_per_min": 120,
+   "symbol": "BTC"
+  },
+  "diag:bulk|base": {
+   "backpack_creds": null,
+   "bulk_creds": {
+    "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+   },
+   "cap_usd": 1000.0,
+   "fee_bps": 0.0,
+   "hl_creds": null,
+   "hl_dex": "",
+   "katana_creds": null,
+   "key": "entropy",
+   "kind": "bulk",
+   "label": "BULK",
+   "lighter_creds": null,
+   "lighter_profile": null,
+   "orders_per_min": 120,
+   "symbol": "BTC"
+  },
+  "diag:bulk|hedge": {
+   "backpack_creds": null,
+   "bulk_creds": {
+    "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+   },
+   "cap_usd": 1000.0,
+   "fee_bps": 0.0,
+   "hl_creds": null,
+   "hl_dex": "",
+   "katana_creds": null,
+   "key": "hedge",
+   "kind": "bulk",
+   "label": "BULK",
+   "lighter_creds": null,
+   "lighter_profile": null,
+   "orders_per_min": 120,
+   "symbol": "BTC"
+  },
+  "diag:hl|base": {
+   "backpack_creds": null,
+   "bulk_creds": null,
+   "cap_usd": 1000.0,
+   "fee_bps": 0.0,
+   "hl_creds": {
+    "account_address": "0x2222222222222222222222222222222222222222",
+    "private_key": "0x1111111111111111111111111111111111111111111111111111111111111111"
+   },
+   "hl_dex": "",
+   "katana_creds": null,
+   "key": "entropy",
+   "kind": "hl",
+   "label": "ENTROPY",
+   "lighter_creds": null,
+   "lighter_profile": null,
+   "orders_per_min": 120,
+   "symbol": "BTC"
+  },
+  "diag:hl|hedge": {
+   "backpack_creds": null,
+   "bulk_creds": null,
+   "cap_usd": 1000.0,
+   "fee_bps": 0.0,
+   "hl_creds": {
+    "account_address": "0x4444444444444444444444444444444444444444",
+    "private_key": "0x3333333333333333333333333333333333333333333333333333333333333333"
+   },
+   "hl_dex": "xyz",
+   "katana_creds": null,
+   "key": "hedge",
+   "kind": "hl",
+   "label": "XYZ",
+   "lighter_creds": null,
+   "lighter_profile": null,
+   "orders_per_min": 120,
+   "symbol": "BTC"
+  },
+  "diag:katana|base": {
+   "backpack_creds": null,
+   "bulk_creds": null,
+   "cap_usd": 1000.0,
+   "fee_bps": 0.0,
+   "hl_creds": null,
+   "hl_dex": "",
+   "katana_creds": {
+    "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+    "api_secret": "katana-secret-token",
+    "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+    "wallet_address": "0x7777777777777777777777777777777777777777"
+   },
+   "key": "entropy",
+   "kind": "katana",
+   "label": "KATANA",
+   "lighter_creds": null,
+   "lighter_profile": null,
+   "orders_per_min": 120,
+   "symbol": "BTC"
+  },
+  "diag:katana|hedge": {
+   "backpack_creds": null,
+   "bulk_creds": null,
+   "cap_usd": 1000.0,
+   "fee_bps": 0.0,
+   "hl_creds": null,
+   "hl_dex": "",
+   "katana_creds": {
+    "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+    "api_secret": "katana-secret-token",
+    "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+    "wallet_address": "0x7777777777777777777777777777777777777777"
+   },
+   "key": "hedge",
+   "kind": "katana",
+   "label": "KATANA",
+   "lighter_creds": null,
+   "lighter_profile": null,
+   "orders_per_min": 120,
+   "symbol": "BTC"
+  },
+  "diag:lighter-rh|base": {
+   "backpack_creds": null,
+   "bulk_creds": null,
+   "cap_usd": 1000.0,
+   "fee_bps": 0.0,
+   "hl_creds": null,
+   "hl_dex": "",
+   "katana_creds": null,
+   "key": "entropy",
+   "kind": "lighter",
+   "label": "RH",
+   "lighter_creds": {
+    "account_index": 4242,
+    "api_key_index": 3,
+    "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+   },
+   "lighter_profile": {
+    "api_url": "https://api.rh.lighter.xyz",
+    "chain_id": 466324,
+    "name": "robinhood",
+    "ws_url": "wss://api.rh.lighter.xyz/stream"
+   },
+   "orders_per_min": 120,
+   "symbol": "BTC"
+  },
+  "diag:lighter-rh|hedge": {
+   "backpack_creds": null,
+   "bulk_creds": null,
+   "cap_usd": 1000.0,
+   "fee_bps": 0.0,
+   "hl_creds": null,
+   "hl_dex": "",
+   "katana_creds": null,
+   "key": "hedge",
+   "kind": "lighter",
+   "label": "RH",
+   "lighter_creds": {
+    "account_index": 4242,
+    "api_key_index": 3,
+    "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+   },
+   "lighter_profile": {
+    "api_url": "https://api.rh.lighter.xyz",
+    "chain_id": 466324,
+    "name": "robinhood",
+    "ws_url": "wss://api.rh.lighter.xyz/stream"
+   },
+   "orders_per_min": 120,
+   "symbol": "BTC"
+  },
+  "diag:lighter|base": {
+   "backpack_creds": null,
+   "bulk_creds": null,
+   "cap_usd": 1000.0,
+   "fee_bps": 0.0,
+   "hl_creds": null,
+   "hl_dex": "",
+   "katana_creds": null,
+   "key": "entropy",
+   "kind": "lighter",
+   "label": "LIGHTER",
+   "lighter_creds": {
+    "account_index": 4242,
+    "api_key_index": 3,
+    "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+   },
+   "lighter_profile": {
+    "api_url": "https://mainnet.zklighter.elliot.ai",
+    "chain_id": 304,
+    "name": "mainnet",
+    "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+   },
+   "orders_per_min": 120,
+   "symbol": "BTC"
+  },
+  "diag:lighter|hedge": {
+   "backpack_creds": null,
+   "bulk_creds": null,
+   "cap_usd": 1000.0,
+   "fee_bps": 0.0,
+   "hl_creds": null,
+   "hl_dex": "",
+   "katana_creds": null,
+   "key": "hedge",
+   "kind": "lighter",
+   "label": "LIGHTER",
+   "lighter_creds": {
+    "account_index": 4242,
+    "api_key_index": 3,
+    "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+   },
+   "lighter_profile": {
+    "api_url": "https://mainnet.zklighter.elliot.ai",
+    "chain_id": 304,
+    "name": "mainnet",
+    "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+   },
+   "orders_per_min": 120,
+   "symbol": "BTC"
+  },
+  "diag:tradexyz|base": {
+   "error": "ValueError: unknown venue 'tradexyz'"
+  },
+  "diag:tradexyz|hedge": {
+   "error": "ValueError: unknown venue 'tradexyz'"
+  },
+  "exchange_of:backpack": "Backpack",
+  "exchange_of:bulk": "Bulk",
+  "exchange_of:hl": "HL(io)",
+  "exchange_of:katana": "Katana",
+  "exchange_of:lighter": "Lighter",
+  "exchange_of:lighter-rh": "Lighter-RH",
+  "exchange_of:tradexyz": "tradexyz"
+ },
+ "matrix": {
+  "base=backpack|hedge=backpack": {
+   "error": "--base 'backpack' and --hedge 'backpack' are the same deployment \u2014 the two legs must be different venues / \u4e24\u6761\u817f\u4e0d\u80fd\u662f\u540c\u4e00\u4e2a\u5e02\u573a"
+  },
+  "base=backpack|hedge=bulk": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 5.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "cap_usd": 1000.0,
+    "fee_bps": 3.5,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=backpack|hedge=katana": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 5.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.9,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "key": "hedge",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=backpack|hedge=lighter": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 5.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=backpack|hedge=lighter-rh": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 5.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "RH",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=backpack|hedge=tradexyz": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 5.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.0,
+    "hl_creds": {
+     "account_address": "0x4444444444444444444444444444444444444444",
+     "private_key": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "hl_dex": "xyz",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "hl",
+    "label": "XYZ",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=bulk|hedge=backpack": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "cap_usd": 1000.0,
+    "fee_bps": 3.5,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 5.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=bulk|hedge=bulk": {
+   "error": "--base 'bulk' and --hedge 'bulk' are the same deployment \u2014 the two legs must be different venues / \u4e24\u6761\u817f\u4e0d\u80fd\u662f\u540c\u4e00\u4e2a\u5e02\u573a"
+  },
+  "base=bulk|hedge=katana": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "cap_usd": 1000.0,
+    "fee_bps": 3.5,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.9,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "key": "hedge",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=bulk|hedge=lighter": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "cap_usd": 1000.0,
+    "fee_bps": 3.5,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=bulk|hedge=lighter-rh": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "cap_usd": 1000.0,
+    "fee_bps": 3.5,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "RH",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=bulk|hedge=tradexyz": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "cap_usd": 1000.0,
+    "fee_bps": 3.5,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.0,
+    "hl_creds": {
+     "account_address": "0x4444444444444444444444444444444444444444",
+     "private_key": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "hl_dex": "xyz",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "hl",
+    "label": "XYZ",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=hl|hedge=backpack": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": {
+     "account_address": "0x2222222222222222222222222222222222222222",
+     "private_key": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "hl",
+    "label": "ENTROPY",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 5.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=hl|hedge=bulk": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": {
+     "account_address": "0x2222222222222222222222222222222222222222",
+     "private_key": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "hl",
+    "label": "ENTROPY",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "cap_usd": 1000.0,
+    "fee_bps": 3.5,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=hl|hedge=katana": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": {
+     "account_address": "0x2222222222222222222222222222222222222222",
+     "private_key": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "hl",
+    "label": "ENTROPY",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.9,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "key": "hedge",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=hl|hedge=lighter": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": {
+     "account_address": "0x2222222222222222222222222222222222222222",
+     "private_key": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "hl",
+    "label": "ENTROPY",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=hl|hedge=lighter-rh": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": {
+     "account_address": "0x2222222222222222222222222222222222222222",
+     "private_key": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "hl",
+    "label": "ENTROPY",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "RH",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=hl|hedge=tradexyz": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": {
+     "account_address": "0x2222222222222222222222222222222222222222",
+     "private_key": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "hl",
+    "label": "ENTROPY",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.0,
+    "hl_creds": {
+     "account_address": "0x4444444444444444444444444444444444444444",
+     "private_key": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "hl_dex": "xyz",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "hl",
+    "label": "XYZ",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=katana|hedge=backpack": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.9,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "key": "entropy",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 5.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=katana|hedge=bulk": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.9,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "key": "entropy",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "cap_usd": 1000.0,
+    "fee_bps": 3.5,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=katana|hedge=katana": {
+   "error": "--base 'katana' and --hedge 'katana' are the same deployment \u2014 the two legs must be different venues / \u4e24\u6761\u817f\u4e0d\u80fd\u662f\u540c\u4e00\u4e2a\u5e02\u573a"
+  },
+  "base=katana|hedge=lighter": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.9,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "key": "entropy",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=katana|hedge=lighter-rh": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.9,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "key": "entropy",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "RH",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=katana|hedge=tradexyz": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.9,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "key": "entropy",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.0,
+    "hl_creds": {
+     "account_address": "0x4444444444444444444444444444444444444444",
+     "private_key": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "hl_dex": "xyz",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "hl",
+    "label": "XYZ",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=lighter-rh|hedge=backpack": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER-RH",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 5.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=lighter-rh|hedge=bulk": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER-RH",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "cap_usd": 1000.0,
+    "fee_bps": 3.5,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=lighter-rh|hedge=katana": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER-RH",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.9,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "key": "hedge",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=lighter-rh|hedge=lighter": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER-RH",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=lighter-rh|hedge=lighter-rh": {
+   "error": "--base 'lighter-rh' and --hedge 'lighter-rh' are the same deployment \u2014 the two legs must be different venues / \u4e24\u6761\u817f\u4e0d\u80fd\u662f\u540c\u4e00\u4e2a\u5e02\u573a"
+  },
+  "base=lighter-rh|hedge=tradexyz": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER-RH",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.0,
+    "hl_creds": {
+     "account_address": "0x4444444444444444444444444444444444444444",
+     "private_key": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "hl_dex": "xyz",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "hl",
+    "label": "XYZ",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=lighter|hedge=backpack": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 5.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=lighter|hedge=bulk": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "cap_usd": 1000.0,
+    "fee_bps": 3.5,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=lighter|hedge=katana": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.9,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "key": "hedge",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=lighter|hedge=lighter": {
+   "error": "--base 'lighter' and --hedge 'lighter' are the same deployment \u2014 the two legs must be different venues / \u4e24\u6761\u817f\u4e0d\u80fd\u662f\u540c\u4e00\u4e2a\u5e02\u573a"
+  },
+  "base=lighter|hedge=lighter-rh": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "RH",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=lighter|hedge=tradexyz": {
+   "creds_complete": true,
+   "entropy": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 0.0,
+    "hl_creds": null,
+    "hl_dex": "",
+    "katana_creds": null,
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "backpack_creds": null,
+    "bulk_creds": null,
+    "cap_usd": 1000.0,
+    "fee_bps": 1.0,
+    "hl_creds": {
+     "account_address": "0x4444444444444444444444444444444444444444",
+     "private_key": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "hl_dex": "xyz",
+    "katana_creds": null,
+    "key": "hedge",
+    "kind": "hl",
+    "label": "XYZ",
+    "lighter_creds": null,
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  }
+ }
+}
