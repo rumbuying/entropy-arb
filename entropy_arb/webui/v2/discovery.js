@@ -58,14 +58,23 @@ export function mount(container) {
   candSelect.onchange = async () => {
     const sym = candSelect.value;
     if (!sym) return;
+    const opt = candSelLocals[candSelect.selectedIndex] || {};
     symInput.value = sym;
+    // auto-fill the per-venue LOCAL names (e.g. backpack: INTC.US) so the
+    // scanner resolves every leg — grouping stripped ".US", the resolver
+    // must not
+    aliasInput.value = Object.entries(opt.locals || {})
+      .map(([v, name]) => `${v}=${name}`).join(",");
     await addBtn.onclick();
     candSelect.value = "";
   };
+  let candSelLocals = [];   // parallel to <option>s: null for placeholder
   const candRow = el("div", { class: "form-row" },
     el("label", { text: t("v2.disc.candidates") }), candSelect);
 
   const watchCard = card(t("v2.disc.watchlist"),
+    candRow,
+    el("div", { class: "note" }, t("v2.disc.candidates_star")),
     candRow,
     el("div", { class: "form-row" },
       el("label", { text: t("v2.disc.symbol") }), symInput),
@@ -142,9 +151,12 @@ export function mount(container) {
       candTs = Date.now();
       candSelect.replaceChildren(el("option", { value: "" },
         t("v2.disc.candidates_pick", { n: String(r.candidates.length) })));
+      candSelLocals = [null];
       for (const c of r.candidates) {
+        const aliasNote = c.aliased ? " *" : "";
+        candSelLocals.push(c);
         candSelect.appendChild(el("option", { value: c.symbol },
-          `${c.symbol} — ${c.venues.join("·")}`));
+          `${c.symbol}${aliasNote} — ${c.venues.join("·")}`));
       }
     } catch (_) {
       candSelect.replaceChildren(el("option", { value: "" },

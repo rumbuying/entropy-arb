@@ -377,32 +377,46 @@ def register_discovery(app: web.Application, supervisor, profiles, storage,
 
     async def candidates(request):
         """Symbols listed on ≥2 of the configured venues — the explore
-        dropdown. Venue catalogs come from the shared TTL cache, so this
-        is one catalog fetch per venue per 10 min, concurrent."""
+        dropdown. Grouping uses symbol_group_key (backpack's "INTC.US" and
+        lighter's "INTC" are the same instrument); each group carries the
+        per-venue LOCAL names so the UI can auto-fill aliases on add.
+        Venue catalogs come from the shared TTL cache."""
+        from ..discovery import symbol_group_key
         wl = read_watchlist(P)
         venues = list(wl["venues"]) or list(VENUE_KEYS)
         results = await asyncio.gather(
             *[list_markets(_session(), v) for v in venues],
             return_exceptions=True)
-        where: Dict[str, set] = {}
+        groups: Dict[str, dict] = {}
         errors: Dict[str, str] = {}
         for v, res in zip(venues, results):
             if isinstance(res, BaseException):
                 errors[v] = str(res)
                 continue
             for l in res:
-                where.setdefault(l.symbol.upper(), set()).add(v)
+                key = symbol_group_key(l.symbol)
+                g = groups.setdefault(key, {"venues": {}, "locals": {}})
+                g["venues"][v] = True
+                g["locals"][v] = l.symbol
         cands = sorted(
-            ({"symbol": s, "venues": sorted(vs), "n": len(vs)}
-             for s, vs in where.items() if len(vs) >= 2),
+            ({"symbol": key,
+              "n": len(g["venues"]),
+              "venues": sorted(g["venues"]),
+              # only the venues whose LOCAL name differs from the group
+              # key — those become aliases when adding
+              "locals": {v: name for v, name in g["locals"].items()
+                         if name.upper() != key},
+              "aliased": any(name.upper() != key
+                             for name in g["locals"].values())}
+             for key, g in groups.items() if len(g["venues"]) >= 2),
             key=lambda c: (-c["n"], c["symbol"]))
         return web.json_response({
             "schema_version": 1, "ts": time.time(),
             "venues": venues,
             "candidates": cands,
             "errors": errors,
-            "single_venue_skipped": sum(1 for vs in where.values()
-                                        if len(vs) == 1),
+            "single_venue_skipped": sum(1 for g in groups.values()
+                                        if len(g["venues"]) == 1),
         })
 
     async def scan_now(request):

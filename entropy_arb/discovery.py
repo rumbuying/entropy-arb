@@ -67,6 +67,26 @@ def venue_fs(venue: str) -> str:
     return venue.replace(":", "-")
 
 
+# venue-local exchange suffixes that carry NO instrument identity —
+# backpack names US-stock perps "INTC.US", lighter/lighter-rh use the bare
+# ticker. Stripping them is ONLY for cross-venue grouping (the candidates
+# dropdown); universe resolution always uses the exact local name, which
+# travels in the group's per-venue ``locals`` map as an alias.
+VENUE_SUFFIXES = (".US",)
+
+
+def symbol_group_key(symbol: str) -> str:
+    """Cross-venue grouping key: uppercase + strip known exchange
+    suffixes. ``INTC.US`` and ``INTC`` group together; genuinely
+    different names (ANTH vs ANTHROPIC, OAI vs OPENAI) still need manual
+    aliases — no automatic mapping is attempted for those."""
+    s = str(symbol).strip().upper()
+    for suf in VENUE_SUFFIXES:
+        if s.endswith(suf):
+            s = s[:-len(suf)]
+    return s
+
+
 def symbol_fs(symbol: str) -> str:
     return str(symbol).replace(":", "-").replace("/", "-")
 

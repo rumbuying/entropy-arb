@@ -79,10 +79,10 @@ def test_discovery_candidates_endpoint():
             catalogs = {
                 "hl": ["BTC", "ETH", "SOLO"],
                 "hl:io": [],
-                "lighter": ["BTC", "ETH"],
-                "lighter-rh": ["BTC"],
+                "lighter": ["BTC", "ETH", "INTC"],
+                "lighter-rh": ["BTC", "INTC"],
                 "katana": ["BTC", "ETH"],
-                "backpack": ["BTC"],
+                "backpack": ["BTC", "INTC.US"],       # .US stock naming
                 "bulk": ["ETH"],
             }
             if venue == "backpack":              # simulate an API outage
@@ -102,7 +102,12 @@ def test_discovery_candidates_endpoint():
                     assert r.status == 200
                     out = await r.json()
             syms = {c["symbol"]: c for c in out["candidates"]}
-            assert set(syms) == {"BTC", "ETH"}           # SOLO excluded
+            assert set(syms) == {"BTC", "ETH", "INTC"}   # SOLO excluded
+            # INTC groups across .US naming: backpack INTC.US +
+            # lighter INTC + lighter-rh INTC (backpack errored this run,
+            # so 2 venues, locals carry the differing name)
+            assert syms["INTC"]["n"] == 2
+            assert syms["INTC"]["locals"] == {}          # backpack was down
             assert syms["BTC"]["n"] == 4                 # hl, lighter,
             # ...lighter-rh, katana (backpack errored, skipped)
             assert syms["ETH"]["n"] == 4                 # hl, lighter,
@@ -243,5 +248,51 @@ def test_discovery_api():
                     await sup.stop(w.id)
                 except Exception:
                     pass
+            await sup.shutdown()
+    asyncio.run(run())
+
+
+def test_candidates_groups_us_suffix_names():
+    """backpack INTC.US + lighter INTC + lighter-rh INTC → ONE candidate
+    with locals carrying the backpack-local name for alias auto-fill."""
+    async def run():
+        from entropy_arb.discovery import MarketListing
+
+        def _mk(venue, sym):
+            return MarketListing(venue=venue, symbol=sym, market=sym,
+                                 fee_source="none")
+
+        async def fake_list(session, venue, catalog=None):
+            catalogs = {
+                "hl": [], "hl:io": [],
+                "lighter": ["INTC", "MU"],
+                "lighter-rh": ["INTC", "MU"],
+                "katana": [],
+                "backpack": ["INTC.US", "MU.US"],
+                "bulk": [],
+            }
+            return [_mk(venue, s) for s in catalogs.get(venue, [])]
+
+        CD.list_markets = fake_list
+        tmp = tempfile.mkdtemp(prefix="discovery-us-")
+        app, sup, profiles = _build_app(tmp)
+        register_discovery(app, sup, profiles, None, lambda m: None, tmp)
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            async with aiohttp.ClientSession() as http:
+                async with http.get(
+                        server.make_url("/api/discovery/candidates")) as r:
+                    out = await r.json()
+            syms = {c["symbol"]: c for c in out["candidates"]}
+            assert set(syms) == {"INTC", "MU"}
+            for sym in ("INTC", "MU"):
+                c = syms[sym]
+                assert c["n"] == 3
+                assert c["venues"] == ["backpack", "lighter", "lighter-rh"]
+                assert c["aliased"] is True
+                assert c["locals"] == {"backpack": f"{sym}.US"}
+        finally:
+            await server.close()
             await sup.shutdown()
     asyncio.run(run())
