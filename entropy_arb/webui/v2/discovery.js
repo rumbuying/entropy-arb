@@ -61,6 +61,9 @@ function stateBadge(state) {
 export function mount(container) {
   const errBox = el("div");
 
+  // ---- 0. ranking: top5 + tradeable --------------------------------------
+  const rankCard = card(t("v2.disc.rank_title"));
+
   // ---- 1. watchlist: symbols × venues ------------------------------------
   const symInput = el("input", { type: "text", placeholder: "DOGE" });
   const aliasInput = el("input", { type: "text", placeholder: "lighter-rh=ANTHROPIC" });
@@ -109,7 +112,82 @@ export function mount(container) {
   // ---- 4. verdicts + promotions -------------------------------------------
   const verdictCard = card(t("v2.disc.verdicts"));
 
-  container.append(errBox, watchCard, procCard, progCard, verdictCard);
+  container.append(errBox, rankCard, watchCard, procCard, progCard,
+                   verdictCard);
+
+  function renderRanking(data) {
+    rankCard.replaceChildren(el("h3", { text: t("v2.disc.rank_title") }));
+    const rk = data.ranking || {};
+    const tradeable = rk.tradeable || [];
+    const gatesNote = el("div", { class: "note" },
+      t("v2.disc.rank_gate_note"));
+    rankCard.appendChild(gatesNote);
+
+    rankCard.appendChild(el("h4", { text: t("v2.disc.tradeable") }));
+    if (tradeable.length) {
+      const tbl = table([t("v2.disc.symbol"), "pair", t("v2.disc.mode"),
+                         t("v2.disc.anchor"), t("v2.disc.harvest"),
+                         t("v2.disc.roundtrip"), t("v2.disc.capacity")]);
+      for (const p of tradeable) {
+        tbl.tbody.appendChild(el("tr", {},
+          el("td", { text: p.symbol }),
+          el("td", { text: `${p.a} ↔ ${p.b}` }),
+          el("td", {}, badge(t("v2.disc.mode_" + p.mode),
+                             p.mode === "static" ? "badge pos"
+                                                 : "badge pending")),
+          el("td", {}, anchorCell(p)),
+          el("td", { text: `${fmt(p.harvest_bps)} bp` }),
+          el("td", { text: `${fmt(p.roundtrip_potential_bps)} bp` }),
+          el("td", { text: `$${fmt(p.capacity_usd, 0)}` })));
+      }
+      rankCard.appendChild(tbl.node);
+    } else {
+      rankCard.appendChild(el("div", { class: "note" },
+        t("v2.disc.rank_none")));
+      const near = (rk.top || []).filter(x => (x.missing || []).length);
+      if (near.length) {
+        const tbl = table([t("v2.disc.symbol"), "pair",
+                           t("v2.disc.harvest"), t("v2.disc.missing")]);
+        for (const p of near.slice(0, 3)) {
+          tbl.tbody.appendChild(el("tr", {},
+            el("td", { text: p.symbol }),
+            el("td", { text: `${p.a} ↔ ${p.b}` }),
+            el("td", { text: `${fmt(p.harvest_bps)} bp` }),
+            el("td", { class: "note",
+                       text: (p.missing || []).map(m =>
+                         t("v2.disc.gate_" + m)).join(" · ") })));
+        }
+        rankCard.appendChild(tbl.node);
+      }
+    }
+
+    rankCard.appendChild(el("h4", { text: t("v2.disc.top5") }));
+    const top = rk.top || [];
+    if (!top.length) {
+      rankCard.appendChild(el("div", { class: "note" },
+        t("v2.disc.no_matrix")));
+      return;
+    }
+    const tbl = table(["#", t("v2.disc.symbol"), "pair", t("v2.disc.state"),
+                       t("v2.disc.anchor"), t("v2.disc.harvest"),
+                       t("v2.disc.roundtrip"), t("v2.disc.capacity")]);
+    top.forEach((p, i) => {
+      tbl.tbody.appendChild(el("tr", {},
+        el("td", { text: String(i + 1) }),
+        el("td", { text: p.symbol }),
+        el("td", { text: `${p.a} ↔ ${p.b}` }),
+        el("td", {}, stateBadge(p.state)),
+        el("td", {}, anchorCell(p)),
+        el("td", {}, el("span", {
+          class: (p.harvest_bps || 0) > 0 ? "pos" : "neg",
+          text: `${fmt(p.harvest_bps)} bp` })),
+        el("td", { text: `${fmt(p.roundtrip_potential_bps)} bp` }),
+        el("td", { text: `$${fmt(p.capacity_usd, 0)}` })));
+    });
+    rankCard.appendChild(tbl.node);
+    rankCard.appendChild(el("div", { class: "note" },
+      t("v2.disc.rank_note")));
+  }
 
   addBtn.onclick = async () => {
     const symbol = symInput.value.trim().toUpperCase();
@@ -414,6 +492,7 @@ export function mount(container) {
 
   function render(data) {
     errBox.replaceChildren();
+    renderRanking(data);
     renderWatchlist(data);
     renderProcess(data);
     renderProgress(data);

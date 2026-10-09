@@ -71,6 +71,81 @@ DEFAULT_WATCHLIST = {
 SCAN_INTERVAL_SEC = 1800.0        # scoring cadence (console loop)
 DEMOTE_AFTER = 3                  # consecutive dead scores before stopping
 UNIVERSE_TTL_SEC = 600.0
+# a pair whose anchor moves more than this per day cannot use a static
+# midline — flagged autoband-only even when everything else passes
+DRIFT_STATIC_MAX_BPS_DAY = 10.0
+
+
+def rank_pairs(matrix: dict, scoring: dict) -> dict:
+    """结论速览: the watch-ranking and the tradeable verdict, computed
+    from the scored matrix with EXPLAINABLE rules (no composite score).
+
+    排名   — by harvestable per-trip edge ``2×osc − fees`` (the honest
+             number: roundtrip potential is inflated by anchor drift and
+             tails). Direction duplicates collapse to one entry.
+    值得做  — ALL hard gates hold: state reached the 24h review, anchored,
+             oscillation clears fees, capacity suffices, and either the
+             drift allows a static band or it is flagged autoband-only.
+             Advisory only: going live stays a human approval downstream.
+    """
+    scoring = scoring or {}
+    min_minutes = int(scoring.get("min_minutes", 60))
+    min_cap = float(scoring.get("min_capacity_usd", 200.0))
+    seen, items = set(), []
+    for sym, out in (matrix.get("symbols") or {}).items():
+        for p in out.get("pairs") or []:
+            key = tuple(sorted((p.get("a") or "", p.get("b") or "")))
+            if key in seen:
+                continue                       # directed duplicate
+            seen.add(key)
+            if (p.get("n") or 0) < min_minutes:
+                continue                       # not enough data to rank
+            osc, fees = p.get("osc_bps"), p.get("fees_bps")
+            harvest = (round(2.0 * osc - fees, 2)
+                       if osc is not None and fees is not None else None)
+            item = {
+                "symbol": sym, "a": p["a"], "b": p["b"],
+                "state": p.get("state"), "hours": p.get("hours"),
+                "anchor": p.get("anchor"),
+                "half_life_min": p.get("half_life_min"),
+                "drift_bps_day": p.get("drift_bps_day"),
+                "osc_bps": osc, "fees_bps": fees,
+                "harvest_bps": harvest,
+                "roundtrip_potential_bps": p.get("roundtrip_potential_bps"),
+                "capacity_usd": p.get("capacity_usd"),
+            }
+            missing = []
+            if p.get("state") not in ("candidate",
+                                      "provisional_candidate"):
+                missing.append("need_state")
+            if p.get("anchor") != "anchored":
+                missing.append("need_anchor")
+            if harvest is None or harvest <= 0:
+                missing.append("need_osc")
+            if (item["capacity_usd"] or 0) < min_cap:
+                missing.append("need_capacity")
+            mode = None
+            if not missing:
+                drift = item.get("drift_bps_day")
+                if drift is not None and \
+                        abs(drift) > DRIFT_STATIC_MAX_BPS_DAY:
+                    missing.append("drift_high")
+                    mode = "autoband_only"
+                else:
+                    mode = "static"
+            item["missing"] = missing
+            item["mode"] = mode
+            item["tradeable"] = not missing
+            items.append(item)
+    top = sorted(items, key=lambda x: (-(x["harvest_bps"]
+                                         if x["harvest_bps"] is not None
+                                         else -999.0),
+                                       -(x["roundtrip_potential_bps"]
+                                         or 0.0)))[:5]
+    tradeable = sorted((x for x in items if x["tradeable"]),
+                       key=lambda x: -(x["harvest_bps"] or 0.0))
+    return {"top": top, "tradeable": tradeable,
+            "drift_static_max_bps_day": DRIFT_STATIC_MAX_BPS_DAY}
 
 
 # --------------------------------------------------------------------- files
@@ -318,6 +393,8 @@ def register_discovery(app: web.Application, supervisor, profiles, storage,
             "universes": universes,
             "promotions": promotions(),
             "venues": list(VENUE_KEYS),
+            "ranking": rank_pairs(_read_json(P["matrix"]) or {},
+                                  wl["scoring"]),
         })
 
     async def symbols_add(request):

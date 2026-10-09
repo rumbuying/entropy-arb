@@ -309,3 +309,48 @@ def test_dead_streak_counts_trailing_only(tmp_path):
     assert _dead_streak(str(h), "ETH", "hl", "katana") == 1
     assert _dead_streak(str(tmp_path / "nope.jsonl"), "DOGE",
                         "hl", "katana") == 0
+
+
+def test_rank_pairs_gates_and_dedupe():
+    from entropy_arb.console.discovery import rank_pairs
+
+    def pair(a, b, **kw):
+        base = {"a": a, "b": b, "n": 2000, "hours": 33.0,
+                "state": "watch", "anchor": "anchored",
+                "half_life_min": 7, "drift_bps_day": 2.0,
+                "osc_bps": 5.0, "fees_bps": 7.0,
+                "roundtrip_potential_bps": 20.0, "capacity_usd": 900.0}
+        base.update(kw)
+        return base
+
+    matrix = {"symbols": {"VVV": {"pairs": [
+        pair("backpack", "hl"),                                  # harvest=-... 2*5-7=3
+        pair("hl", "backpack"),                                  # directed dup
+        pair("backpack", "lighter", drift_bps_day=25.0,
+             state="provisional_candidate"),                     # drift high
+        pair("hl", "lighter", anchor="none"),                    # no anchor
+        pair("lighter", "lighter-rh", osc_bps=2.5, fees_bps=0.0,
+             state="provisional_candidate"),                     # harvest 5 ✓
+    ]}, "XYZ": {"pairs": [
+        pair("hl", "katana", n=30),                              # too few rows
+    ]}}}
+    rk = rank_pairs(matrix, {"min_minutes": 60,
+                             "min_capacity_usd": 200.0})
+    syms = [(p["symbol"], p["a"], p["b"]) for p in rk["top"]]
+    # dedupe collapses the directed pair; n<min_minutes dropped
+    assert ("VVV", "backpack", "hl") in syms and \
+           ("VVV", "hl", "backpack") not in syms
+    assert all(s != "XYZ" for s, _, _ in syms)
+    by_pair = {(p["symbol"], p["a"], p["b"]): p for p in rk["top"]}
+    clean = by_pair[("VVV", "lighter", "lighter-rh")]
+    assert clean["harvest_bps"] == 5.0 and clean["tradeable"] is True \
+        and clean["mode"] == "static"
+    drifted = by_pair[("VVV", "backpack", "lighter")]
+    assert drifted["missing"] == ["drift_high"] and \
+        drifted["mode"] == "autoband_only"
+    noanchor = by_pair[("VVV", "hl", "lighter")]
+    assert noanchor["missing"] == ["need_state", "need_anchor"]
+    # ranking sorts by harvest desc
+    harvests = [p["harvest_bps"] for p in rk["top"]]
+    assert harvests == sorted(harvests, reverse=True)
+    assert rk["tradeable"] == [clean]
