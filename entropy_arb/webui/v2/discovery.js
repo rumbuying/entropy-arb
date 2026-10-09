@@ -326,7 +326,7 @@ export function mount(container) {
           el("td", {}, anchorCell(p)),
           el("td", { text: `${fmt(p.roundtrip_potential_bps)} bp` }),
           el("td", { class: "note",
-                     text: `${fmt(p.net_sell_p95_bps)} / ${fmt(p.net_buy_p95_bps)} bp` }),
+                     text: `${fmt(p.net_sell_p95)} / ${fmt(p.net_buy_p95)} bp` }),
           el("td", { text: fmt(p.hits_per_day, 1) }),
           el("td", { text: `$${fmt(p.capacity_usd, 0)}` }),
           el("td", {}, progressCell(p, cfg))));

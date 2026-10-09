@@ -546,7 +546,8 @@ def register_discovery(app: web.Application, supervisor, profiles, storage,
             "engine": eng,
             "evidence": {k: (stats or pair_stats or {}).get(k) for k in (
                 "state", "roundtrip_potential_bps", "hits_per_day", "n",
-                "net_sell_p95_bps", "net_buy_p95_bps", "capacity_usd")},
+                "net_sell_p95", "net_buy_p95", "capacity_usd",
+                "anchor", "half_life_min", "drift_bps_day", "osc_bps")},
         }
         save_promotions(promos)
         return {"ok": True, "profile": name, "worker_id": worker_id,
