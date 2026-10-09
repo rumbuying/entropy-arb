@@ -71,7 +71,7 @@
 
 | 文件 | 写入者 | 用途 |
 |---|---|---|
-| `minutes[-<SYM>-<a>-vs-<b>].csv` | recorder / basis_probe | 分钟级行情与溢价条——**Analyzer 与 auto_band 的唯一输入** |
+| `minutes[-<SYM>-<a>-vs-<b>].csv` | recorder / basis_probe | 分钟级行情与溢价条——**Analyzer 与 auto_band 的唯一输入**。recorder 打开时若发现文件无表头（轮转脚本剥掉了）会**就地补表头**、历史留在原文件（auto_band 只读这一个文件；2026-10-09 曾因轮转成 `.old` 让 ANTH 中枢 -176→-231）；表头 schema 不一致才轮转到 `.old` |
 | `trades-<SYM>-<hedge>.csv` | taker 引擎 | 成交流水（FIFO 已实现盈亏按平仓日记账，Venues 页引用） |
 | `maker-trades-*.csv` / `maker-selection-*.csv` | maker 引擎 | 每批对冲的毛/净边际；逆向选择样本（成交时/+1s/+10s 溢价） |
 | `engine-*.log` / `engine.log` | 引擎 | 全量日志（Runs 页日志窗口 tail 的是这里） |

@@ -133,9 +133,21 @@ class MinuteRecorder:
         if d:
             os.makedirs(d, exist_ok=True)
         if os.path.exists(self.path) and os.path.getsize(self.path) > 0:
-            # never append rows under a different schema's header
             with open(self.path) as fh0:
-                if fh0.readline().strip() != ",".join(HEADER):
+                first = fh0.readline().strip()
+            if first != ",".join(HEADER):
+                if first[:1].isdigit():
+                    # Headerless data rows (server-side rotation scripts
+                    # strip the header): prepend the header IN PLACE instead
+                    # of rotating. auto_band reads only this one file — a
+                    # rotation strands it on a brand-new file with no
+                    # history, and on 2026-10-09 that dragged the ANTH
+                    # midline -176 -> -231 off 151 rows, nearly force-
+                    # exiting a full inventory at a band nobody calibrated.
+                    log.info("%s is headerless — prepending header in place",
+                             self.path)
+                    self._prepend_header()
+                else:
                     log.warning("%s has an old header — rotated to %s.old",
                                 self.path, self.path)
                     os.replace(self.path, self.path + ".old")
@@ -146,6 +158,20 @@ class MinuteRecorder:
             self._writer.writerow(HEADER)
             self._fh.flush()
         log.info("recording 1-minute orderbook data -> %s", self.path)
+
+    def _prepend_header(self) -> None:
+        """Rewrite the file with HEADER on top, keeping every data row.
+        Runs at engine startup, before this recorder's own handle exists,
+        so the atomic replace cannot race a writer."""
+        tmp = self.path + ".prepending"
+        with open(self.path) as src, open(tmp, "w", newline="") as dst:
+            dst.write(",".join(HEADER) + "\n")
+            while True:
+                chunk = src.read(1 << 20)
+                if not chunk:
+                    break
+                dst.write(chunk)
+        os.replace(tmp, self.path)
 
     def _flush_agg(self) -> None:
         if self._agg is None or self._agg.n == 0:

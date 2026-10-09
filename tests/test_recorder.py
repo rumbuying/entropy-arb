@@ -124,6 +124,49 @@ def test_append_keeps_single_header():
     assert lines[0].startswith("minute_ts,")
 
 
+def test_headerless_file_gets_header_prepended():
+    """Rotation scripts on servers strip the header from live minutes files.
+    On restart the recorder must keep that history in place (auto_band reads
+    only this one file) instead of rotating it to .old and starting blind —
+    2026-10-09: the rotation dragged the ANTH midline -176 -> -231 off 151
+    fresh rows and nearly exited a full inventory at a bogus band."""
+    e_book, h_book = OrderBook(), OrderBook()
+    path = os.path.join(tempfile.mkdtemp(), "minutes.csv")
+    ts0 = 1_700_000_000.0
+    with open(path, "w") as fh:
+        fh.write(f"{ts0:.0f},2023-11-14T22:13:20Z,100.0,100.02,100.0,100.02,"
+                 "10.0,10.0,10.0,10.0,10.0,0.0,10.0,10.0,-10.0,-10.0,1\n")
+    rec = MinuteRecorder(path, e_book, h_book, staleness_sec=1e9)
+    set_book(e_book, 100.0, 100.02)
+    set_book(h_book, 100.0, 100.02)
+    rec.sample(ts0 + 60)
+    rec.close()
+    assert not os.path.exists(path + ".old")   # history stays in the live file
+    with open(path) as fh:
+        lines = fh.read().strip().splitlines()
+    assert lines[0].startswith("minute_ts,")
+    assert len(lines) == 3                     # header + old row + new row
+    assert lines[1].startswith(f"{ts0:.0f},")
+
+
+def test_old_schema_header_still_rotates():
+    """A genuinely different schema must not be appended to."""
+    e_book, h_book = OrderBook(), OrderBook()
+    path = os.path.join(tempfile.mkdtemp(), "minutes.csv")
+    with open(path, "w") as fh:
+        fh.write("ts,px\n1,2\n")
+    rec = MinuteRecorder(path, e_book, h_book, staleness_sec=1e9)
+    set_book(e_book, 100.0, 100.02)
+    set_book(h_book, 100.0, 100.02)
+    rec.sample(1_700_000_000.0)
+    rec.close()
+    assert os.path.exists(path + ".old")
+    with open(path) as fh:
+        lines = fh.read().strip().splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("minute_ts,")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
