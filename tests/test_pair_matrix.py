@@ -20,9 +20,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from entropy_arb.analysis import analyze, load_rows  # noqa: E402
 from entropy_arb.autoband import session_of  # noqa: E402
 from entropy_arb.pair_matrix import (  # noqa: E402
-    PairMatrixCfg, classify, infer_symbols, load_venue_bars, pair_rows,
-    pair_stats, score_all, score_symbol, synthesize_pair_csv,
-    venue_from_fs)
+    ANCHORED_MAX_MIN, PairMatrixCfg, classify, infer_symbols,
+    load_venue_bars, pair_rows, pair_stats, reversion_stats, score_all,
+    score_symbol, synthesize_pair_csv, venue_from_fs)
 from entropy_arb.recorder import HEADER as PAIR_HEADER  # noqa: E402
 from entropy_arb.venue_bars import HEADER as VENUE_HEADER  # noqa: E402
 
@@ -381,3 +381,46 @@ def test_score_all_fees_by_symbol_override(tmp_path):
                      fees_by_symbol={"OTHER": {"hl": 0.1}},
                      synthesize=False)["symbols"]["DOGE"]
     assert all(p["fees_bps"] == FEE_A + FEE_B for p in none["pairs"])
+
+
+def test_reversion_stats_distinguishes_anchor_from_gap():
+    """The 回锚性 metric: an oscillating premium gets a short half-life;
+    a random-walk gap gets none; a constant series degenerates to None
+    without crashing."""
+    import math
+    t0 = 1_800_000_000
+
+    def rows_from(prem):
+        return {t0 + i * 60: {"premium_close_bps": v} for i, v
+                in enumerate(prem)}
+
+    # anchored: square-wave oscillation ±5 around 0 → deviations halve fast
+    osc = rows_from([5.0, -5.0] * 200)
+    r = reversion_stats(osc)
+    assert r["anchor"] == "anchored"
+    assert r["half_life_min"] <= ANCHORED_MAX_MIN
+    assert r["drift_bps_day"] is not None and abs(r["drift_bps_day"]) < 30
+
+    # random walk: pure gap — β ≥ 0 → no anchor
+    rnd, lvl = [], 0.0
+    for i in range(400):
+        lvl += 0.3 if i % 3 else -0.2          # deterministic pseudo-walk
+        rnd.append(lvl)
+    r = reversion_stats(rows_from(rnd))
+    assert r["anchor"] == "none" or (
+        r["half_life_min"] is not None and
+        r["half_life_min"] > ANCHORED_MAX_MIN)
+
+    # constant premium: zero variance → degenerate None, no crash
+    r = reversion_stats(rows_from([7.0] * 200))
+    assert r["anchor"] == "none" and r["half_life_min"] is None
+
+    # trending series reports its slope (0.02bp/min → 28.8bp/day)
+    trend = rows_from([0.02 * i for i in range(400)])   # +0.02bp per minute
+    r = reversion_stats(trend)
+    assert abs(r["drift_bps_day"] - 28.8) < 5
+
+    # too few minutes → all None
+    r = reversion_stats(rows_from([1.0, 2.0] * 10))
+    assert r == {"anchor": None, "half_life_min": None,
+                 "drift_bps_day": None, "osc_bps": None}

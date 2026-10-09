@@ -25,6 +25,22 @@ const STATE_CLS = {
   insufficient: "badge dim",
 };
 
+const ANCHOR_CLS = { anchored: "badge pos", weak: "badge pending",
+                     none: "badge neg" };
+
+function anchorCell(p) {
+  if (!p.anchor) return badge("—", "badge dim");
+  const hl = p.half_life_min;
+  const hlTxt = hl === null || hl === undefined
+    ? "" : hl < 90 ? ` ${hl}m` : ` ${Math.round(hl / 60)}h`;
+  const detail = `${t("v2.disc.anchor_hl")}${hlTxt} · ` +
+    `${t("v2.disc.anchor_drift")} ${fmt(p.drift_bps_day, 1)}bp/天 · ` +
+    `${t("v2.disc.anchor_osc")} ${fmt(p.osc_bps, 1)}bp`;
+  return el("span", { class: ANCHOR_CLS[p.anchor] || "badge dim",
+                      title: detail,
+                      text: t("v2.disc.anchor_" + p.anchor) + hlTxt });
+}
+
 function fmt(x, digits = 2) {
   return (x === null || x === undefined || !Number.isFinite(Number(x)))
     ? "—" : Number(x).toFixed(digits);
@@ -299,13 +315,15 @@ export function mount(container) {
       progCard.appendChild(el("h4", { text: sym }));
       const cfg = matrix.cfg || {};
       const tbl = table(["pair", t("v2.disc.state"),
-                         t("v2.disc.roundtrip"), "net sell/buy p95",
+                         t("v2.disc.anchor"), t("v2.disc.roundtrip"),
+                         "net sell/buy p95",
                          t("v2.disc.hits_day"), t("v2.disc.capacity"),
                          t("v2.disc.progress_col")]);
       for (const p of pairs) {
         tbl.tbody.appendChild(el("tr", {},
           el("td", { text: `${p.a} ↔ ${p.b}` }),
           el("td", {}, stateBadge(p.state)),
+          el("td", {}, anchorCell(p)),
           el("td", { text: `${fmt(p.roundtrip_potential_bps)} bp` }),
           el("td", { class: "note",
                      text: `${fmt(p.net_sell_p95_bps)} / ${fmt(p.net_buy_p95_bps)} bp` }),
@@ -342,6 +360,9 @@ export function mount(container) {
       const ev = [];
       if (p.roundtrip_potential_bps != null)
         ev.push(`roundtrip ${fmt(p.roundtrip_potential_bps)}bp`);
+      if (p.anchor)
+        ev.push(`${t("v2.disc.anchor_" + p.anchor)}` +
+                (p.half_life_min != null ? ` ${p.half_life_min}m` : ""));
       if (p.hits_per_day != null)
         ev.push(`${fmt(p.hits_per_day, 1)}/day`);
       if (p.capacity_usd != null) ev.push(`cap $${fmt(p.capacity_usd, 0)}`);

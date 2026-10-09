@@ -28,6 +28,7 @@ import csv
 import glob
 import itertools
 import json
+import math
 import os
 import statistics
 import sys
@@ -44,6 +45,12 @@ from .venue_bars import HEADER as VENUE_BAR_HEADER
 MINUTE_SEC = 60
 # sessions whose net edge clears zero at the minute close (strictly > 0)
 FEE_FREE_MARGIN = 0.0
+
+# reversion-stats gates (回锚性: does the premium re-anchor or hold a gap)
+REVERSION_MIN_N = 60          # minutes before an AR(1) fit means anything
+REVERSION_MAX_GAP_MIN = 2     # consecutive-sample max gap for the lag pair
+ANCHORED_MAX_MIN = 360        # deviations halve within 6h → tradeable
+WEAK_MAX_MIN = 1440           # within a day → only with session-aware bands
 
 
 @dataclass
@@ -197,6 +204,79 @@ def _depth_notional(r: dict, side: str) -> float:
 
 # ------------------------------------------------------------------- stats
 
+def reversion_stats(rows: Dict[int, dict]) -> dict:
+    """Does this pair RE-ANCHOR (premium reverts to a centre) or hold a
+    persistent gap / drift? The strategy only earns the oscillation
+    around an anchor — a one-way gap makes every entry a stranded
+    position, however large its p95 edge looks.
+
+    Three numbers over the minute-close premium series:
+
+    half_life_min — Dickey-Fuller style: regress Δp on p_{t−1} over
+      consecutive samples (≤2 min apart). β<0 means deviations shrink;
+      half-life = −ln2/ln(1+β). None when β≥0 (random walk / trending) or
+      the sample is too small / degenerate (zero variance).
+    drift_bps_day — least-squares slope of the LEVEL. How fast the anchor
+      itself moves; a static midline cannot follow a big drift.
+    osc_bps      — stdev of the detrended series. The oscillation
+      amplitude that band entries can actually harvest.
+
+    anchor classifies: "anchored" (half-life ≤ ANCHORED_MAX_MIN),
+    "weak" (≤ WEAK_MAX_MIN), else "none".
+    """
+    ts = sorted(rows)
+    if len(ts) < REVERSION_MIN_N:
+        return {"anchor": None, "half_life_min": None,
+                "drift_bps_day": None, "osc_bps": None}
+    pts = [(t, rows[t]["premium_close_bps"]) for t in ts]
+    # AR(1) / DF regression on consecutive samples only (gaps break the
+    # lag structure)
+    dxs = [pts[i - 1][1] for i in range(1, len(pts))
+           if pts[i][0] - pts[i - 1][0] <= REVERSION_MAX_GAP_MIN * 60]
+    dys = [pts[i][1] - pts[i - 1][1] for i in range(1, len(pts))
+           if pts[i][0] - pts[i - 1][0] <= REVERSION_MAX_GAP_MIN * 60]
+    half_life = None
+    if len(dxs) >= REVERSION_MIN_N and \
+            max(dxs) - min(dxs) > 1e-9:
+        mx = sum(dxs) / len(dxs)
+        my = sum(dys) / len(dys)
+        sxx = sum((x - mx) ** 2 for x in dxs)
+        beta = sum((x - mx) * (y - my) for x, y in
+                   zip(dxs, dys)) / sxx
+        phi = 1.0 + beta
+        if beta < -1e-6:
+            # φ ≤ 0 = anti-persistent: deviations flip back within one
+            # sample — the strongest anchoring; treat as ~1 minute
+            half_life = 1.0 if phi <= 0 else \
+                math.log(2.0) / (-math.log(phi))
+    # level drift: LS slope scaled to per day
+    t0 = ts[0]
+    n = len(pts)
+    sx = sum(t - t0 for t, _ in pts)
+    sy = sum(v for _, v in pts)
+    sxx = sum((t - t0) ** 2 for t, _ in pts)
+    sxy = sum((t - t0) * v for t, v in pts)
+    denom = n * sxx - sx * sx
+    drift_day = ((n * sxy - sx * sy) / denom * 86400.0) if denom else 0.0
+    # detrended oscillation amplitude
+    intercept = (sy - drift_day / 86400.0 * sx) / n
+    slope = drift_day / 86400.0
+    resid = [v - (intercept + slope * (t - t0)) for t, v in pts]
+    osc = statistics.pstdev(resid)
+    if half_life is None:
+        anchor = "none"
+    elif half_life <= ANCHORED_MAX_MIN:
+        anchor = "anchored"
+    elif half_life <= WEAK_MAX_MIN:
+        anchor = "weak"
+    else:
+        anchor = "none"
+    return {"anchor": anchor,
+            "half_life_min": (int(round(half_life))
+                              if half_life is not None else None),
+            "drift_bps_day": _r3(drift_day), "osc_bps": _r3(osc)}
+
+
 def pair_stats(rows: Dict[int, dict], fee_a_bps: float, fee_b_bps: float) \
         -> dict:
     """JSON-safe distribution / net-edge / capacity stats over joined rows.
@@ -222,7 +302,7 @@ def pair_stats(rows: Dict[int, dict], fee_a_bps: float, fee_b_bps: float) \
                 "roundtrip_potential_bps": 0.0,
                 "depth_a_usd": None, "depth_b_usd": None,
                 "capacity_usd": None, "sessions": {},
-                "fees_bps": _r3(fees)}
+                "fees_bps": _r3(fees), **reversion_stats(rows)}
     prem = sorted(rows[t]["premium_close_bps"] for t in ts)
     sell = [rows[t]["sell_edge_bps"] for t in ts]
     buy = [rows[t]["buy_edge_bps"] for t in ts]
@@ -259,6 +339,7 @@ def pair_stats(rows: Dict[int, dict], fee_a_bps: float, fee_b_bps: float) \
             statistics.median(v))}
             for s, v in sorted(per_sess.items())},
         "fees_bps": _r3(fees),
+        **reversion_stats(rows),
     }
 
 
