@@ -26,7 +26,7 @@ from typing import Any, Dict, Optional, Tuple
 # Display order for every derived list. Keep new venues appended so existing
 # UI ordering (and the golden snapshot) stays stable.
 _ORDER: Tuple[str, ...] = ("hl", "lighter", "lighter-rh", "tradexyz",
-                           "katana", "backpack", "bulk")
+                           "katana", "backpack", "bulk", "ondo", "arcus")
 
 
 @dataclass(frozen=True)
@@ -182,6 +182,38 @@ VENUES: Dict[str, VenueSpec] = {s.key: s for s in (
         creds=(CredField("secret_key", ("BULK_SECRET_KEY",), "b58_key"),),
         requirements=("BULK_SECRET_KEY",),
         module="entropy_arb.venue_bulk"),
+    VenueSpec(
+        key="ondo", kind="ondo", label="ONDO", label_hedge=None,
+        display="Ondo", base=True, hedge=True, maker_capable=True,
+        funding_supported=True, in_discovery=True,
+        # /v1/markets serves maker 0.01% / taker 0.025% live; the config
+        # default is the documented base tier — same explicit-source-of-
+        # truth rule as the other venues
+        leg_fee_bps=2.5, opm_base=30, opm_hedge=30,
+        discovery_fee_bps=2.5,
+        creds_dataclass="OndoCreds", creds_group="ondo",
+        creds=(
+            CredField("api_key", ("ONDO_KEY_ID",), "token"),
+            CredField("api_secret", ("ONDO_API_SECRET",), "token"),
+        ),
+        requirements=("ONDO_KEY_ID", "ONDO_API_SECRET"),
+        module="entropy_arb.venue_ondo"),
+    VenueSpec(
+        key="arcus", kind="arcus", label="ARCUS", label_hedge=None,
+        display="Arcus", base=True, hedge=True, maker_capable=True,
+        funding_supported=True, in_discovery=True,
+        # feeTiers serves maker 0 / taker 225 ppm (base tier; VIP tiers
+        # rebate maker) — same explicit-source-of-truth rule
+        leg_fee_bps=2.25, opm_base=30, opm_hedge=30,
+        discovery_fee_bps=2.25,
+        creds_dataclass="ArcusCreds", creds_group="arcus",
+        creds=(
+            CredField("address", ("ARCUS_ADDRESS",), "address"),
+            CredField("api_key", ("ARCUS_API_KEY",), "hex_key"),
+            CredField("secret_key", ("ARCUS_SECRET_KEY",), "hex_key"),
+        ),
+        requirements=("ARCUS_ADDRESS", "ARCUS_API_KEY", "ARCUS_SECRET_KEY"),
+        module="entropy_arb.venue_arcus"),
 )}
 
 
@@ -448,6 +480,20 @@ UI_CARDS: Dict[str, list] = {
         "diag": {"venue": "backpack"},
         "affects": {"base": ["backpack"], "hedge": ["backpack"]},
         "rel": ["backpack"],
+    }],
+    "ondo": [{
+        "id": "ondo", "order": 100, "title_key": "secrets.title.ondo",
+        "keys": ["ONDO_KEY_ID", "ONDO_API_SECRET"],
+        "diag": {"venue": "ondo"},
+        "affects": {"base": ["ondo"], "hedge": ["ondo"]},
+        "rel": ["ondo"],
+    }],
+    "arcus": [{
+        "id": "arcus", "order": 110, "title_key": "secrets.title.arcus",
+        "keys": ["ARCUS_ADDRESS", "ARCUS_API_KEY", "ARCUS_SECRET_KEY"],
+        "diag": {"venue": "arcus"},
+        "affects": {"base": ["arcus"], "hedge": ["arcus"]},
+        "rel": ["arcus"],
     }],
     "bulk": [{
         "id": "bulk", "order": 90, "title_key": "secrets.title.bulk",

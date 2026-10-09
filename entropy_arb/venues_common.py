@@ -150,6 +150,13 @@ class OrdersFeedBase:
         material must be freshly built per connect."""
         raise NotImplementedError
 
+    async def _on_connected(self, ws) -> None:
+        """Multi-frame venues (login frame, then several subscribe frames)
+        override this; the default sends the single `_subscribe_frame`."""
+        frame = self._subscribe_frame()
+        if frame is not None:
+            await ws.send(json.dumps(frame))
+
     def _handle_envelope(self, msg: dict) -> None:
         """One ws message from the venue: route fills/orders."""
         raise NotImplementedError
@@ -207,9 +214,8 @@ class OrdersFeedBase:
                         open_timeout=self.WS_OPEN_TIMEOUT,
                         ping_interval=self.WS_PING_INTERVAL,
                         ping_timeout=self.WS_PING_TIMEOUT) as ws:
-                    frame = self._subscribe_frame()
-                    if frame is not None:
-                        await ws.send(json.dumps(frame))
+                    self._ws = ws
+                    await self._on_connected(ws)
                     connected_at = time.time()
                     async for raw in ws:
                         backoff = self.BACKOFF_START

@@ -127,6 +127,36 @@ class BackpackCreds:
 
 
 @dataclass
+class OndoCreds:
+    """Ondo Perps API credentials: key id + secret created in the web UI
+    (API Keys page). The same pair HMAC-authenticates REST (ONDO-* headers)
+    and the private websocket (time + "ondo_perps_ws_login") — no wallet
+    signature needed."""
+    api_key: Optional[str]          # the key id ("ondoKeyId_…")
+    api_secret: Optional[str]       # the secret ("ondoApiSecret_…")
+
+    @property
+    def complete(self) -> bool:
+        return bool(self.api_key) and bool(self.api_secret)
+
+
+@dataclass
+class ArcusCreds:
+    """Arcus credentials: the Ed25519 keypair registered via the web UI
+    (createApiKey is signed once by the master wallet) plus that master
+    Ethereum address. The public key IS the API key; the private half signs
+    every order locally — the server never sees it."""
+    address: Optional[str]          # master 0x… address owning the key
+    api_key: Optional[str]          # Ed25519 public key, 64 hex chars
+    secret_key: Optional[str]       # Ed25519 private key, 64 hex chars
+
+    @property
+    def complete(self) -> bool:
+        return (bool(self.address) and bool(self.api_key)
+                and bool(self.secret_key))
+
+
+@dataclass
 class BulkCreds:
     """bulk.trade credentials: ONE Solana Ed25519 secret key, base58.
 

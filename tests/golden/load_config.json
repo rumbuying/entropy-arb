@@ -2,6 +2,7 @@
  "constants": {
   "discovery": {
    "DEFAULT_TAKER_FEE_BPS": {
+    "arcus": 2.25,
     "backpack": 2.5,
     "bulk": 3.5,
     "hl": 4.5,
@@ -9,7 +10,8 @@
     "hl:xyz": 1.0,
     "katana": null,
     "lighter": 0.0,
-    "lighter-rh": 0.0
+    "lighter-rh": 0.0,
+    "ondo": 2.5
    },
    "VENUE_KEYS": [
     "hl",
@@ -17,11 +19,16 @@
     "lighter-rh",
     "katana",
     "backpack",
-    "bulk"
+    "bulk",
+    "ondo",
+    "arcus"
    ]
   },
   "secrets": {
    "KEY_KINDS": {
+    "ARCUS_ADDRESS": "address",
+    "ARCUS_API_KEY": "hex_key",
+    "ARCUS_SECRET_KEY": "hex_key",
     "BACKPACK_API_KEY": "b64_32",
     "BACKPACK_API_SECRET": "b64_32",
     "BULK_SECRET_KEY": "b58_key",
@@ -41,9 +48,16 @@
     "LIGHTER_BASE_API_PRIVATE_KEY": "hex_key",
     "LIGHTER_HEDGE_ACCOUNT_INDEX": "int",
     "LIGHTER_HEDGE_API_KEY_INDEX": "int",
-    "LIGHTER_HEDGE_API_PRIVATE_KEY": "hex_key"
+    "LIGHTER_HEDGE_API_PRIVATE_KEY": "hex_key",
+    "ONDO_API_SECRET": "token",
+    "ONDO_KEY_ID": "token"
    },
    "VENUE_REQUIREMENTS": {
+    "arcus": [
+     "ARCUS_ADDRESS",
+     "ARCUS_API_KEY",
+     "ARCUS_SECRET_KEY"
+    ],
     "backpack": [
      "BACKPACK_API_KEY",
      "BACKPACK_API_SECRET"
@@ -69,6 +83,10 @@
      "LIGHTER_API_KEY_INDEX",
      "LIGHTER_API_PRIVATE_KEY"
     ],
+    "ondo": [
+     "ONDO_KEY_ID",
+     "ONDO_API_SECRET"
+    ],
     "tradexyz": [
      "HL_PRIVATE_KEY"
     ]
@@ -81,7 +99,9 @@
     "lighter-rh",
     "katana",
     "backpack",
-    "bulk"
+    "bulk",
+    "ondo",
+    "arcus"
    ],
    "HEDGE_VENUES": [
     "lighter",
@@ -89,12 +109,16 @@
     "tradexyz",
     "katana",
     "backpack",
-    "bulk"
+    "bulk",
+    "ondo",
+    "arcus"
    ],
    "MAKER_VENUES": [
     "katana",
     "backpack",
-    "bulk"
+    "bulk",
+    "ondo",
+    "arcus"
    ]
   }
  },
@@ -320,6 +344,294 @@
   "exchange_of:tradexyz": "tradexyz"
  },
  "matrix": {
+  "base=arcus|hedge=arcus": {
+   "error": "--base 'arcus' and --hedge 'arcus' are the same deployment \u2014 the two legs must be different venues / \u4e24\u6761\u817f\u4e0d\u80fd\u662f\u540c\u4e00\u4e2a\u5e02\u573a"
+  },
+  "base=arcus|hedge=backpack": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "fee_bps": 5.0,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=arcus|hedge=bulk": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "fee_bps": 3.5,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=arcus|hedge=katana": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "fee_bps": 1.9,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=arcus|hedge=lighter": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "fee_bps": 0.0,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=arcus|hedge=lighter-rh": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "fee_bps": 0.0,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "RH",
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=arcus|hedge=ondo": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=arcus|hedge=tradexyz": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "account_address": "0x4444444444444444444444444444444444444444",
+     "private_key": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "fee_bps": 1.0,
+    "hl_dex": "xyz",
+    "key": "hedge",
+    "kind": "hl",
+    "label": "XYZ",
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=backpack|hedge=arcus": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "fee_bps": 5.0,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
   "base=backpack|hedge=backpack": {
    "error": "--base 'backpack' and --hedge 'backpack' are the same deployment \u2014 the two legs must be different venues / \u4e24\u6761\u817f\u4e0d\u80fd\u662f\u540c\u4e00\u4e2a\u5e02\u573a"
   },
@@ -468,6 +780,39 @@
     "symbol": "BTCX"
    }
   },
+  "base=backpack|hedge=ondo": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "fee_bps": 5.0,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
   "base=backpack|hedge=tradexyz": {
    "creds_complete": true,
    "entropy": {
@@ -498,6 +843,39 @@
     "label": "XYZ",
     "lighter_profile": null,
     "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=bulk|hedge=arcus": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "fee_bps": 3.5,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
     "symbol": "BTCX"
    }
   },
@@ -646,6 +1024,38 @@
     "symbol": "BTCX"
    }
   },
+  "base=bulk|hedge=ondo": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "fee_bps": 3.5,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
   "base=bulk|hedge=tradexyz": {
    "creds_complete": true,
    "entropy": {
@@ -675,6 +1085,40 @@
     "label": "XYZ",
     "lighter_profile": null,
     "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=hl|hedge=arcus": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "account_address": "0x2222222222222222222222222222222222222222",
+     "private_key": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "fee_bps": 0.0,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "hl",
+    "label": "ENTROPY",
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
     "symbol": "BTCX"
    }
   },
@@ -856,6 +1300,39 @@
     "symbol": "BTCX"
    }
   },
+  "base=hl|hedge=ondo": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "account_address": "0x2222222222222222222222222222222222222222",
+     "private_key": "0x1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "fee_bps": 0.0,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "hl",
+    "label": "ENTROPY",
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
   "base=hl|hedge=tradexyz": {
    "creds_complete": true,
    "entropy": {
@@ -886,6 +1363,42 @@
     "label": "XYZ",
     "lighter_profile": null,
     "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=katana|hedge=arcus": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "fee_bps": 1.9,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
     "symbol": "BTCX"
    }
   },
@@ -1043,6 +1556,41 @@
     "symbol": "BTCX"
    }
   },
+  "base=katana|hedge=ondo": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "fee_bps": 1.9,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
   "base=katana|hedge=tradexyz": {
    "creds_complete": true,
    "entropy": {
@@ -1075,6 +1623,46 @@
     "label": "XYZ",
     "lighter_profile": null,
     "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=lighter-rh|hedge=arcus": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "fee_bps": 0.0,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER-RH",
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
     "symbol": "BTCX"
    }
   },
@@ -1244,6 +1832,45 @@
   "base=lighter-rh|hedge=lighter-rh": {
    "error": "--base 'lighter-rh' and --hedge 'lighter-rh' are the same deployment \u2014 the two legs must be different venues / \u4e24\u6761\u817f\u4e0d\u80fd\u662f\u540c\u4e00\u4e2a\u5e02\u573a"
   },
+  "base=lighter-rh|hedge=ondo": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "fee_bps": 0.0,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER-RH",
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
   "base=lighter-rh|hedge=tradexyz": {
    "creds_complete": true,
    "entropy": {
@@ -1280,6 +1907,46 @@
     "label": "XYZ",
     "lighter_profile": null,
     "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=lighter|hedge=arcus": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "fee_bps": 0.0,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
     "symbol": "BTCX"
    }
   },
@@ -1449,6 +2116,45 @@
     "symbol": "BTCX"
    }
   },
+  "base=lighter|hedge=ondo": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "fee_bps": 0.0,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
   "base=lighter|hedge=tradexyz": {
    "creds_complete": true,
    "entropy": {
@@ -1470,6 +2176,254 @@
      "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
     },
     "orders_per_min": 120,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "account_address": "0x4444444444444444444444444444444444444444",
+     "private_key": "0x3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "fee_bps": 1.0,
+    "hl_dex": "xyz",
+    "key": "hedge",
+    "kind": "hl",
+    "label": "XYZ",
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=ondo|hedge=arcus": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "address": null,
+     "api_key": null,
+     "secret_key": null
+    },
+    "fee_bps": 2.25,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "arcus",
+    "label": "ARCUS",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=ondo|hedge=backpack": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb=",
+     "api_secret": "sssssssssssssssssssssssssssssssssssssssssss="
+    },
+    "fee_bps": 5.0,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "backpack",
+    "label": "BACKPACK",
+    "lighter_profile": null,
+    "orders_per_min": 120,
+    "symbol": "BTCX"
+   }
+  },
+  "base=ondo|hedge=bulk": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "secret_key": "555555555555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "fee_bps": 3.5,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "bulk",
+    "label": "BULK",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=ondo|hedge=katana": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": "0f0e0d0c-1111-2222-3333-444455556666",
+     "api_secret": "katana-secret-token",
+     "private_key": "0x6666666666666666666666666666666666666666666666666666666666666666",
+     "wallet_address": "0x7777777777777777777777777777777777777777"
+    },
+    "fee_bps": 1.9,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "katana",
+    "label": "KATANA",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=ondo|hedge=lighter": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "fee_bps": 0.0,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "LIGHTER",
+    "lighter_profile": {
+     "api_url": "https://mainnet.zklighter.elliot.ai",
+     "chain_id": 304,
+     "name": "mainnet",
+     "ws_url": "wss://mainnet.zklighter.elliot.ai/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=ondo|hedge=lighter-rh": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
+    "symbol": "BTCC"
+   },
+   "hedge": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "account_index": 4242,
+     "api_key_index": 3,
+     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    },
+    "fee_bps": 0.0,
+    "hl_dex": "",
+    "key": "hedge",
+    "kind": "lighter",
+    "label": "RH",
+    "lighter_profile": {
+     "api_url": "https://api.rh.lighter.xyz",
+     "chain_id": 466324,
+     "name": "robinhood",
+     "ws_url": "wss://api.rh.lighter.xyz/stream"
+    },
+    "orders_per_min": 30,
+    "symbol": "BTCX"
+   }
+  },
+  "base=ondo|hedge=ondo": {
+   "error": "--base 'ondo' and --hedge 'ondo' are the same deployment \u2014 the two legs must be different venues / \u4e24\u6761\u817f\u4e0d\u80fd\u662f\u540c\u4e00\u4e2a\u5e02\u573a"
+  },
+  "base=ondo|hedge=tradexyz": {
+   "creds_complete": false,
+   "entropy": {
+    "cap_usd": 1000.0,
+    "creds": {
+     "api_key": null,
+     "api_secret": null
+    },
+    "fee_bps": 2.5,
+    "hl_dex": "",
+    "key": "entropy",
+    "kind": "ondo",
+    "label": "ONDO",
+    "lighter_profile": null,
+    "orders_per_min": 30,
     "symbol": "BTCC"
    },
    "hedge": {
