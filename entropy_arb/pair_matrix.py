@@ -302,6 +302,8 @@ def pair_stats(rows: Dict[int, dict], fee_a_bps: float, fee_b_bps: float) \
                 "roundtrip_potential_bps": 0.0,
                 "depth_a_usd": None, "depth_b_usd": None,
                 "capacity_usd": None, "sessions": {},
+                "spread_a_bps": None, "spread_b_bps": None,
+                "harvest_bps": None,
                 "fees_bps": _r3(fees), **reversion_stats(rows)}
     prem = sorted(rows[t]["premium_close_bps"] for t in ts)
     sell = [rows[t]["sell_edge_bps"] for t in ts]
@@ -319,6 +321,25 @@ def pair_stats(rows: Dict[int, dict], fee_a_bps: float, fee_b_bps: float) \
     for t in ts:
         per_sess.setdefault(session_of(t), []).append(
             rows[t]["premium_close_bps"])
+    # median top-of-book spread of each leg — the EXECUTION drag a round
+    # trip pays crossing both books (enter on bid/ask, exit on bid/ask)
+    spread_a = statistics.median(
+        [(rows[t]["ask_a"] - rows[t]["bid_a"])
+         / ((rows[t]["ask_a"] + rows[t]["bid_a"]) / 2.0) * 1e4
+         for t in ts if rows[t]["bid_a"] and rows[t]["ask_a"]])
+    spread_b = statistics.median(
+        [(rows[t]["ask_b"] - rows[t]["bid_b"])
+         / ((rows[t]["ask_b"] + rows[t]["bid_b"]) / 2.0) * 1e4
+         for t in ts if rows[t]["bid_b"] and rows[t]["ask_b"]])
+    rev = reversion_stats(rows)
+    # harvestable per-trip edge on EXECUTABLE prices: the mid-price
+    # oscillation pays fees AND both legs' spreads before it is money.
+    # This is the number the ranking uses — the mid-only version flatters
+    # tight-spread-less pairs (a NEAR hl↔lighter looked alive at 2×osc−fees
+    # while its executable tails said dead).
+    osc = rev.get("osc_bps")
+    harvest = (round(2.0 * osc - fees - spread_a - spread_b, 3)
+               if osc is not None else None)
     return {
         "n": n, "hours": _r3(hours),
         "premium_median": _r3(pctl(prem, 50)),
@@ -335,11 +356,13 @@ def pair_stats(rows: Dict[int, dict], fee_a_bps: float, fee_b_bps: float) \
         "depth_a_usd": _r3(med_depth_a),
         "depth_b_usd": _r3(med_depth_b),
         "capacity_usd": _r3(min(med_depth_a, med_depth_b)),
+        "spread_a_bps": _r3(spread_a), "spread_b_bps": _r3(spread_b),
+        "harvest_bps": harvest,
         "sessions": {s: {"n": len(v), "median_premium": _r3(
             statistics.median(v))}
             for s, v in sorted(per_sess.items())},
         "fees_bps": _r3(fees),
-        **reversion_stats(rows),
+        **rev,
     }
 
 

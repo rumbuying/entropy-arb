@@ -101,8 +101,12 @@ def rank_pairs(matrix: dict, scoring: dict) -> dict:
             if (p.get("n") or 0) < min_minutes:
                 continue                       # not enough data to rank
             osc, fees = p.get("osc_bps"), p.get("fees_bps")
-            harvest = (round(2.0 * osc - fees, 2)
-                       if osc is not None and fees is not None else None)
+            # executable-basis harvest from the scorer (2×mid-osc − fees −
+            # both legs' median spreads); fall back to the fee-only form
+            # for matrices scored before spreads were recorded
+            harvest = p.get("harvest_bps")
+            if harvest is None and osc is not None and fees is not None:
+                harvest = round(2.0 * osc - fees, 2)
             item = {
                 "symbol": sym, "a": p["a"], "b": p["b"],
                 "state": p.get("state"), "hours": p.get("hours"),
@@ -111,6 +115,8 @@ def rank_pairs(matrix: dict, scoring: dict) -> dict:
                 "drift_bps_day": p.get("drift_bps_day"),
                 "osc_bps": osc, "fees_bps": fees,
                 "harvest_bps": harvest,
+                "spread_a_bps": p.get("spread_a_bps"),
+                "spread_b_bps": p.get("spread_b_bps"),
                 "roundtrip_potential_bps": p.get("roundtrip_potential_bps"),
                 "capacity_usd": p.get("capacity_usd"),
             }

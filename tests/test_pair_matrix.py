@@ -424,3 +424,27 @@ def test_reversion_stats_distinguishes_anchor_from_gap():
     r = reversion_stats(rows_from([1.0, 2.0] * 10))
     assert r == {"anchor": None, "half_life_min": None,
                  "drift_bps_day": None, "osc_bps": None}
+
+
+
+def test_pair_stats_harvest_is_executable_basis():
+    """harvest = 2×osc − fees − BOTH legs' median spreads. The mid-only
+    version flattered pairs whose execution drag ate the oscillation
+    (NEAR hl↔lighter looked alive at mid while its executable tails said
+    dead) — the ranking must pay the spreads too."""
+    logs = _logs_dir(tmp_path := __import__("pathlib").Path(
+        __import__("tempfile").mkdtemp(prefix="pm-harvest-")))
+    a = load_venue_bars(os.path.join(logs, "minutes-DOGE-@hl.csv"))
+    b = load_venue_bars(os.path.join(logs, "minutes-DOGE-@katana.csv"))
+    st = pair_stats(pair_rows(a, b), FEE_A, FEE_B)
+    assert st["spread_a_bps"] is not None and st["spread_b_bps"] is not None
+    assert st["harvest_bps"] is not None
+    assert st["harvest_bps"] == round(
+        2.0 * st["osc_bps"] - FEE_A - FEE_B
+        - st["spread_a_bps"] - st["spread_b_bps"], 3)
+    # and it is tighter than the mid-only version
+    assert st["harvest_bps"] < 2.0 * st["osc_bps"] - FEE_A - FEE_B
+    # empty rows → all None, no crash
+    empty = pair_stats({}, FEE_A, FEE_B)
+    assert empty["harvest_bps"] is None and \
+        empty["spread_a_bps"] is None
