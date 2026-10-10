@@ -337,3 +337,81 @@ def test_registry_builds_arcus_leg_conf():
     assert cfg.hedge.kind == "arcus" and cfg.hedge.label == "ARCUS"
     assert cfg.hedge.creds.complete and cfg.hedge.fee_bps == 2.25
     assert cfg.creds_complete
+
+
+# ------------------------------------------------- session threading (regression)
+
+def test_public_feed_threads_the_caller_session():
+    """Discovery feeds must run on the CALLER's session: the factory used
+    to drop the kwarg, so every arcus book feed owned its own ClientSession
+    (and died at start before venues_common imported aiohttp)."""
+    from entropy_arb.markets import MarketListing
+    import entropy_arb.venue_arcus as va
+    listing = MarketListing(venue="arcus", symbol=MARKET, market=MARKET)
+    sent = object()                    # sentinel "caller session"
+    feed = va.make_public_feed(listing, OrderBook(), lambda: None,
+                               session=sent)
+    assert feed._own_session is False and feed._session is sent
+
+
+def test_venue_book_feed_uses_the_venue_session():
+    """ArcusVenue.start_tasks must pass its own session to the book feed —
+    engine legs share the engine's connector pool, no per-feed sessions."""
+    from entropy_arb.venue_arcus import ArcusBookFeed
+    v = _venue(FakeSession([]))
+    feed = ArcusBookFeed(v.name, v.ws_url, MARKET, v.book, lambda: None,
+                         session=v.session)
+    assert feed._own_session is False and feed._session is v.session
+
+
+def test_own_session_feed_creates_and_closes_its_session():
+    """Full regression for the outage: a feed that OWNS its session must be
+    able to create one. venues_common used aiohttp without importing it —
+    run() raised NameError on the first line and the star-probe watchdog
+    rebuilt the feed in a crash loop forever."""
+    stop = asyncio.Event()
+    stop.set()                         # skip the ws loop; exercise only
+    feed, _ = _mk_book_feed()          # the session create/close path
+    assert feed._own_session is True   # (no session injected)
+    asyncio.run(feed.run(stop))
+    assert feed._session is not None and feed._session.closed
+
+
+def test_book_gap_resyncs_by_reconnect():
+    """Arcus has no REST L2 snapshot: a sequence gap must resync by closing
+    the ws (reconnect re-subscribes -> a fresh `subscribed` ack re-seeds).
+    Regression: the default REST resync raised NotImplementedError and the
+    feed stayed blind until the next natural drop."""
+    async def scenario():
+        feed, book = _mk_book_feed()
+        closed = []
+
+        class _WS:
+            async def close(self):
+                closed.append(True)
+
+        feed._ws = _WS()
+        feed._on_message({"type": "subscribed", "channel":
+                          "l2OrderbookUpdates",
+                          "contents": {"bids": [["100", "1"]],
+                                       "asks": [["101", "2"]],
+                                       "lastSequenceId": "10"}})
+        assert book.ready and feed._sequence == 10
+        feed._on_message({"type": "channel_data", "channel":
+                          "l2OrderbookUpdates",
+                          "contents": {"bids": [], "asks": [],
+                                       "lastSequenceId": "11"}})
+        assert feed._sequence == 11            # contiguous
+        feed._on_message({"type": "channel_data", "channel":
+                          "l2OrderbookUpdates",
+                          "contents": {"bids": [["99", "5"]], "asks": [],
+                                       "lastSequenceId": "15"}})
+        assert not book.ready and feed._sequence is None   # gap dropped it
+        for _ in range(20):
+            if closed:
+                break
+            await asyncio.sleep(0.01)
+        assert closed, "gap must close the ws (resync == reconnect)"
+        assert feed._pending == []             # stale generation dropped
+
+    asyncio.run(scenario())

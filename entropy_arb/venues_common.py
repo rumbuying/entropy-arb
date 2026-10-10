@@ -25,11 +25,14 @@ engine only knows the send_taker contract.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import math
 import time
 from typing import Callable, Optional, Tuple
+
+import aiohttp
 
 from .book import OrderBook
 from .maker import FillEvent
@@ -264,12 +267,15 @@ class SeqBookFeedBase:
     Subclasses implement `_fetch_snapshot` (raw REST JSON dict),
     `_snapshot_seq` (where the sequence lives in that dict),
     `_on_connected` / `_on_message` for their wire, and call `offer()` for
-    every parsed book event.
+    every parsed book event. A venue whose ONLY snapshot is the subscribe
+    ack instead overrides `_resync_task` to `_request_reconnect()` — the
+    fresh subscribe ack re-seeds the book.
     """
 
     SNAPSHOT_MIN_GAP_SEC = 2.0    # never resnapshot faster than this (429s)
     BUFFER_MAX = 8192
     RESYNC_ATTEMPTS = 3
+    RESYNC_ON_CONNECT = True      # False = subscribe ack IS the snapshot
 
     def __init__(self, name: str, book: OrderBook,
                  notify: Callable[[], None],
@@ -282,6 +288,7 @@ class SeqBookFeedBase:
         self._sequence: Optional[int] = None   # last applied seq (hi end)
         self._pending: list = []   # [(seq_lo, seq_hi, bids, asks)] unsynced
         self._snap_at = 0.0        # last snapshot start (monotonic)
+        self._ws = None            # live ws (set by run(); for resync-by-rx)
 
     # ------------------------------------------------------ venue hooks
 
@@ -309,6 +316,20 @@ class SeqBookFeedBase:
 
     def _reset_for_reconnect(self) -> None:
         """Extra per-reconnect state resets (app-ping tasks etc.)."""
+
+    def _request_reconnect(self) -> None:
+        """Resync-by-reconnect hook: close the live ws so run() falls back
+        into its reconnect path (backoff -> _on_connected -> fresh
+        subscribe ack). Idempotent; a no-op when nothing is connected."""
+        ws = self._ws
+        if ws is not None:
+            asyncio.get_running_loop().create_task(
+                self._close_quietly(ws))
+
+    @staticmethod
+    async def _close_quietly(ws) -> None:
+        with contextlib.suppress(Exception):
+            await ws.close()
 
     # ------------------------------------------------------ shared core
 
@@ -429,14 +450,18 @@ class SeqBookFeedBase:
                         self.ws_url, max_size=2 ** 23, open_timeout=10,
                         ping_interval=self.WS_PING_INTERVAL,
                         ping_timeout=self.WS_PING_TIMEOUT) as ws:
+                    self._ws = ws
                     log.info("[%s] connected (%s)", self.name, self.ws_url)
                     self._sequence = None
                     self._pending = []
                     await self._on_connected(ws)
                     # subscribe FIRST, snapshot SECOND: events that raced
-                    # the snapshot are buffered and replayed by offer()
-                    asyncio.get_running_loop().create_task(
-                        self._resync_task())
+                    # the snapshot are buffered and replayed by offer().
+                    # Resync-by-reconnect venues (subscribe ack IS the
+                    # snapshot) skip this — reconnecting here would loop.
+                    if self.RESYNC_ON_CONNECT:
+                        asyncio.get_running_loop().create_task(
+                            self._resync_task())
                     async for raw in ws:
                         backoff = 1.0
                         self.book.touch()

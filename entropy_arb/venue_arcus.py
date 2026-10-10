@@ -242,7 +242,7 @@ class ArcusVenue:
     def start_tasks(self, stop: asyncio.Event, notify, live: bool) -> list:
         tasks = [asyncio.create_task(
             ArcusBookFeed(self.name, self.ws_url, self.market, self.book,
-                          notify).run(stop),
+                          notify, session=self.session).run(stop),
             name=f"book-{self.key}")]
         if live and self.signer is not None:
             self.orders_feed = ArcusOrdersFeed(
@@ -612,9 +612,12 @@ class ArcusBookFeed(SeqBookFeedBase):
     snapshot (do NOT resync); once applying, a non-contiguous delta means a
     missed update — drop the book and resubscribe (reconnect re-seeds)."""
 
+    RESYNC_ON_CONNECT = False   # the `subscribed` ack IS the snapshot
+
     def __init__(self, name: str, ws_url: str, market: str, book: OrderBook,
-                 notify) -> None:
-        super().__init__(name, book, notify)
+                 notify, session: Optional[aiohttp.ClientSession] = None) \
+            -> None:
+        super().__init__(name, book, notify, session=session)
         self.ws_url = ws_url
         self.market = market
         self._applying = False
@@ -625,12 +628,21 @@ class ArcusBookFeed(SeqBookFeedBase):
             "type": "subscribe", "channel": "l2OrderbookUpdates",
             "id": self.market, "nLevels": 100}))
 
+    async def _resync_task(self) -> None:
+        """Resync == reconnect: the `subscribed` ack IS the snapshot (no
+        REST L2 endpoint), so a sequence gap can only be healed by
+        re-subscribing — drop stale-generation buffered events and let
+        run()'s reconnect re-seed the book."""
+        self._pending = []
+        self._request_reconnect()
+
     def _on_message(self, msg: dict) -> None:
         t = str(msg.get("type") or "")
         if t == "subscribed" and str(msg.get("channel")) == \
                 "l2OrderbookUpdates":
             c = msg.get("contents") or {}
             self.book.clear()
+            self._pending = []      # buffered events are stale-generation
             self._apply_levels(c.get("bids"), c.get("asks"))
             try:
                 self._sequence = int(c.get("lastSequenceId") or 0)
@@ -783,7 +795,7 @@ def make_venue(vc, session, settle_timeout):
 
 def make_public_feed(listing, book, notify, session=None):
     return ArcusBookFeed(f"{listing.venue}:{listing.symbol}", PROD_WS,
-                         listing.market, book, notify)
+                         listing.market, book, notify, session=session)
 
 
 async def list_markets_catalog(session, venue: str = "arcus", dex: str = ""):
