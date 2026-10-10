@@ -29,6 +29,10 @@
 #   arcus        Arcus (dYdX Labs, Robinhood Chain) (USDC, 2.25 bps taker /
 #                                           0 bps maker; Ed25519-signed
 #                                           orders; perps beta)
+#   perpl        Perpl (Monad CLOB perps)   (AUSD, 3.45 bps taker / 0.45 bps
+#                                           maker served by /v1/pub/context;
+#                                           ALL orders expire ~6 s — maker
+#                                           means continuous re-quoting)
 # 交易哪个市场不在本文件中配置——每次启动时用命令行参数显式指定：
 #     python3 main.py --symbol SNDK --hedge lighter-rh
 # Entropy 永远是其中一条腿；--hedge 选择对冲腿（五选一，见上表）。

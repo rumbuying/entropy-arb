@@ -17,6 +17,7 @@ is one of:
 | `bulk` | bulk.trade (Solana perp DEX) | USDC | 3.5→2.2 bps (tier), maker 0 bps | ws l2Delta + periodic l2Snapshot (dual-channel, no seq nums), sync IOC settle; Solana Ed25519 tx signing via `bulk-keychain`. Maker-capable (ALO post-only); account queries & private stream are UNSIGNED (pubkey-keyed) |
 | `ondo` | Ondo Perps | USDC | 2.5 bps taker, 1 bps maker (served by /v1/markets) | ws full-book snapshots (no seq); REST HMAC API-key auth (ONDO-* headers) for orders AND the private ws login; IOC-limit taker. Maker-capable (postOnly). Crypto + tokenized-stock perps |
 | `arcus` | Arcus (dYdX Labs on Robinhood Chain) | USDC | 2.25 bps taker, 0 bps maker (feeTiers; perps beta) | ws l2OrderbookUpdates (seq'd, snapshot-in-ack), REST 202-ACK orders polled to terminal; Ed25519 typed signatures, **no cancel-on-disconnect — scheduleCancel dead man's switch armed by the engine**. Maker-capable (ALO) |
+| `perpl` | Perpl (Monad CLOB) | AUSD | 3.45 bps taker, 0.45 bps maker (per /v1/pub/context) | two ws endpoints (public book + authed trading), orders submitted as mt:22 frames with strictly-increasing rq idempotency keys; Ed25519 four-header signing; **every order expires after order_ttl_blocks (~6 s) — maker = continuous re-quoting**; no cancel-on-disconnect (bounded by the TTL); fills carry no id (tuple-deduped, REST backfill on reconnect). Maker-capable (PostOnly flag) |
 
 > **Referral links** — signing up through these supports this project:
 > - Entropy — Tier 4 referral, 100% rebates: <https://entropy.io/?r=yourquantguy>

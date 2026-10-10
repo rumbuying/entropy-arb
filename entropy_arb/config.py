@@ -157,6 +157,22 @@ class ArcusCreds:
 
 
 @dataclass
+class PerplCreds:
+    """Perpl API credentials: the opaque X-API-Key token + the Ed25519
+    private key, both handed out once by the web UI (/apikeys). The same
+    pair signs REST (six-field canonical) and the trading websocket
+    (four-field signin). API keys NEVER move funds — withdrawals need a
+    wallet signature on the Exchange contract. Trading also requires an
+    on-chain exchange account (createAccount via the app)."""
+    api_key: Optional[str]          # opaque X-API-Key token
+    secret_key: Optional[str]       # Ed25519 private key, hex of 32 bytes
+
+    @property
+    def complete(self) -> bool:
+        return bool(self.api_key) and bool(self.secret_key)
+
+
+@dataclass
 class BulkCreds:
     """bulk.trade credentials: ONE Solana Ed25519 secret key, base58.
 

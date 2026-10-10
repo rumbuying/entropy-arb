@@ -25,6 +25,17 @@
 另查：手续费梯队（默认费率写进 spec，注释标明来源与档位）、数量/价格精度格式、429 语义、
 测试网有无。若是永续以外的产品线（现货股票代币等），先停：引擎假设多空对称永续，需要另立议题。
 
+### 第四问（Perpl 教训）：订单生命周期与订单模型
+
+4. **订单有没有交易所侧的 TTL / 特殊订单模型**——文档要读到 WS 帧级：
+   - Perpl：**所有订单（含 GTC）最长活 `order_ttl_blocks`（20 块 ≈ 6 秒）**，挂单自动
+     过期——maker 模式=持续重挂（秒级 requote 节奏）；下单走认证 WS 帧（mt:22）而非
+     REST，`rq` 严格递增做幂等键（从钱包快照的 `lfr` 播种）；订单按**仓位方向**建模
+     （OpenLong/OpenShort/CloseLong/CloseShort），对侧加仓必须先平，不存在净化；
+   - 私有对象的 wire 字段文档没写全时（Perpl 的 Order/Position/Wallet）：宽容解析
+     （多字段候选 + 未知打日志），代码里打 VERIFY 标记，实盘前用真实账户核对；
+   - fills 可能没有唯一 id（Perpl/bulk 都是）：用稳定元组去重，重连后用 REST 回填缺口。
+
 ## 1. 写 `entropy_arb/venue_<name>.py`
 
 实现一个 `<Name>Venue` 类（鸭子类型，合同见 `maker.py` 头注释与 `tests/maker_contract.py`）：
@@ -115,7 +126,7 @@ star_probe/basis_probe、v2 前端卡片与下拉框。
 
 ### 检查清单（速查）
 
-- [ ] 三问有答案：断线撤单 / 私有流认证 / fill 判别方案
+- [ ] 四问有答案：断线撤单 / 私有流认证 / fill 判别方案 / 订单 TTL 与订单模型
 - [ ] `venue_<name>.py`：Venue 合同 + 三钩子 + venues_common 基类（死手开关任务如有）
 - [ ] `venue_registry.py`：VenueSpec + UI_CARDS（+ NEED_GROUP 如需）
 - [ ] Creds dataclass（config.py）`.complete`

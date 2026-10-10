@@ -11,6 +11,7 @@ venues:
 - bulk
 - ondo
 - arcus
+- perpl
 depth_levels: 3
 max_spread_bps: 50
 rescan_minutes: 30

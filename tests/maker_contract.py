@@ -166,6 +166,21 @@ def check_surface(case: MakerCase) -> None:
 
 
 def check_place_maker_rests(case: MakerCase) -> None:
+    if not getattr(case, "expects_market_cancel_request", True):
+        # ws-order venue (Perpl pattern): the quote is an mt:22 frame on
+        # the order socket — inspect the recorded frame, not HTTP
+        v = case.make_venue(FakeSession())
+        r = _run(v.place_maker(is_buy=True, qty=0.005, limit_px=80000.0))
+        assert r["err"] is None, f"[{case.venue_name}] {r}"
+        assert r["status"] == "open", f"[{case.venue_name}] {r}"
+        assert r["order_id"], \
+            f"[{case.venue_name}] resting quote has no id: {r}"
+        assert r["took_liquidity"] is False, \
+            f"[{case.venue_name}] a post-only quote reported taking liquidity"
+        sent = case.sent_orders(v)
+        assert sent and case.is_post_only(sent[-1]), \
+            f"[{case.venue_name}] quote params are not post-only: {sent}"
+        return
     s = FakeSession([FakeResponse(200, case.resting_response())])
     v = case.make_venue(s)
     r = _run(v.place_maker(is_buy=True, qty=0.005, limit_px=80000.0))
@@ -181,6 +196,16 @@ def check_place_maker_rests(case: MakerCase) -> None:
 
 
 def check_would_cross_is_not_an_error(case: MakerCase) -> None:
+    if not getattr(case, "expects_market_cancel_request", True):
+        # ws-order venue (Perpl pattern): script the gateway rejection
+        v = case.make_venue(FakeSession())
+        case.script_would_cross(v)
+        r = _run(v.place_maker(is_buy=True, qty=0.005, limit_px=80000.0))
+        assert r["status"] == "canceled", f"[{case.venue_name}] {r}"
+        assert r["err"] is None, \
+            f"[{case.venue_name}] post-only refusal treated as an error: {r}"
+        assert r["took_liquidity"] is False, f"[{case.venue_name}] {r}"
+        return
     s = FakeSession([FakeResponse(200, case.would_cross_response())])
     v = case.make_venue(s)
     r = _run(v.place_maker(is_buy=True, qty=0.005, limit_px=80000.0))
@@ -216,6 +241,22 @@ def check_fill_events_and_idempotency(case: MakerCase) -> None:
 
 
 def check_cancel_all_for_market_is_one_request(case: MakerCase) -> None:
+    if not getattr(case, "expects_market_cancel_request", True):
+        # venue has NO market-wide cancel endpoint (e.g. Perpl): the safety
+        # equivalent is cancel_orders(None) cancelling EVERY open order it
+        # can see (exposure additionally bounded by the venue's order TTL).
+        v = case.make_venue(FakeSession())
+        feed = case.make_feed(v)
+        for oid in ("a", "b"):
+            feed.open_orders[oid] = {"order_id": oid}
+        r = _run(v.cancel_orders())
+        assert r["ok"] is True, f"[{case.venue_name}] {r}"
+        assert r["canceled"] == 2, \
+            f"[{case.venue_name}] open orders not all cancelled: {r}"
+        sent = case.sent_cancels(v)
+        assert set(sent) == {"a", "b"}, \
+            f"[{case.venue_name}] cancel targets missing: {sent}"
+        return
     s = FakeSession([FakeResponse(200, {})])
     v = case.make_venue(s)
     r = _run(v.cancel_orders())
@@ -228,6 +269,17 @@ def check_cancel_all_for_market_is_one_request(case: MakerCase) -> None:
 
 
 def check_cancel_by_ids(case: MakerCase) -> None:
+    if not getattr(case, "expects_market_cancel_request", True):
+        # ws-cancel venue (Perpl pattern): by-id cancels ride the order
+        # socket — inspect the recorded cancels, not HTTP requests
+        v = case.make_venue(FakeSession())
+        case.make_feed(v)
+        r = _run(v.cancel_orders(order_ids=["a", "b"]))
+        assert r["ok"] is True, f"[{case.venue_name}] {r}"
+        assert r["canceled"] == 2, f"[{case.venue_name}] {r}"
+        assert set(case.sent_cancels(v)) == {"a", "b"}, \
+            f"[{case.venue_name}] id list not sent: {case.sent_cancels(v)}"
+        return
     s = FakeSession([FakeResponse(200, {}), FakeResponse(200, {})])
     v = case.make_venue(s)
     r = _run(v.cancel_orders(order_ids=["a", "b"]))

@@ -26,7 +26,8 @@ from typing import Any, Dict, Optional, Tuple
 # Display order for every derived list. Keep new venues appended so existing
 # UI ordering (and the golden snapshot) stays stable.
 _ORDER: Tuple[str, ...] = ("hl", "lighter", "lighter-rh", "tradexyz",
-                           "katana", "backpack", "bulk", "ondo", "arcus")
+                           "katana", "backpack", "bulk", "ondo", "arcus",
+                           "perpl")
 
 
 @dataclass(frozen=True)
@@ -214,6 +215,21 @@ VENUES: Dict[str, VenueSpec] = {s.key: s for s in (
         ),
         requirements=("ARCUS_ADDRESS", "ARCUS_API_KEY", "ARCUS_SECRET_KEY"),
         module="entropy_arb.venue_arcus"),
+    VenueSpec(
+        key="perpl", kind="perpl", label="PERPL", label_hedge=None,
+        display="Perpl", base=True, hedge=True, maker_capable=True,
+        funding_supported=True, in_discovery=True,
+        # /v1/pub/context serves maker 45 / taker 345 Micros (0.45bp /
+        # 3.45bp base tier) live; config default = documented base tier
+        leg_fee_bps=3.45, opm_base=30, opm_hedge=30,
+        discovery_fee_bps=3.45,
+        creds_dataclass="PerplCreds", creds_group="perpl",
+        creds=(
+            CredField("api_key", ("PERPL_API_KEY",), "token"),
+            CredField("secret_key", ("PERPL_API_KEY_SECRET",), "hex_key"),
+        ),
+        requirements=("PERPL_API_KEY", "PERPL_API_KEY_SECRET"),
+        module="entropy_arb.venue_perpl"),
 )}
 
 
@@ -487,6 +503,13 @@ UI_CARDS: Dict[str, list] = {
         "diag": {"venue": "ondo"},
         "affects": {"base": ["ondo"], "hedge": ["ondo"]},
         "rel": ["ondo"],
+    }],
+    "perpl": [{
+        "id": "perpl", "order": 120, "title_key": "secrets.title.perpl",
+        "keys": ["PERPL_API_KEY", "PERPL_API_KEY_SECRET"],
+        "diag": {"venue": "perpl"},
+        "affects": {"base": ["perpl"], "hedge": ["perpl"]},
+        "rel": ["perpl"],
     }],
     "arcus": [{
         "id": "arcus", "order": 110, "title_key": "secrets.title.arcus",
