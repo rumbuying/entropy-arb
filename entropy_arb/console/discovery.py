@@ -44,6 +44,7 @@ import yaml
 from aiohttp import web
 
 from ..config import BASE_VENUES, HEDGE_VENUES
+from .. import venue_registry
 from ..discovery import (DEFAULT_TAKER_FEE_BPS, VENUE_KEYS, list_markets,
                          universe, venue_fs)
 
@@ -249,6 +250,25 @@ def pair_csv_label(eng: dict) -> str:
     return f"{base}-vs-{hedge}"
 
 
+def signed_data_cred_gaps(eng: dict, secrets) -> list:
+    """Legs whose market DATA is auth-gated but whose keys are unset.
+
+    Only venues flagged ``signed_market_data`` are checked — the rest boot
+    record-only fine on public feeds (arcus without keys, for one). The
+    secrets view mirrors the live-start preflight (per-venue group
+    completeness over the same env file the engine reads)."""
+    if secrets is None:
+        return []
+    venues = secrets.status()["venues"]
+    gaps = []
+    for vk in eng["orient"]:
+        key = vk.split(":", 1)[0]              # hl:io → hl
+        s = venue_registry.spec(key)
+        if s.signed_market_data and not venues.get(s.creds_group, False):
+            gaps.append(key)
+    return gaps
+
+
 # ----------------------------------------------------------------- profile
 
 def obs_profile_name(symbol: str, a: str, b: str) -> str:
@@ -331,7 +351,7 @@ def obs_profile_text(symbol: str, eng: dict, listings: dict,
 # ---------------------------------------------------------------- register
 
 def register_discovery(app: web.Application, supervisor, profiles, storage,
-                       audit, root: str) -> None:
+                       audit, root: str, secrets=None) -> None:
     P = _paths(root)
     app["discovery_supervisor"] = supervisor
 
@@ -556,6 +576,26 @@ def register_discovery(app: web.Application, supervisor, profiles, storage,
                                   f"engine (hl-family legs have no engine "
                                   f"shape); the pair stays scanner-only"}
             return payload, 422
+
+        # venues whose market DATA needs auth cannot even boot a record-only
+        # engine leg without keys (ondo: signed /v1/markets) — every spawn
+        # would crash-loop exit 1 and burn a session web port. Skip with a
+        # ledger note instead; scanner data (star_probe) keeps flowing.
+        cred_gaps = signed_data_cred_gaps(eng, secrets)
+        if cred_gaps:
+            message = (f"{'+'.join(cred_gaps)} 行情接口需要签名 — 密钥未配置，"
+                       f"观察线不启动；先在密钥页补 key，或把该所从 watchlist "
+                       f"去掉 / {'+'.join(cred_gaps)} market data requires "
+                       f"API keys — obs worker not started")
+            promos.setdefault(key, {"symbol": symbol, "a": a, "b": b,
+                                    "ts": time.time()})["creds_gap"] = {
+                "ts": time.time(), "missing": cred_gaps}
+            save_promotions(promos)
+            audit(f"discovery promote skipped ({'auto' if auto else 'manual'}):"
+                  f" {symbol} {a}↔{b} — missing creds: {cred_gaps}")
+            return {"ok": False, "skipped": "creds",
+                    "missing": cred_gaps, "message": message}, \
+                (200 if auto else 422)
 
         # fresh-ish listing metadata for fees/aliases (cached 10 min)
         wl = read_watchlist(P)

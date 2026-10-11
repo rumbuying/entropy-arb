@@ -98,7 +98,8 @@ async def amain(args) -> None:
     try:
         from entropy_arb.console.discovery import (register_discovery,
                                                    start_discovery_loop)
-        register_discovery(app, supervisor, profiles, storage, audit, root)
+        register_discovery(app, supervisor, profiles, storage, audit, root,
+                           secrets=secrets)
         start_discovery_loop(app)
     except ImportError:
         logging.getLogger("console").warning("discovery module unavailable")

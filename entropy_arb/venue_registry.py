@@ -66,6 +66,10 @@ class VenueSpec:
     requirements: Tuple[str, ...] = ()   # secrets VENUE_REQUIREMENTS entry
     fee_variants: Tuple[Tuple[str, float], ...] = ()   # hl: (":io", 0.9)...
     module: str = ""               # venue module path (lazy hooks below)
+    # market DATA itself sits behind auth (ondo: signed /v1/markets) — an
+    # engine leg cannot even start record-only without this venue's keys,
+    # so discovery must not auto-promote pairs on it while they are unset
+    signed_market_data: bool = False
 
     def label_for(self, role: str) -> str:
         if role == "hedge" and self.label_hedge:
@@ -192,6 +196,9 @@ VENUES: Dict[str, VenueSpec] = {s.key: s for s in (
         # truth rule as the other venues
         leg_fee_bps=2.5, opm_base=30, opm_hedge=30,
         discovery_fee_bps=2.5,
+        # even public-looking endpoints (market metadata, books) are
+        # HMAC-signed: no keys → no engine leg, record-only included
+        signed_market_data=True,
         creds_dataclass="OndoCreds", creds_group="ondo",
         creds=(
             CredField("api_key", ("ONDO_KEY_ID",), "token"),

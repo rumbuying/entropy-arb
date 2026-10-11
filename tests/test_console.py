@@ -242,6 +242,31 @@ def test_supervisor_port_allocation(tmp_path):
     assert p3 != p1
 
 
+def test_supervisor_port_released_after_exit(tmp_path):
+    """Regression: one crash loop (ondo 2026-10-11) burned the whole port
+    range because _reserved only grew — a single-port range must be
+    reusable across start→exit cycles."""
+    async def run():
+        sup = Supervisor(str(tmp_path), str(tmp_path),
+                         port_range=(18801, 18801))   # exactly one port
+        stub = tmp_path / "stub.py"
+        stub.write_text("import sys, time\n"
+                        "print('up', flush=True)\n"
+                        "sys.exit(1)\n")              # crash on boot
+        sup.build_argv = lambda w: [sys.executable, str(stub)]
+
+        for _ in range(3):
+            w = await sup.start("prof", "SNDK", "lighter-rh", "record")
+            for _ in range(40):
+                if not w.running and w.exit_code is not None:
+                    break
+                await asyncio.sleep(0.1)
+            assert w.exit_code == 1                   # 'errored', like ondo
+        await sup.shutdown()
+
+    asyncio.run(run())
+
+
 def test_supervisor_delete_stopped_only(tmp_path):
     async def run():
         sup = Supervisor(str(tmp_path), str(tmp_path))

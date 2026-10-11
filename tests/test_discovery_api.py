@@ -296,3 +296,84 @@ def test_candidates_groups_us_suffix_names():
             await server.close()
             await sup.shutdown()
     asyncio.run(run())
+
+
+class _StubSecrets:
+    """secrets-manager stand-in: per-venue completeness, nothing else."""
+
+    def __init__(self, venues):
+        self._venues = venues
+
+    def status(self):
+        return {"exists": True, "keys": {}, "venues": dict(self._venues)}
+
+
+def test_promote_skips_signed_data_venues_without_creds():
+    """Regression (ondo 2026-10-11): a venue whose market data needs auth
+    (ondo) must not get obs workers spawned while its keys are unset —
+    every spawn crashed exit 1 and the retry loop burned 140 runs + the
+    whole worker-port range. Public-feed venues (arcus, backpack…) are
+    NOT blocked by a missing key."""
+    async def run():
+        async def fake_universe(session, symbol, aliases=None, venues=None,
+                                catalog=None):
+            if symbol == "OX":
+                listings = {"ondo": _listing("ondo", "OX", "OX", 2.5),
+                            "backpack": _listing("backpack", "OX",
+                                                 "OX", 4.5)}
+            else:
+                return await _fake_universe(session, symbol, aliases,
+                                            venues, catalog)
+            ordered = sorted(listings)
+            return {"symbol": symbol, "aliases": dict(aliases or {}),
+                    "ts": 0.0, "venues": list(venues or []),
+                    "listings": {v: listings[v] for v in ordered},
+                    "missing": {}, "pairs": []}
+
+        CD.universe = fake_universe
+        tmp = tempfile.mkdtemp(prefix="discovery-creds-")
+        secrets = _StubSecrets({"ondo": False, "backpack": True,
+                                "entropy": True, "lighter-base": True,
+                                "lighter-hedge": True})
+        audit = []
+        app, sup, profiles = _build_app(tmp)
+        register_discovery(app, sup, profiles, None, audit.append, tmp,
+                           secrets=secrets)
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            promote_pair = app["discovery"]["promote_pair"]
+
+            # ---- signed-data venue without keys: skipped, nothing spawned
+            payload, status = await promote_pair("OX", "ondo", "backpack",
+                                                 auto=True)
+            assert status == 200 and payload["skipped"] == "creds"
+            assert payload["missing"] == ["ondo"]
+            assert sup.workers == {}
+            assert not profiles.exists("ox-ondo-vs-backpack-obs")
+            assert any("missing creds: ['ondo']" in m for m in audit)
+
+            # manual promote surfaces the reason to the UI as an error
+            async with aiohttp.ClientSession() as http:
+                async with http.post(
+                        server.make_url("/api/discovery/promote"),
+                        json={"symbol": "OX", "a": "ondo", "b": "backpack"}
+                        ) as r:
+                    assert r.status == 422
+                    out = await r.json()
+            assert out["skipped"] == "creds"
+            ledger = app["discovery"]["promotions"]()
+            assert ledger["OX|ondo|backpack"]["creds_gap"]["missing"] == \
+                ["ondo"]
+
+            # ---- public-feed venue: the same missing-key map still allows
+            #      promotion (arcus-style record-only keeps working)
+            payload, status = await promote_pair("ANTH", "hl:io",
+                                                 "lighter-rh", auto=True)
+            assert status == 201, payload
+            assert any(w.profile.startswith("anth-")
+                       for w in sup.workers.values())
+        finally:
+            await server.close()
+            await sup.shutdown()
+    asyncio.run(run())

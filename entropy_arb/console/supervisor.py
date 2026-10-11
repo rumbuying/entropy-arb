@@ -187,6 +187,13 @@ class Supervisor:
         raise RuntimeError("no free worker port in "
                            f"{self.port_lo}..{self.port_hi}")
 
+    def _release_port(self, w: Worker) -> None:
+        """Return a dead worker's web port to the pool. Without this the
+        session-reserved set only ever grows — one crash loop burns the
+        whole range and every later start (incl. manual live) fails with
+        "no free worker port"."""
+        self._reserved.discard(w.web_port)
+
     # ---------------------------------------------------------------- command
 
     def build_argv(self, w: Worker) -> list:
@@ -396,6 +403,7 @@ class Supervisor:
                 pass
         w.exit_code = proc.returncode
         w.stopped_ts = time.time()
+        self._release_port(w)
         if self.storage is not None and w.run_id:
             state = ("stopped" if w.exit_code in (0, -15, -2)
                      else "errored")
@@ -434,6 +442,7 @@ class Supervisor:
                 pass
         if w.exit_code is None:
             w.exit_code = w.proc.returncode   # authoritative after wait()
+            self._release_port(w)             # pump timed out — release here
         return True
 
     async def _stop_adopted(self, w: Worker, grace: float) -> bool:
@@ -458,6 +467,7 @@ class Supervisor:
         w.exit_code = -15                   # graceful TERM
         w.stopped_ts = time.time()
         w.adopted_pid = None
+        self._release_port(w)
         if self.storage is not None and w.run_id:
             self.storage.finish_run(w.run_id, ended_ts=w.stopped_ts,
                                     state="stopped", exit_code=-15)

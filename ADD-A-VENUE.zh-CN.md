@@ -80,6 +80,8 @@ async def list_markets_catalog(session, venue, dex=""): ...      # 公共 REST �
 - `key`（CLI 名）/ `kind`（adapter 类，可复用现有所——`lighter-rh` 就是零 adapter 接入）
 - `label` / `label_hedge`（对冲腿显示名不同才填）/ `display`
 - `base` / `hedge` / `maker_capable` / `funding_supported` / `in_discovery`
+- `signed_market_data`（仅当行情/市场元数据接口本身要签名——如 ondo——才设 True；
+  discovery 会对这类所在密钥缺失时跳过自动 promote，避免 record worker 启动即崩）
 - `leg_fee_bps`（yaml 可覆盖的默认费率，注释写清档位依据）、`opm_base` / `opm_hedge`
 - `discovery_fee_bps`（打分兜底费率）、`fee_variants`（仅 HL 类多 dex）
 - `creds_dataclass`（在 `config.py` 定义新 Creds dataclass，带 `.complete` 属性）+
