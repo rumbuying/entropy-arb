@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>实盘盈亏看板 · entropy-arb</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#161a21; --line:#232936; --text:#e6e9ef;
+  --dim:#8b93a3; --good:#4ade80; --bad:#f87171; --warn:#fbbf24; --accent:#60a5fa;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+header{display:flex;align-items:center;gap:14px;padding:14px 22px;
+  border-bottom:1px solid var(--line);background:var(--panel)}
+header .brand{font-weight:600;font-size:15px}
+header .brand span{color:var(--dim);font-weight:400}
+header .spacer{flex:1}
+header .meta{color:var(--dim);font-size:12px}
+button{background:#1f2530;color:var(--text);border:1px solid var(--line);
+  border-radius:6px;padding:5px 12px;cursor:pointer;font:inherit}
+button:hover{border-color:var(--accent)}
+main{padding:20px 22px}
+.summary{display:flex;gap:28px;margin-bottom:16px;flex-wrap:wrap}
+.summary .kpi{background:var(--panel);border:1px solid var(--line);
+  border-radius:8px;padding:10px 16px;min-width:150px}
+.summary .kpi .v{font-size:20px;font-weight:600;margin-top:2px}
+.summary .kpi .l{color:var(--dim);font-size:11px;text-transform:uppercase;
+  letter-spacing:.06em}
+table{width:100%;border-collapse:collapse;background:var(--panel);
+  border:1px solid var(--line);border-radius:8px;overflow:hidden}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);
+  white-space:nowrap}
+th{color:var(--dim);font-size:11px;text-transform:uppercase;
+  letter-spacing:.06em;font-weight:500}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#1b2029}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.good{color:var(--good)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+.dim{color:var(--dim)}
+.badge{display:inline-block;padding:1px 8px;border-radius:10px;
+  font-size:11px;margin-right:4px;border:1px solid transparent}
+.badge.ok{color:var(--good);border-color:#1e3a29;background:#122417}
+.badge.bad{color:var(--bad);border-color:#3a1e1e;background:#241212}
+.badge.warn{color:var(--warn);border-color:#3a301e;background:#241f12}
+.badge.dim{color:var(--dim);border-color:var(--line);background:#1a1f27}
+.note{margin-top:14px;color:var(--dim);font-size:12px;line-height:1.7}
+.note b{color:var(--warn);font-weight:500}
+.err{color:var(--bad);padding:12px 0}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">entropy-arb <span>实盘盈亏看板</span></div>
+  <span class="spacer"></span>
+  <span class="meta" id="status">加载中…</span>
+  <button id="refresh">刷新</button>
+</header>
+<main>
+  <div class="summary" id="summary"></div>
+  <div id="body"><div class="dim">加载中…</div></div>
+  <div class="note">
+    口径：<b>今日成交</b> = 本地 0 点起 trades CSV 的逐笔记录，<b>完整</b> = 两腿都有成交。
+    <b>今日锁定盈利</b> = 今日<b>已平仓</b>部分的实际配对盈亏（FIFO：平仓量与当初开仓量按成交价差配对，
+    含入场+离场两腿，引擎估费口径）——这部分已经落袋，不再受行情影响。
+    <b>今日浮动</b> = 当前持仓按现价重估（引擎 session <code>unrealized_usd</code>）——未落袋，会随行情变化。
+    共用同一组交易所账户的多条线（如 ANTH 与 SNDK 共用 ENTROPY/RH）账户级流水无法拆线，锁定盈利为引擎成交口径估算，
+    精确到账以交易所流水为准（差异主要来自实际费率与滑点）。数据最多取最近 500 笔成交。
+    数据源：<code>/api/workers</code>、<code>/api/workers/&lt;id&gt;/state</code>、<code>/api/workers/&lt;id&gt;/trades</code>。自动刷新 20s。
+  </div>
+</main>
+<script type="module">
+const TOKEN = new URLSearchParams(location.search).get("token")
+  || sessionStorage.getItem("entropyConsoleToken") || "";
+const HDR = TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {};
+
+async function getJSON(u) {
+  const r = await fetch(u, { headers: HDR });
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+const usd = (v) => (v == null || isNaN(v)) ? "—" : (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2);
+const bps = (v) => (v == null || isNaN(v)) ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(1);
+const cls = (v) => v == null ? "" : (v > 0.005 ? "good" : v < -0.005 ? "bad" : "dim");
+const num = (v, d = 2) => (v == null || isNaN(v)) ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(d);
+
+function todayStartSec() {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  return d.getTime() / 1000;
+}
+
+// 熵腿实际成交量（多头腿方向）——决定仓位路径
+function legQty(r) {
+  const d = r.direction;
+  if (d === "buy_entropy") return +(r.buy_fill || 0);
+  if (d === "sell_entropy") return +(r.sell_fill || 0);
+  return 0;
+}
+
+// FIFO 配对：今日已平仓部分的配对盈亏（入场+离场两腿价差，含引擎估费）
+function lotStats(rows, cutoff) {
+  const chrono = rows.slice().reverse();          // API 新→旧，反转成时间正序
+  const lots = [];
+  let realizedToday = 0;
+  for (const r of chrono) {
+    const q = legQty(r);
+    if (!(q > 0)) continue;                       // 单腿/未成交行不动仓位
+    const e = parseFloat(r.fill_edge_usd ?? r.edge_usd) || 0;
+    const epu = e / q;
+    const signed = r.direction === "buy_entropy" ? q : -q;
+    if (!lots.length || Math.sign(signed) === Math.sign(lots[0].qty)) {
+      lots.push({ qty: signed, epu });
+      continue;
+    }
+    let remain = q;
+    while (remain > 1e-12 && lots.length) {
+      const lot = lots[0];
+      const take = Math.min(remain, Math.abs(lot.qty));
+      const pnl = take * (lot.epu + epu);
+      if ((+r.ts || 0) >= cutoff) realizedToday += pnl;
+      if (take >= Math.abs(lot.qty) - 1e-12) lots.shift();
+      else lot.qty -= take * Math.sign(lot.qty);
+      remain -= take;
+    }
+    if (remain > 1e-12) lots.push({ qty: signed > 0 ? remain : -remain, epu });
+  }
+  return { realizedToday };
+}
+
+function lineRow(w, st, tr) {
+  const rows = (tr && tr.rows) || [];
+  const cutoff = todayStartSec();
+  const today = rows.filter(r => r.ts && (+r.ts) >= cutoff);
+  const complete = today.filter(r =>
+    ("buy_fill" in r) ? (+r.buy_fill > 0 && +r.sell_fill > 0)
+      : (r.ok === "1" || r.ok === true));
+
+  const { realizedToday } = lotStats(rows, cutoff);
+
+  const vE = st && st.venues ? st.venues.entropy : null;
+  const vH = st && st.venues ? st.venues.hedge : null;
+  const sig = (st && st.signal) || {};
+  const ses = (st && st.session) || {};
+  const posE = vE ? vE.position : null;
+  const posH = vH ? vH.position : null;
+  const float = ses.unrealized_usd ?? ses.unrealized_pnl;
+  const prem = sig.mid_premium_bps;
+  const band = (sig.band_low_bps != null && sig.band_high_bps != null)
+    ? `[${bps(sig.band_low_bps)} .. ${bps(sig.band_high_bps)}]` : "—";
+
+  const badges = [];
+  if (st && st.halted) badges.push('<span class="badge bad">HALTED</span>');
+  if (vE && vE.down) badges.push(`<span class="badge bad">${vE.name} DOWN</span>`);
+  if (vH && vH.down) badges.push(`<span class="badge bad">${vH.name} DOWN</span>`);
+  if ((vE && !vE.fresh) || (vH && !vH.fresh))
+    badges.push('<span class="badge warn">STALE</span>');
+  if (!badges.length) badges.push('<span class="badge ok">运行中</span>');
+
+  return `<tr>
+    <td><b>${w.symbol}</b><div class="dim" style="font-size:11px">${vE && vH ? `${vE.name}↔${vH.name}` : "—"}</div></td>
+    <td>${badges.join("")}</td>
+    <td class="num">${complete.length}<span class="dim"> / ${today.length}</span></td>
+    <td class="num ${cls(realizedToday)}" style="font-size:15px">${usd(realizedToday)}<div class="dim" style="font-size:11px">已落袋</div></td>
+    <td class="num ${cls(float)}" style="font-size:15px">${usd(float)}<div class="dim" style="font-size:11px">持仓中</div></td>
+    <td class="num">${posE == null ? "—" : num(posE)} / ${posH == null ? "—" : num(posH)}</td>
+    <td class="num">${bps(prem)}<div class="dim" style="font-size:11px">${band}</div></td>
+    <td class="num">${vE ? usd(vE.equity) : "—"}<div class="dim" style="font-size:11px">${vH ? usd(vH.equity) : ""}</div></td>
+  </tr>`;
+}
+
+async function refresh() {
+  const status = document.getElementById("status");
+  status.textContent = "刷新中…";
+  try {
+    const ws = await getJSON("/api/workers");
+    const live = (ws || []).filter(w => w.mode === "live" &&
+      (w.state === "running" || w.state === "starting"));
+    const out = [];
+    for (const w of live) {
+      let st = null, tr = null;
+      try { st = await getJSON(`/api/workers/${w.id}/state`); } catch (e) {}
+      try { tr = await getJSON(`/api/workers/${w.id}/trades?limit=500`); } catch (e) {}
+      out.push({ w, st, tr });
+    }
+    const cutoff = todayStartSec();
+    let totalRealized = 0, totalFloat = 0, totalComplete = 0, totalToday = 0;
+    for (const { st, tr } of out) {
+      const rows = (tr && tr.rows) || [];
+      const today = rows.filter(r => r.ts && (+r.ts) >= cutoff);
+      totalToday += today.length;
+      totalComplete += today.filter(r => ("buy_fill" in r)
+        ? (+r.buy_fill > 0 && +r.sell_fill > 0)
+        : (r.ok === "1" || r.ok === true)).length;
+      totalRealized += lotStats(rows, cutoff).realizedToday;
+      const ses = (st && st.session) || {};
+      totalFloat += Number(ses.unrealized_usd ?? ses.unrealized_pnl ?? 0) || 0;
+    }
+    document.getElementById("summary").innerHTML = `
+      <div class="kpi"><div class="l">实盘线</div><div class="v">${out.length}</div></div>
+      <div class="kpi"><div class="l">今日成交（完整/总）</div><div class="v">${totalComplete} <span class="dim" style="font-size:13px">/ ${totalToday}</span></div></div>
+      <div class="kpi"><div class="l">今日锁定盈利（已落袋）</div><div class="v ${cls(totalRealized)}">${usd(totalRealized)}</div></div>
+      <div class="kpi"><div class="l">今日浮动（持仓中）</div><div class="v ${cls(totalFloat)}">${usd(totalFloat)}</div></div>
+    `;
+    document.getElementById("body").innerHTML = out.length
+      ? `<table>
+          <thead><tr>
+            <th>线 / 交易对</th><th>状态</th>
+            <th class="num">今日成交</th>
+            <th class="num">今日锁定盈利</th>
+            <th class="num">今日浮动</th>
+            <th class="num">仓位（E / H）</th>
+            <th class="num">溢价 vs band (bp)</th>
+            <th class="num">权益（两腿）</th>
+          </tr></thead>
+          <tbody>${out.map(({ w, st, tr }) => lineRow(w, st, tr)).join("")}</tbody>
+        </table>`
+      : '<div class="dim">没有运行中的实盘 worker。</div>';
+    status.textContent = "更新于 " + new Date().toLocaleTimeString();
+  } catch (e) {
+    status.textContent = "接口错误";
+    document.getElementById("body").innerHTML =
+      `<div class="err">读取失败：${e.message}（检查 console 是否在运行、token 是否有效）</div>`;
+  }
+}
+
+document.getElementById("refresh").addEventListener("click", refresh);
+refresh();
+setInterval(refresh, 20000);
+</script>
+</body>
+</html>

@@ -11,6 +11,8 @@ import { store } from "./store.js";
 
 const ROUTES = [  { name: "strategies", re: /^#\/strategies$/i,
     mod: () => import("./strategies.js"), title: () => t("v2.nav.strategies") },
+  { name: "pnl", re: /^#\/pnl$/i,
+    mod: () => import("./pnl.js"), title: () => t("v2.nav.pnl") },
   { name: "discovery", re: /^#\/discovery$/i,
     mod: () => import("./discovery.js"),
     title: () => t("v2.nav.discovery") },
