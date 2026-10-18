@@ -1,0 +1,67 @@
+# NEAR arcus ↔ lighter 主网 — taker band 实盘（discovery 首个 promoted live）
+#
+#   record-only: python3 main.py --config profiles/near-arcus-lighter.yaml \
+#                    --symbol NEAR --base arcus --hedge lighter --record-only
+#   live:        同命令去掉 --record-only（console POST /api/workers mode=live）
+#
+# 数据依据（179h，logs/minutes-NEAR-arcus-vs-lighter.csv，
+#           tools/analyze.py --fees-bps 2.25，2026-10-17）：
+#   premium median −10.4 / sd 6.8bp；净震荡 harvest 7.17bp / 往返费 2.25bp
+#   回归半衰期 22min、drift ≈ −0.6bp/天；explore_verdict 全库第 1（score 55.7）
+#   方向不对称：买 arcus/卖 lighter p95 +16.2bp，反侧 −2.7bp → 靠 band 回中线了结
+#   容量：lighter 侧 ~$998/触 → clip $100、cap $300（各腿 $500 权益的 60%）
+thresholds:
+  midline_bps: -9.95
+  upper_bps: 5.23
+  lower_bps: 5.23
+
+entropy:
+  taker_fee_bps: 2.25         # arcus taker（venue registry）
+  max_position_usd: 300
+  max_orders_per_min: 60
+
+hedge:
+  taker_fee_bps: 0.0          # lighter 主网 taker=0
+  max_position_usd: 300
+  max_orders_per_min: 30      # lighter 限频 ~40/min，留余量
+
+sizing:
+  take_fraction: 0.5
+  max_order_notional_usd: 100
+  min_order_notional_usd: 10
+
+inventory:
+  scale_bps: 10
+  floor_frac: 0.5
+
+execution:
+  premium_persist_sec: 0.3
+  cooldown_sec: 0
+  leg_slippage_bps: 8         # arcus 点差 ~1.9bp → 8bp 价格保护
+  hedge_slippage_bps: 6       # lighter 点差 ~0.5bp
+  max_signal_edge_bps: 30     # 幻影过滤：sd 6.8 → 30bp ≈ 4.4σ
+  max_consecutive_errors: 3
+  staleness_sec: 10
+  reconcile_sec: 15
+
+recorder:
+  enabled: true
+  csv: logs/minutes-NEAR-arcus-lighter.csv
+
+logging:
+  file: logs/engine-NEAR-arcus-lighter.log
+  trades_csv: logs/trades-NEAR-arcus-lighter.csv
+  dashboard: false
+  level: INFO
+
+# 分时段 band 自动校准（同 sndk-rh：midline=当前时段 3 天滚动中位数，
+# 宽度=max(2.0×σ[24h 半衰期], 2×实测滑点, 5bps)；entropy-autoband.timer 每 5 分钟）
+auto_band:
+  enabled: true
+  window_days: 3
+  width_k: 2.0
+  min_width_bps: 5.0
+  sigma_halflife_h: 24
+  slip_lookback_days: 2
+  slip_min_fills: 5
+  skip_engine_down_min: 15

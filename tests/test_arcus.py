@@ -9,6 +9,8 @@ import sys
 import os
 import time
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from entropy_arb.book import OrderBook  # noqa: E402
@@ -51,15 +53,39 @@ def _signed(session, settle=5.0):
 
 # ------------------------------------------------------------------- signer
 
+@pytest.mark.parametrize("prefix", ["", "0x"])
+@pytest.mark.parametrize("keypair", [False, True])
+def test_signer_accepts_console_key_formats(prefix, keypair):
+    creds = ArcusCreds(address=ADDR, api_key=prefix + PUB.upper(),
+                      secret_key=prefix + (SEED + PUB if keypair else SEED))
+    signer = ArcusSigner(creds)
+    assert signer.pub_hex == PUB
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    Ed25519PublicKey.from_public_bytes(bytes.fromhex(PUB)).verify(
+        bytes.fromhex(signer._sign_hex(b"credential-check")), b"credential-check")
+
+
+def test_signer_rejects_unrelated_api_signing_key_without_echoing_secrets():
+    wrong_seed = "cc" * 32
+    with pytest.raises(ValueError, match="does not match") as exc:
+        ArcusSigner(ArcusCreds(address=ADDR, api_key=PUB, secret_key=wrong_seed))
+    assert wrong_seed not in str(exc.value) and PUB not in str(exc.value)
+
+
 def test_typed_payload_is_sorted_compact_and_verifies():
     s = ArcusSigner(_conf().creds)
-    payload = s.typed_payload(1, 1, 1713825891591000000, 4102444800000000,
-                              order_side=1, price_ticks=500005,
+    payload = s.typed_payload(1, 1, 1713825891591000000,
+                              4102444800000000 * 1000,
+                              order_side=0, price_ticks=500005,
                               qty_quantums=1000)
     canon = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     # key order must be sorted, no whitespace; ad lowercase; ints engine-native
     assert canon.startswith('{"ad":') and '"ct":1713825891591000000' in canon
     assert ", " not in canon and '": ' not in canon
+    # official Scheme-1 enums (docs.arcus.xyz → Authentication):
+    # s: 0=buy/1=sell · t: 2=IOC · g in NANOSECONDS (µs × 1000)
+    assert payload["s"] == 0 and payload["t"] == 2
+    assert payload["g"] == 4102444800000000 * 1000
     headers = s.headers_typed(payload)
     assert headers["X-API-Key"] == PUB
     assert headers["X-Timestamp"] == "1713825891591000000"
@@ -68,6 +94,15 @@ def test_typed_payload_is_sorted_compact_and_verifies():
         Ed25519PublicKey)
     Ed25519PublicKey.from_public_bytes(bytes.fromhex(PUB)).verify(
         bytes.fromhex(headers["X-Signature"]), canon.encode())
+
+
+def test_typed_payload_cancel_omits_g_and_uses_id():
+    s = ArcusSigner(_conf().creds)
+    payload = s.typed_payload(2, 7, 1713825891591000000, 0,
+                              order_id="ord-abc")
+    assert "g" not in payload                      # cancel payload has no g
+    assert payload["id"] == "ord-abc" and payload["op"] == 2
+    assert set(payload) == {"ad", "ai", "ct", "id", "m", "op", "v"}
 
 
 def test_legacy_scheme_signs_timestamp_action_body():

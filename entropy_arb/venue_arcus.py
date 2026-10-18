@@ -69,12 +69,15 @@ class ArcusSigner:
         from cryptography.hazmat.primitives.asymmetric.ed25519 \
             import Ed25519PrivateKey
         self.address = (creds.address or "").strip().lower()
-        self.pub_hex = (creds.api_key or "").strip().lower()
+        self.pub_hex = (creds.api_key or "").strip().lower().removeprefix("0x")
         self.account_index = int(os.getenv("ARCUS_ACCOUNT_INDEX", "0") or 0)
-        sk = bytes.fromhex((creds.secret_key or "").strip())
+        sk = bytes.fromhex((creds.secret_key or "").strip().lower().removeprefix("0x"))
         if len(sk) == 64:
             sk = sk[:32]               # seed | public — keep the seed half
         self._key = Ed25519PrivateKey.from_private_bytes(sk)
+        if self._key.public_key().public_bytes_raw().hex() != self.pub_hex:
+            raise ValueError("Arcus API Key does not match API Signing Key; "
+                             "use the pair from the same Generate / Authorize flow")
 
     def describe(self) -> str:
         return (f"address={self.address[:6]}…{self.address[-4:]} "
@@ -84,23 +87,33 @@ class ArcusSigner:
         return self._key.sign(msg).hex()
 
     def typed_payload(self, op: int, market_id: int,
-                      client_time_ns: int, good_til_us: int,
+                      client_time_ns: int, good_til_ns: int,
                       *, order_side: int = 0, price_ticks: int = 0,
                       qty_quantums: int = 0, reduce_only: bool = False,
                       client_id: str = "",
                       order_id: str = "") -> dict:
-        """The engine-native integer payload (place=1 / cancel=2). The
-        signed message is its compact key-sorted JSON."""
+        """The engine-native integer payload (place=1 / cancel=2 / modify=3).
+        The signed message is its compact key-sorted JSON.
+
+        Official enums (docs.arcus.xyz → Authentication, Scheme 1 — verified
+        against the live 401 fix on 2026-10-18):
+          s: 0=buy, 1=sell · t: 0=GTT, 1=FOK, 2=IOC, 3=ALO
+          p: price/tickSize · q: size/stepSize · r: 0/1 int
+          g: goodTilTime in NANOSECONDS (the HTTP body's microsecond
+             goodTilTime × 1000) — place/modify only, OMITTED for cancel.
+        """
         p: dict = {"ad": self.address, "ai": self.account_index,
-                   "ct": client_time_ns, "g": good_til_us, "m": market_id,
+                   "ct": client_time_ns, "m": market_id,
                    "op": op, "v": 1}
+        if op in (1, 3):
+            p["g"] = good_til_ns
         if client_id:
             p["c"] = client_id
         if op == 1:
             p.update({"p": price_ticks, "q": qty_quantums,
                       "r": 1 if reduce_only else 0, "s": order_side,
-                      "t": 2})          # TIF enum: 2=IOC (verify on testnet)
-        if op == 2 and order_id:
+                      "t": 2})          # TIF enum: 2=IOC (docs-verified)
+        if op in (2, 3) and order_id:
             p["id"] = order_id
         return p
 
@@ -301,22 +314,23 @@ class ArcusVenue:
     # ------------------------------------------------------------- execution
 
     async def _await_terminal(self, order_id: str) -> tuple:
-        """Poll GET /v1/order until a definitive status (the REST answer is
-        a 202 ACK); past settle timeout the outcome is UNKNOWN."""
+        """Poll GET /v1/order/{orderId} until a definitive status (the REST
+        answer is a 202 ACK); past settle timeout the outcome is UNKNOWN.
+        The orderId is a PATH segment (query-param form → 405). A 404 right
+        after placement means the row isn't queryable yet — keep polling."""
         deadline = time.monotonic() + self.settle_timeout
         addr, idx = self._acct()
         while True:
             body, err, unresolved = await self._rest(
-                "GET", "/v1/order",
-                params={"address": addr, "accountIndex": idx,
-                        "orderId": order_id},
+                "GET", f"/v1/order/{order_id}",
+                params={"address": addr, "accountIndex": idx},
                 headers=self._read_headers())
             if err is None and isinstance(body, dict):
                 order = body.get("order") or body
                 status = str(order.get("status") or "")
                 if status in TAKER_STATUSES:
                     return order, None, False
-            elif err is not None and not unresolved:
+            elif err is not None and "404" not in err:
                 return None, err, False
             if time.monotonic() >= deadline:
                 return None, None, True
@@ -349,6 +363,11 @@ class ArcusVenue:
             if "undercollateralized" in low:
                 return {"status": "margin", "filled_base": 0.0,
                         "avg_px": None, "err": reason, "unresolved": False}
+            if low in ("ioc_canceled", "fok_failed", "could_not_fill"):
+                # accepted by the engine, zero fill — a CLEAN no-trade, not
+                # an execution error (counting it would halt on 3 misses)
+                return {"status": "canceled", "filled_base": 0.0,
+                        "avg_px": None, "err": None, "unresolved": False}
             return {"status": "send-failed", "filled_base": 0.0,
                     "avg_px": None, "err": reason, "unresolved": False}
         return {"status": "send-failed", "filled_base": 0.0, "avg_px": None,
@@ -374,8 +393,8 @@ class ArcusVenue:
         if reduce_only:
             body["reduceOnly"] = True
         payload = self.signer.typed_payload(
-            1, self.market_id, ts, int(gtd),
-            order_side=1 if is_buy else 2,
+            1, self.market_id, ts, int(gtd) * 1000,
+            order_side=0 if is_buy else 1,
             price_ticks=self._ticks(fnum(body["price"], 0.0)),
             qty_quantums=self._quantums(qty), reduce_only=reduce_only)
         result, err, unresolved = await self._rest(
@@ -427,8 +446,8 @@ class ArcusVenue:
         if reduce_only:
             body["reduceOnly"] = True
         payload = self.signer.typed_payload(
-            1, self.market_id, ts, int(gtd), client_id=coi,
-            order_side=1 if is_buy else 2,
+            1, self.market_id, ts, int(gtd) * 1000, client_id=coi,
+            order_side=0 if is_buy else 1,
             price_ticks=self._ticks(fnum(body["price"], 0.0)),
             qty_quantums=self._quantums(qty), reduce_only=reduce_only)
         result, err, unresolved = await self._rest(
@@ -494,7 +513,7 @@ class ArcusVenue:
         for oid in order_ids:
             ts = time.time_ns()
             payload = self.signer.typed_payload(
-                2, self.market_id, ts, int(self._good_til_us()),
+                2, self.market_id, ts, 0,
                 order_id=str(oid))
             body = {"kind": "orderId", "orderId": str(oid),
                     "address": addr, "marketId": self.market_id,
@@ -530,7 +549,7 @@ class ArcusVenue:
                  self.name, DMS_REFRESH_SEC)
         while not stop.is_set():
             body = {"address": addr, "accountIndex": idx,
-                    "time": str(int(time.time() * 1e6) + DMS_ARM_US)}
+                    "time": int(time.time() * 1e6) + DMS_ARM_US}
             headers = self.signer.headers_legacy("scheduleCancel", body)
             _, err, _ = await self._rest(
                 "POST", "/v1/scheduleCancel", params={"address": addr},
@@ -571,12 +590,21 @@ class ArcusVenue:
             headers=self._read_headers())
         if err is not None:
             raise RuntimeError(f"[{self.name}] positions: {err}")
+        # /v1/positions returns {"positions": {"<marketId>": {...}}, "total": N}
+        # — a DICT keyed by marketId (an empty map early-passed every
+        # flat-account test; the first real position crashed str.get on
+        # 2026-10-18). `size` is UNSIGNED — direction lives in `side`
+        # (LONG/SHORT); the engine wants a signed net position (+long/−short).
         total = 0.0
-        for p in (body or {}).get("positions") or []:
+        positions = (body or {}).get("positions") or {}
+        for p in (positions.values() if isinstance(positions, dict)
+                  else positions):
             if int(p.get("marketId", -1)) != self.market_id and \
                     str(p.get("marketDisplayName")) != self.market:
                 continue
-            total += fnum(p.get("size"), 0.0)
+            qty = abs(fnum(p.get("size"), 0.0))
+            side = str(p.get("side") or "").upper()
+            total += -qty if side == "SHORT" else qty
             self.mark_px = fnum(p.get("markPx"))
             self.unrealized = fnum(p.get("unrealizedPnl"))
         self.position = total
