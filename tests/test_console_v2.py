@@ -311,29 +311,24 @@ def test_connections_api_and_revision():
                             {"LIGHTER_API_KEY_INDEX": "31337"}}) as r:
                     assert r.status == 200
 
-                # --- resolved credential sources: override wins per leg;
-                # any override field filled demands the full triple
-                async with http.post(url("/api/secrets"), json={
-                        "updates":
-                            {"LIGHTER_BASE_ACCOUNT_INDEX": "7"}}) as r:
+                # --- deployments have separate values, sources and completeness
+                async with http.get(url("/api/connections")) as r:
+                    conn = await r.json()
+                assert conn["credential_sources"]["lighter"] == "set"
+                assert conn["credential_sources"]["lighter-rh"] == "unset"
+                assert conn["venues"]["lighter"] is True
+                assert conn["venues"]["lighter-rh"] is False
+                async with http.post(url("/api/secrets"), json={"updates": {
+                        "LIGHTER_RH_ACCOUNT_INDEX": "0",
+                        "LIGHTER_RH_API_KEY_INDEX": "0",
+                        "LIGHTER_RH_API_PRIVATE_KEY": "0x" + "bb" * 40}}) as r:
                     assert r.status == 200
                 async with http.get(url("/api/connections")) as r:
                     conn = await r.json()
-                src = conn["credential_sources"]
-                assert src["lighter"] == "set"
-                assert src["lighter-base"] == "override"
-                async with http.get(url("/api/secrets")) as r:
-                    st = await r.json()
-                assert st["venues"]["lighter-base"] is False   # incomplete
-                assert st["venues"]["lighter-hedge"] is True   # shared wins
-
-                # --- zero is a legal value, not "unset" (spec §13.4)
-                async with http.post(url("/api/secrets"), json={
-                        "updates": {"LIGHTER_HEDGE_ACCOUNT_INDEX": "0"}}) as r:
-                    assert r.status == 200
-                async with http.get(url("/api/secrets")) as r:
-                    st = await r.json()
-                assert st["keys"]["LIGHTER_HEDGE_ACCOUNT_INDEX"]["set"] is True
+                assert conn["credential_sources"]["lighter-rh"] == "set"
+                assert conn["venues"]["lighter-rh"] is True
+                assert conn["keys"]["LIGHTER_API_PRIVATE_KEY"]["tail"] == LH[-4:]
+                assert conn["keys"]["LIGHTER_RH_API_PRIVATE_KEY"]["tail"] == "bbbb"
 
                 # --- diagnostics runs persist with their revision
                 import entropy_arb.console.ops as ops_mod

@@ -70,8 +70,8 @@ def test_secrets_key_kinds_match_env_example():
     # LIGHTER_* share the documented shared-triple section; per-leg
     # overrides are documented once — check the stem instead
     assert not missing, f".env.example missing credential keys: {missing}"
-    assert "LIGHTER_BASE_ACCOUNT_INDEX" in example
-    assert "LIGHTER_HEDGE_ACCOUNT_INDEX" in example
+    assert "LIGHTER_ACCOUNT_INDEX" in example
+    assert "LIGHTER_RH_ACCOUNT_INDEX" in example
 
 
 def test_ui_catalog_internal_consistency():
@@ -80,8 +80,7 @@ def test_ui_catalog_internal_consistency():
     keys = [v["key"] for v in cat["venues"]]
     assert keys == [k for k in venue_registry.VENUES]
     by_key = {v["key"]: v for v in cat["venues"]}
-    known_groups = set(VENUE_REQUIREMENTS) | {
-        "lighter-base", "lighter-hedge"}          # per-leg override views
+    known_groups = set(VENUE_REQUIREMENTS)
     card_ids = set()
     for card in cat["cards"]:
         card_ids.add(card["id"])

@@ -29,8 +29,8 @@
   "secrets": {
    "KEY_KINDS": {
     "ARCUS_ADDRESS": "address",
-    "ARCUS_API_KEY": "hex_key",
-    "ARCUS_SECRET_KEY": "hex_key",
+    "ARCUS_API_KEY": "ed25519_public_hex",
+    "ARCUS_SECRET_KEY": "ed25519_secret_hex",
     "BACKPACK_API_KEY": "b64_32",
     "BACKPACK_API_SECRET": "b64_32",
     "BULK_SECRET_KEY": "b58_key",
@@ -45,12 +45,9 @@
     "LIGHTER_ACCOUNT_INDEX": "int",
     "LIGHTER_API_KEY_INDEX": "int",
     "LIGHTER_API_PRIVATE_KEY": "hex_key",
-    "LIGHTER_BASE_ACCOUNT_INDEX": "int",
-    "LIGHTER_BASE_API_KEY_INDEX": "int",
-    "LIGHTER_BASE_API_PRIVATE_KEY": "hex_key",
-    "LIGHTER_HEDGE_ACCOUNT_INDEX": "int",
-    "LIGHTER_HEDGE_API_KEY_INDEX": "int",
-    "LIGHTER_HEDGE_API_PRIVATE_KEY": "hex_key",
+    "LIGHTER_RH_ACCOUNT_INDEX": "int",
+    "LIGHTER_RH_API_KEY_INDEX": "int",
+    "LIGHTER_RH_API_PRIVATE_KEY": "hex_key",
     "ONDO_API_SECRET": "token",
     "ONDO_KEY_ID": "token",
     "PERPL_API_KEY": "token",
@@ -83,9 +80,9 @@
      "LIGHTER_API_PRIVATE_KEY"
     ],
     "lighter-rh": [
-     "LIGHTER_ACCOUNT_INDEX",
-     "LIGHTER_API_KEY_INDEX",
-     "LIGHTER_API_PRIVATE_KEY"
+     "LIGHTER_RH_ACCOUNT_INDEX",
+     "LIGHTER_RH_API_KEY_INDEX",
+     "LIGHTER_RH_API_PRIVATE_KEY"
     ],
     "ondo": [
      "ONDO_KEY_ID",
@@ -259,9 +256,9 @@
   "diag:lighter-rh|base": {
    "cap_usd": 1000.0,
    "creds": {
-    "account_index": 4242,
-    "api_key_index": 3,
-    "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    "account_index": 5252,
+    "api_key_index": 4,
+    "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
    },
    "fee_bps": 0.0,
    "hl_dex": "",
@@ -280,9 +277,9 @@
   "diag:lighter-rh|hedge": {
    "cap_usd": 1000.0,
    "creds": {
-    "account_index": 4242,
-    "api_key_index": 3,
-    "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+    "account_index": 5252,
+    "api_key_index": 4,
+    "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
    },
    "fee_bps": 0.0,
    "hl_dex": "",
@@ -522,9 +519,9 @@
    "hedge": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -806,9 +803,9 @@
    "hedge": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -1083,9 +1080,9 @@
    "hedge": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -1391,9 +1388,9 @@
    "hedge": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -1680,9 +1677,9 @@
    "hedge": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -1809,9 +1806,9 @@
    "entropy": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -1849,9 +1846,9 @@
    "entropy": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -1888,9 +1885,9 @@
    "entropy": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -1926,9 +1923,9 @@
    "entropy": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -1967,9 +1964,9 @@
    "entropy": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -2015,9 +2012,9 @@
    "entropy": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -2054,9 +2051,9 @@
    "entropy": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -2093,9 +2090,9 @@
    "entropy": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -2314,9 +2311,9 @@
    "hedge": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -2643,9 +2640,9 @@
    "hedge": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",
@@ -2924,9 +2921,9 @@
    "hedge": {
     "cap_usd": 1000.0,
     "creds": {
-     "account_index": 4242,
-     "api_key_index": 3,
-     "api_private_key": "0x55555555555555555555555555555555555555555555555555555555555555555555555555555555"
+     "account_index": 5252,
+     "api_key_index": 4,
+     "api_private_key": "0x88888888888888888888888888888888888888888888888888888888888888888888888888888888"
     },
     "fee_bps": 0.0,
     "hl_dex": "",

@@ -212,13 +212,11 @@ taker 按数量匹配开平仓，展示未退出库存；双腿完成不等于�
 | Entropy（HL） | base=hl，结合 dex | HL_PRIVATE_KEY；可选 HL_ACCOUNT_ADDRESS |
 | tradeXYZ | hedge=tradexyz | 可选 HL_PRIVATE_KEY_XYZ、HL_ACCOUNT_ADDRESS_XYZ；未覆盖共享 HL |
 | Lighter 主网 | lighter | LIGHTER_ACCOUNT_INDEX、LIGHTER_API_KEY_INDEX、LIGHTER_API_PRIVATE_KEY |
-| Lighter RH | lighter-rh | 当前共用上述默认三项，不是另一份同名独立存储 |
-| Lighter 基础腿覆盖 | lighter-base 凭据检查 | LIGHTER_BASE_ACCOUNT_INDEX、LIGHTER_BASE_API_KEY_INDEX、LIGHTER_BASE_API_PRIVATE_KEY |
-| Lighter 对冲腿覆盖 | lighter-hedge 凭据检查 | LIGHTER_HEDGE_ACCOUNT_INDEX、LIGHTER_HEDGE_API_KEY_INDEX、LIGHTER_HEDGE_API_PRIVATE_KEY |
+| Lighter Robinhood | lighter-rh | LIGHTER_RH_ACCOUNT_INDEX、LIGHTER_RH_API_KEY_INDEX、LIGHTER_RH_API_PRIVATE_KEY |
 | Katana | katana | KATANA_API_KEY、KATANA_API_SECRET、KATANA_PRIVATE_KEY；可选 KATANA_WALLET |
 | Backpack | backpack | BACKPACK_API_KEY、BACKPACK_API_SECRET |
 
-BASE / HEDGE 是交易腿，不能当主网 / RH。lighter_creds() 按字段取覆盖再取默认；status 对覆盖三项“任一已填则要求完整”。不自行改变规则；不完整则提示补齐或明确删除覆盖。
+凭证按部署独立保存和读取，与 BASE / HEDGE 交易腿无关。主网只读取 LIGHTER_*，Robinhood 只读取 LIGHTER_RH_*；任一部署缺项都不能借用另一套密钥。旧按腿覆盖已废弃，升级时按实际部署迁移完整三项。
 
 tradeXYZ completeness 可能仍依赖共享 HL，不能用独立字段存在跳过现有启动检查。展示真实来源，兼容修复另有测试。
 

@@ -27,6 +27,9 @@ RE_PRIVATE_KEY = re.compile(r"^0x[0-9a-fA-F]{64}$")
 # byte) keys are accepted for backwards compatibility. The authoritative
 # check is signer.check_client() at engine start — this is shape-only.
 RE_HEX_KEY = re.compile(r"^(?:0x)?(?:[0-9a-fA-F]{64}|[0-9a-fA-F]{80})$")
+RE_ED25519_PUBLIC_HEX = re.compile(r"^(?:0x)?[0-9a-fA-F]{64}$")
+RE_ED25519_SECRET_HEX = re.compile(
+    r"^(?:0x)?(?:[0-9a-fA-F]{64}|[0-9a-fA-F]{128})$")
 RE_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 RE_INT = re.compile(r"^\d+$")
 # Katana API keys are UUIDs; the secret is an opaque token (uuid v4 at the
@@ -58,17 +61,6 @@ VENUE_REQUIREMENTS: Dict[str, List[str]] = {
     group: list(reqs)
     for group, reqs in venue_registry.venue_requirements().items()
 }
-
-# the same requirements under a per-leg override name, tried first
-_LIGHTER_LEG_REQUIREMENTS: Dict[str, List[str]] = {
-    "lighter-base": ["LIGHTER_BASE_ACCOUNT_INDEX",
-                     "LIGHTER_BASE_API_KEY_INDEX",
-                     "LIGHTER_BASE_API_PRIVATE_KEY"],
-    "lighter-hedge": ["LIGHTER_HEDGE_ACCOUNT_INDEX",
-                      "LIGHTER_HEDGE_API_KEY_INDEX",
-                      "LIGHTER_HEDGE_API_PRIVATE_KEY"],
-}
-
 
 def _hex_key_error(value: str) -> str:
     """Explain why a Lighter-style key failed the format check.
@@ -138,6 +130,11 @@ def validate_value(key: str, value: str) -> Optional[str]:
         return "expect 0x + 64 hex chars (agent wallet private key)"
     if kind == "hex_key" and not RE_HEX_KEY.match(value):
         return _hex_key_error(value)
+    if kind == "ed25519_public_hex" and not RE_ED25519_PUBLIC_HEX.match(value):
+        return "expect API Key (Ed25519 public key): 64 hex chars, optional 0x prefix"
+    if kind == "ed25519_secret_hex" and not RE_ED25519_SECRET_HEX.match(value):
+        return ("expect API Signing Key (not the wallet private key): "
+                "64 hex chars, or 128 for seed + public key; optional 0x prefix")
     if kind == "address" and not RE_ADDRESS.match(value):
         return "expect 0x + 40 hex chars (main account address)"
     if kind == "int" and not RE_INT.match(value):
@@ -218,14 +215,6 @@ class SecretsManager:
         venues = {}
         for venue, reqs in VENUE_REQUIREMENTS.items():
             venues[venue] = all(values.get(k) for k in reqs)
-        # per-leg lighter view: the leg-specific triple when present,
-        # otherwise whatever the shared triple provides (mirrors
-        # config.lighter_creds, so the live pre-flight agrees with the
-        # engine's own startup check)
-        for leg, reqs in _LIGHTER_LEG_REQUIREMENTS.items():
-            venues[leg] = (all(values.get(k) for k in reqs)
-                           if any(values.get(k) for k in reqs)
-                           else venues["lighter"])
         return {"exists": raw is not None, "keys": keys, "venues": venues}
 
     def _parse(self, raw: str) -> Dict[str, str]:

@@ -299,3 +299,70 @@ def test_console_ops_endpoints(monkeypatch):
             await server.close()
 
     asyncio.run(run())
+
+
+def test_live_start_requires_the_selected_lighter_deployment(tmp_path):
+    async def run():
+        env = tmp_path / '.env'
+        profiles = ProfilesManager(str(tmp_path), env_file=str(env))
+        secrets = SecretsManager(str(env))
+        sup = Supervisor(str(tmp_path), str(tmp_path))
+        app = create_app(sup, profiles, secrets, token='test-token')
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            profiles.save('split', VALID_YAML, 'BTC', 'lighter-rh', create=True)
+            async with aiohttp.ClientSession(
+                    headers={'Authorization': 'Bearer test-token'}) as http:
+                for present, missing in (('lighter', 'lighter-rh'),
+                                         ('lighter-rh', 'lighter')):
+                    prefix = 'LIGHTER_RH_' if present == 'lighter-rh' else 'LIGHTER_'
+                    env.write_text(
+                        f'{prefix}ACCOUNT_INDEX=0\n{prefix}API_KEY_INDEX=0\n'
+                        f'{prefix}API_PRIVATE_KEY=0x' + 'ab' * 40 + '\n')
+                    for base, hedge in ((present, missing), (missing, present)):
+                        async with http.post(server.make_url('/api/workers'), json={
+                                'profile': 'split', 'symbol': 'BTC', 'base': base,
+                                'hedge': hedge, 'mode': 'live', 'confirm': 'BTC'}) as r:
+                            assert r.status == 400
+                            assert missing in (await r.json())['error']
+                assert not sup.workers  # rejected before any process is launched
+        finally:
+            await sup.shutdown()
+            await server.close()
+    asyncio.run(run())
+
+
+def test_lighter_diagnostics_handles_native_market_fields(monkeypatch, tmp_path):
+    import entropy_arb.console.ops as ops
+    from entropy_arb.venue_lighter import LighterVenue
+    seen = []
+    for prefix in ('LIGHTER_', 'LIGHTER_RH_'):
+        monkeypatch.setenv(prefix + 'ACCOUNT_INDEX', '0')
+        monkeypatch.setenv(prefix + 'API_KEY_INDEX', '0')
+        monkeypatch.setenv(prefix + 'API_PRIVATE_KEY', 'ab' * 40)
+
+    def make_venue(conf, session, settle_timeout):
+        v = LighterVenue(conf, session, settle_timeout)
+        async def load_market():
+            v.market_id = 1
+            v.min_base = 0.01
+        def init_signer():
+            seen.append(v.profile.name)
+        async def equity(): return (100.0, 90.0)
+        async def position(): return 0.0
+        v.load_market = load_market
+        v.init_signer = init_signer
+        v.fetch_equity = equity
+        v.fetch_position = position
+        return v
+    monkeypatch.setattr(ops, '_make_venue', make_venue)
+    async def run():
+        for venue in ('lighter', 'lighter-rh'):
+            result = await ops.run_diagnostics(
+                venue, 'HYPE', env_file=str(tmp_path / '.env'), order_path=False)
+            assert result['ok'], result
+            assert [s['name'] for s in result['steps']] == [
+                'market', 'signer', 'equity', 'position']
+    asyncio.run(run())
+    assert seen == ['mainnet', 'robinhood']

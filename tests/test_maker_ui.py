@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import time
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -55,6 +56,7 @@ def test_parse_worker_cmdline():
 
 # ------------------------------------------------------------ adoption
 
+@pytest.mark.skipif(not os.path.exists("/proc/self/cmdline"), reason="worker adoption uses Linux /proc")
 def test_supervisor_adopts_running_worker(tmp_path):
     async def run():
         sup = Supervisor(str(tmp_path), str(tmp_path))
@@ -62,7 +64,9 @@ def test_supervisor_adopts_running_worker(tmp_path):
         prof = tmp_path / "katana-btc.yaml"
         prof.write_text("thresholds:\n  midline_bps: 0.0\n"
                         "  upper_bps: 1.0\n  lower_bps: 1.0\n")
-        stub = tmp_path / "stub.py"
+        # Use the isolated stub we create here, not the repository's
+        # trading entry point (which can load real credentials).
+        stub = tmp_path / "main.py"
         stub.write_text("import sys, time\n"
                         "print('worker ready', flush=True)\n"
                         "try:\n    while True: time.sleep(0.1)\n"
@@ -72,23 +76,23 @@ def test_supervisor_adopts_running_worker(tmp_path):
                 "--no-dashboard", "--log-stdout"]
         # spawned OUTSIDE the supervisor — as if the previous console owned it
         proc = await asyncio.create_subprocess_exec(
-            *argv, stdout=asyncio.subprocess.DEVNULL)
-        await asyncio.sleep(0.3)
-
-        adopted = sup.adopt_running()
-        assert adopted == 1, "the running worker was not re-adopted"
-        w = next(iter(sup.workers.values()))
-        assert w.adopted_pid == proc.pid and w.running
-        st = sup.status(w.id)
-        assert st["adopted"] is True and st["state"] == "running"
-
-        # adoption is idempotent
-        assert sup.adopt_running() == 0
-
-        # and an adopted worker can be stopped through the console
-        ok = await sup.stop(w.id, grace=5)
-        assert ok and not w.running
-        await sup.shutdown()
+            *argv, cwd=str(tmp_path), stdout=asyncio.subprocess.PIPE)
+        try:
+            assert await asyncio.wait_for(proc.stdout.readline(), 5)==b"worker ready\n"
+            adopted = sup.adopt_running()
+            assert adopted == 1, "the running worker was not re-adopted"
+            w = next(iter(sup.workers.values()))
+            assert w.adopted_pid == proc.pid and w.running
+            st = sup.status(w.id)
+            assert st["adopted"] is True and st["state"] == "running"
+            assert sup.adopt_running() == 0
+            ok = await sup.stop(w.id, grace=5)
+            assert ok and not w.running
+        finally:
+            if proc.returncode is None:
+                proc.terminate()
+            await proc.wait()
+            await sup.shutdown()
 
     asyncio.run(run())
 

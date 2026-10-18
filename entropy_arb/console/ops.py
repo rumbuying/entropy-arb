@@ -53,8 +53,8 @@ def _diag_conf(venue: str, symbol: str, role: str, dex: str, env_file: str) \
         -> VenueConf:
     """The VenueConf the engine would build for this leg, straight from .env
     (registry-driven: label/kind/creds resolution all come from the venue's
-    spec; role only matters for Lighter's per-leg credential overrides and
-    the trade.xyz legacy mapping — see venue_registry.diag_conf)."""
+    spec; role selects the trade.xyz legacy mapping. Lighter credentials
+    follow the deployment — see venue_registry.diag_conf)."""
     return venue_registry.diag_conf(venue, symbol, role, dex)
 
 
@@ -153,9 +153,11 @@ async def run_diagnostics(venue: str, symbol: str, *, env_file: str,
                         session, settle_timeout=5.0)
         try:
             await v.load_market()
-            step("market", True,
-                 f"{v.market} tick={v.tick_size} step={v.step_size} "
-                 f"min={v.min_base}")
+            detail = f"{v.conf.symbol} min={v.min_base}"
+            for attr, label in (("tick_size", "tick"), ("step_size", "step")):
+                if hasattr(v, attr):
+                    detail += f" {label}={getattr(v, attr)}"
+            step("market", True, detail)
         except Exception as e:
             step("market", False, repr(e))
             return {"ok": False, "steps": steps}

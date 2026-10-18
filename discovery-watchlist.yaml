@@ -1,6 +1,5 @@
 symbols:
 - symbol: NEAR
-- symbol: PENDLE
 venues:
 - hl
 - hl:io
@@ -15,9 +14,9 @@ venues:
 depth_levels: 3
 max_spread_bps: 50
 rescan_minutes: 30
-max_feeds: 24
+max_feeds: 32
 scoring:
-  promote: true
+  promote: false
   min_minutes: 60
   dead_bps: 2.0
   provisional_hours: 24

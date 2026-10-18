@@ -130,6 +130,16 @@
 > backpack 两条候选线的 profile 已备好：`profiles/lighter-rh-hype-backpack.yaml`
 > （BP 挂单+rh 对冲）、`profiles/backpack-hype-katana.yaml`（katana 挂单+BP 对冲）。
 
+### Lighter 凭证按部署独立保存（2026-10-18）
+
+- API Keys 页分别提供「Lighter 主网」和「Lighter Robinhood」两张可编辑卡片。
+- 主网使用 `LIGHTER_ACCOUNT_INDEX / LIGHTER_API_KEY_INDEX / LIGHTER_API_PRIVATE_KEY`；
+  Robinhood 使用独立的 `LIGHTER_RH_ACCOUNT_INDEX / LIGHTER_RH_API_KEY_INDEX / LIGHTER_RH_API_PRIVATE_KEY`。
+- 根据每条腿选择的部署读取对应三项，基础腿和对冲腿换位不改变密钥来源；缺项拒绝实盘启动，不跨部署回退。
+- 旧 `LIGHTER_BASE_* / LIGHTER_HEDGE_*` 不再读取；升级前将完整三项迁到实际部署。
+  旧共用 `LIGHTER_*` 如为 Robinhood 创建，迁入 `LIGHTER_RH_*`，主网另行录入。
+- 发布只重启控制台，在跑 worker 由新控制台收编，继续持有原来的凭证；不会自动重启实盘策略。
+
 ### 2.3 日常例行
 
 - **每周**：Analyzer `hours=24` 复测各 live 线（阈值漂移是最大的慢性亏损源；

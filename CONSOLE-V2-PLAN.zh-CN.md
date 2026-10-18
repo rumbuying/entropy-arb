@@ -114,8 +114,8 @@ ZEC 示例复盘可使用已有事实：挂单卖价 1599.49，挂单时 RH 可�
 |---|---|---|
 | Entropy（HL） | `HL_PRIVATE_KEY`、可选 `HL_ACCOUNT_ADDRESS` | 保留 dex 和市场诊断入口 |
 | tradeXYZ（HL） | `HL_PRIVATE_KEY_XYZ`、可选 `HL_ACCOUNT_ADDRESS_XYZ` | 显示当前使用独立密钥还是共享 HL 配置 |
-| Lighter / Lighter RH | `LIGHTER_ACCOUNT_INDEX`、`LIGHTER_API_KEY_INDEX`、`LIGHTER_API_PRIVATE_KEY` | 当前共享默认配置；主网、RH 各自诊断，不能因默认字段齐全就宣称两个部署均可用 |
-| Lighter 按交易腿覆盖 | `LIGHTER_BASE_ACCOUNT_INDEX`、`LIGHTER_BASE_API_KEY_INDEX`、`LIGHTER_BASE_API_PRIVATE_KEY`；对应的 `LIGHTER_HEDGE_*` 三项 | 放在“高级：按交易腿覆盖”中；显示每条策略最终采用的配置来源。BASE / HEDGE 是交易腿，不是主网 / RH |
+| Lighter 主网 | `LIGHTER_ACCOUNT_INDEX`、`LIGHTER_API_KEY_INDEX`、`LIGHTER_API_PRIVATE_KEY` | 主网独立凭证、独立诊断 |
+| Lighter Robinhood | `LIGHTER_RH_ACCOUNT_INDEX`、`LIGHTER_RH_API_KEY_INDEX`、`LIGHTER_RH_API_PRIVATE_KEY` | Robinhood 独立凭证、独立诊断，缺项不回退主网 |
 | Katana | `KATANA_API_KEY`、`KATANA_API_SECRET`、`KATANA_PRIVATE_KEY`、可选 `KATANA_WALLET` | 区分 API 鉴权与钱包签名字段 |
 | Backpack | `BACKPACK_API_KEY`、`BACKPACK_API_SECRET` | 保留独立接入与诊断 |
 

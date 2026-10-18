@@ -14,6 +14,10 @@ const GROUPS = [
     role: "hedge",
     keys: ["LIGHTER_ACCOUNT_INDEX", "LIGHTER_API_KEY_INDEX",
            "LIGHTER_API_PRIVATE_KEY"] },
+  { id: "lighter-rh", title: "secrets.title.lighter_rh", venue: "lighter-rh",
+    role: "hedge",
+    keys: ["LIGHTER_RH_ACCOUNT_INDEX", "LIGHTER_RH_API_KEY_INDEX",
+           "LIGHTER_RH_API_PRIVATE_KEY"] },
   { id: "katana", title: "secrets.title.katana", venue: "katana",
     role: "hedge",
     keys: ["KATANA_API_KEY", "KATANA_API_SECRET", "KATANA_PRIVATE_KEY",
@@ -58,7 +62,7 @@ export function initSecrets(pane, shell) {
         : g.id === "katana" ? ["katana"]
         : g.id === "backpack" ? ["backpack"]
         : g.id === "bulk" ? ["bulk"]
-        : ["lighter", "lighter-rh"];
+        : [g.id];
       for (const v of relevant) {
         const c = document.createElement("span");
         c.className = "badge " + (st.venues[v] ? "running" : "stale");
@@ -96,7 +100,7 @@ export function initSecrets(pane, shell) {
         flags.set(key, status);
       }
 
-      if (g.id === "lighter") {
+      if (g.id === "lighter" || g.id === "lighter-rh") {
         const note = document.createElement("div");
         note.className = "note";
         note.textContent = t("secrets.deployment_note");

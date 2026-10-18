@@ -59,7 +59,7 @@ def test_secrets_roundtrip_and_masking(tmp_path):
     assert mode == 0o600
     assert st is not None
     st2 = sm.status()
-    assert st2["venues"]["lighter"] and st2["venues"]["lighter-rh"]
+    assert st2["venues"]["lighter"] and not st2["venues"]["lighter-rh"]
     # audit never contains values
     assert all("cddc" not in a for a in audit)
     assert any("HL_ACCOUNT_ADDRESS set ····" in a for a in audit)
@@ -70,36 +70,26 @@ def test_secrets_roundtrip_and_masking(tmp_path):
     assert sm.status()["venues"]["lighter"] is False
 
 
-def test_secrets_per_leg_lighter_venues(tmp_path):
-    """The console's live pre-flight must see the per-leg override the same
-    way config.creds resolves it."""
+def test_secrets_lighter_deployments_are_independent(tmp_path):
     env = tmp_path / ".env"
-    shared = ("LIGHTER_ACCOUNT_INDEX=11111\n"
-              "LIGHTER_API_KEY_INDEX=7\n"
-              "LIGHTER_API_PRIVATE_KEY=0x" + "a" * 80 + "\n")
-    base = ("LIGHTER_BASE_ACCOUNT_INDEX=12345\n"
-            "LIGHTER_BASE_API_KEY_INDEX=3\n"
-            "LIGHTER_BASE_API_PRIVATE_KEY=0x" + "b" * 80 + "\n")
+    main = ("LIGHTER_ACCOUNT_INDEX=11111\nLIGHTER_API_KEY_INDEX=7\n"
+            "LIGHTER_API_PRIVATE_KEY=0x" + "a" * 80 + "\n")
+    rh = ("LIGHTER_RH_ACCOUNT_INDEX=0\nLIGHTER_RH_API_KEY_INDEX=0\n"
+          "LIGHTER_RH_API_PRIVATE_KEY=0x" + "b" * 80 + "\n")
+    env.write_text(main)
+    sm = SecretsManager(str(env))
+    assert sm.status()["venues"]["lighter"]
+    assert not sm.status()["venues"]["lighter-rh"]
+    env.write_text(main + rh)
+    assert sm.status()["venues"]["lighter"]
+    assert sm.status()["venues"]["lighter-rh"]
+    sm.update({"LIGHTER_RH_API_PRIVATE_KEY": ""})
+    assert sm.status()["venues"]["lighter"]
+    assert not sm.status()["venues"]["lighter-rh"]
+    env.write_text(rh)
+    assert not sm.status()["venues"]["lighter"]
+    assert sm.status()["venues"]["lighter-rh"]
 
-    # only the shared triple: both legs fall back to it
-    env.write_text(shared)
-    sm = SecretsManager(str(env), audit_log=None)
-    st = sm.status()
-    assert st["venues"]["lighter"] is True
-    assert st["venues"]["lighter-base"] is True
-    assert st["venues"]["lighter-hedge"] is True
-
-    # leg-specific base set alongside the shared hedge triple
-    env.write_text(shared + base)
-    st = sm.status()
-    assert st["venues"]["lighter-base"] is True
-    assert st["venues"]["lighter-hedge"] is True
-    assert st["keys"]["LIGHTER_BASE_ACCOUNT_INDEX"]["set"] is True
-
-    # a partial leg-specific triple does not silently pass as complete
-    env.write_text(shared + "LIGHTER_BASE_ACCOUNT_INDEX=12345\n")
-    st = sm.status()
-    assert st["venues"]["lighter-base"] is False
 
 
 def test_secrets_opaque_token_accepts_base64_and_jwt(tmp_path):
@@ -118,6 +108,30 @@ def test_secrets_opaque_token_accepts_base64_and_jwt(tmp_path):
     assert validate_value("KATANA_API_SECRET", "   ") is not None
     err = validate_value("KATANA_API_SECRET", "short")
     assert err and "truncated" in err
+
+
+def test_arcus_credentials_validate_ed25519_lengths(tmp_path):
+    from entropy_arb.console.secrets import validate_value
+    for prefix in ("", "0x"):
+        assert validate_value("ARCUS_API_KEY", prefix + "ab" * 32) is None
+        for size in (32, 64):
+            assert validate_value("ARCUS_SECRET_KEY", prefix + "cd" * size) is None
+        # Lighter's 40-byte format is not an Ed25519 key.
+        for key in ("ARCUS_API_KEY", "ARCUS_SECRET_KEY"):
+            value = prefix + "ef" * 40
+            error = validate_value(key, value)
+            assert error and value not in error
+        assert validate_value("ARCUS_API_KEY", prefix + "ab" * 64)
+
+    sm = SecretsManager(str(tmp_path / ".env"))
+    result = sm.update({"ARCUS_ADDRESS": "0x" + "aa" * 20,
+                        "ARCUS_API_KEY": "ab" * 32,
+                        "ARCUS_SECRET_KEY": "cd" * 40})
+    assert not result["ok"]
+    assert not (tmp_path / ".env").exists()   # malformed batch writes nothing
+    assert sm.update({"ARCUS_ADDRESS": "0x" + "aa" * 20,
+                      "ARCUS_API_KEY": "ab" * 32})["ok"]
+    assert not sm.status()["venues"]["arcus"]  # public key alone is incomplete
 
 
 # ------------------------------------------------------------- profiles

@@ -33,11 +33,10 @@ _ORDER: Tuple[str, ...] = ("hl", "lighter", "lighter-rh", "tradexyz",
 @dataclass(frozen=True)
 class CredField:
     """One credential input: the field it fills on the venue's creds
-    dataclass, the env fallback chain (first SET variable wins — explicit
-    per-leg variables beat shared ones), the secrets-page format kind
+    dataclass, the env fallback chain (first SET variable wins), the format kind
     (an id into console.secrets' validator table) and whether trading
-    requires it. ``{LEG}`` in a variable name expands to BASE/HEDGE for
-    venues whose two deployments are separate accounts (Lighter)."""
+    requires it. Optional ``{LEG}`` placeholders expand to BASE/HEDGE.
+    Lighter deployments use disjoint variable names, without fallbacks."""
     field: str
     env: Tuple[str, ...]
     key_kind: str
@@ -91,12 +90,17 @@ XYZ_CREDS = (
 )
 LIGHTER_CREDS = (
     CredField("account_index",
-              ("LIGHTER_{LEG}_ACCOUNT_INDEX", "LIGHTER_ACCOUNT_INDEX"), "int"),
+              ("LIGHTER_ACCOUNT_INDEX",), "int"),
     CredField("api_key_index",
-              ("LIGHTER_{LEG}_API_KEY_INDEX", "LIGHTER_API_KEY_INDEX"), "int"),
+              ("LIGHTER_API_KEY_INDEX",), "int"),
     CredField("api_private_key",
-              ("LIGHTER_{LEG}_API_PRIVATE_KEY", "LIGHTER_API_PRIVATE_KEY"),
+              ("LIGHTER_API_PRIVATE_KEY",),
               "hex_key"),
+)
+LIGHTER_RH_CREDS = (
+    CredField("account_index", ("LIGHTER_RH_ACCOUNT_INDEX",), "int"),
+    CredField("api_key_index", ("LIGHTER_RH_API_KEY_INDEX",), "int"),
+    CredField("api_private_key", ("LIGHTER_RH_API_PRIVATE_KEY",), "hex_key"),
 )
 
 VENUES: Dict[str, VenueSpec] = {s.key: s for s in (
@@ -126,9 +130,9 @@ VENUES: Dict[str, VenueSpec] = {s.key: s for s in (
         maker_capable=False, funding_supported=False, in_discovery=True,
         leg_fee_bps=0.0, opm_base=120, opm_hedge=30,
         discovery_fee_bps=0.0,
-        creds_dataclass="LighterCreds", creds_group="lighter-rh", creds=LIGHTER_CREDS,
-        requirements=("LIGHTER_ACCOUNT_INDEX", "LIGHTER_API_KEY_INDEX",
-                      "LIGHTER_API_PRIVATE_KEY"),
+        creds_dataclass="LighterCreds", creds_group="lighter-rh", creds=LIGHTER_RH_CREDS,
+        requirements=("LIGHTER_RH_ACCOUNT_INDEX", "LIGHTER_RH_API_KEY_INDEX",
+                      "LIGHTER_RH_API_PRIVATE_KEY"),
         module="entropy_arb.venue_lighter"),
     VenueSpec(
         key="tradexyz", kind="hl", label="XYZ", label_hedge=None,
@@ -217,8 +221,8 @@ VENUES: Dict[str, VenueSpec] = {s.key: s for s in (
         creds_dataclass="ArcusCreds", creds_group="arcus",
         creds=(
             CredField("address", ("ARCUS_ADDRESS",), "address"),
-            CredField("api_key", ("ARCUS_API_KEY",), "hex_key"),
-            CredField("secret_key", ("ARCUS_SECRET_KEY",), "hex_key"),
+            CredField("api_key", ("ARCUS_API_KEY",), "ed25519_public_hex"),
+            CredField("secret_key", ("ARCUS_SECRET_KEY",), "ed25519_secret_hex"),
         ),
         requirements=("ARCUS_ADDRESS", "ARCUS_API_KEY", "ARCUS_SECRET_KEY"),
         module="entropy_arb.venue_arcus"),
@@ -459,35 +463,21 @@ UI_CARDS: Dict[str, list] = {
                   "LIGHTER_API_PRIVATE_KEY"],
          "roles": True,
          "diag": {"venue": "lighter"},
-         "affects": {"base": ["lighter", "lighter-rh"],
-                     "hedge": ["lighter", "lighter-rh"]},
-         "rel": ["lighter", "lighter-rh"],
+         "source": "lighter",
+         "affects": {"base": ["lighter"], "hedge": ["lighter"]},
+         "rel": ["lighter"],
          "deploymentNote": True},
-        {"id": "lighter-base", "order": 50, "title_key": "v2.conn.title.base",
-         "keys": ["LIGHTER_BASE_ACCOUNT_INDEX",
-                  "LIGHTER_BASE_API_KEY_INDEX",
-                  "LIGHTER_BASE_API_PRIVATE_KEY"],
-         "completeness": "lighter-base",
-         "diag": {"venue": "lighter", "role": "base"},
-         "affects": {"base": ["lighter", "lighter-rh"]},
-         "rel": ["lighter-base"]},
-        {"id": "lighter-hedge", "order": 60, "title_key": "v2.conn.title.hedge",
-         "keys": ["LIGHTER_HEDGE_ACCOUNT_INDEX",
-                  "LIGHTER_HEDGE_API_KEY_INDEX",
-                  "LIGHTER_HEDGE_API_PRIVATE_KEY"],
-         "completeness": "lighter-hedge",
-         "diag": {"venue": "lighter", "role": "hedge"},
-         "affects": {"hedge": ["lighter", "lighter-rh"]},
-         "rel": ["lighter-hedge"]},
     ],
     "lighter-rh": [{
         "id": "lighter-rh", "order": 40, "title_key": "v2.conn.title.rh",
-        "keys": [],
-        "sharedView": True,
+        "keys": ["LIGHTER_RH_ACCOUNT_INDEX", "LIGHTER_RH_API_KEY_INDEX",
+                 "LIGHTER_RH_API_PRIVATE_KEY"],
+        "source": "lighter-rh",
+        "roles": True,
         "diag": {"venue": "lighter-rh"},
-        "affects": {"base": ["lighter", "lighter-rh"],
-                    "hedge": ["lighter", "lighter-rh"]},
-        "rel": ["lighter", "lighter-rh"],
+        "affects": {"base": ["lighter-rh"], "hedge": ["lighter-rh"]},
+        "rel": ["lighter-rh"],
+        "deploymentNote": True,
     }],
     "katana": [{
         "id": "katana", "order": 70, "title_key": "secrets.title.katana",
@@ -521,6 +511,12 @@ UI_CARDS: Dict[str, list] = {
     "arcus": [{
         "id": "arcus", "order": 110, "title_key": "secrets.title.arcus",
         "keys": ["ARCUS_ADDRESS", "ARCUS_API_KEY", "ARCUS_SECRET_KEY"],
+        "key_help": {
+            "ARCUS_ADDRESS": "secrets.arcus.address",
+            "ARCUS_API_KEY": "secrets.arcus.api_key",
+            "ARCUS_SECRET_KEY": "secrets.arcus.secret_key",
+        },
+        "note_key": "secrets.arcus.note",
         "diag": {"venue": "arcus"},
         "affects": {"base": ["arcus"], "hedge": ["arcus"]},
         "rel": ["arcus"],
@@ -538,8 +534,6 @@ UI_CARDS: Dict[str, list] = {
 # pre-flight lines): lighter's per-leg override groups, hl's "entropy"
 NEED_GROUP: Dict[str, dict] = {
     "hl": {"base": "entropy"},
-    "lighter": {"base": "lighter-base", "hedge": "lighter-hedge"},
-    "lighter-rh": {"base": "lighter-base", "hedge": "lighter-hedge"},
 }
 
 

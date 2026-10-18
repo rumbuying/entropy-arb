@@ -595,39 +595,25 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         return web.json_response(out)
 
     def _credential_sources(secrets_mgr):
-        """Which stored triple each deployment/role actually resolves to —
-        mirrors config.lighter_creds / HLCreds fallback order."""
+        """Stored credential source per deployment; Lighter never crosses deployments."""
         values = secrets_mgr._raw()
         parsed = secrets_mgr._parse(values) if values else {}
 
         def has(*keys):
             return any(parsed.get(k) for k in keys)
 
-        def src(own, shared):
-            if has(*own):
-                return "override"
-            return "shared" if has(*shared) else "unset"
-
         return {
             "entropy": "set" if has("HL_PRIVATE_KEY") else "unset",
             "tradexyz": ("override" if has("HL_PRIVATE_KEY_XYZ")
                          else "shared" if has("HL_PRIVATE_KEY") else "unset"),
-            "lighter-base": src(("LIGHTER_BASE_ACCOUNT_INDEX",
-                                 "LIGHTER_BASE_API_KEY_INDEX",
-                                 "LIGHTER_BASE_API_PRIVATE_KEY"),
-                                ("LIGHTER_ACCOUNT_INDEX",
-                                 "LIGHTER_API_KEY_INDEX",
-                                 "LIGHTER_API_PRIVATE_KEY")),
-            "lighter-hedge": src(("LIGHTER_HEDGE_ACCOUNT_INDEX",
-                                  "LIGHTER_HEDGE_API_KEY_INDEX",
-                                  "LIGHTER_HEDGE_API_PRIVATE_KEY"),
-                                 ("LIGHTER_ACCOUNT_INDEX",
-                                  "LIGHTER_API_KEY_INDEX",
-                                  "LIGHTER_API_PRIVATE_KEY")),
             "lighter": ("set" if has("LIGHTER_ACCOUNT_INDEX",
                                      "LIGHTER_API_KEY_INDEX",
                                      "LIGHTER_API_PRIVATE_KEY")
                         else "unset"),
+            "lighter-rh": ("set" if has("LIGHTER_RH_ACCOUNT_INDEX",
+                                        "LIGHTER_RH_API_KEY_INDEX",
+                                        "LIGHTER_RH_API_PRIVATE_KEY")
+                           else "unset"),
         }
 
     # ------------------------------------------------------------- workers
@@ -663,22 +649,16 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         needed = {k: venue_registry.spec(k).creds_group
                   for k in venue_registry.hedge_venues()}
         if mode == "live":
-            # the entropy leg's credential requirement follows --base; a
-            # Lighter leg uses its per-leg override when one is present
+            # Credential requirements follow the selected deployment on each leg.
             if base == "hl":
                 req_entropy = "entropy"
-            elif base in ("lighter", "lighter-rh"):
-                req_entropy = "lighter-base"
             else:
                 req_entropy = needed.get(base)
             if req_entropy and not creds.get(req_entropy, False):
                 return web.json_response(
                     {"error": f"{base} base-leg credentials incomplete — add "
                               f"keys first"}, status=400)
-            if hedge in ("lighter", "lighter-rh"):
-                req_key = "lighter-hedge"
-            else:
-                req_key = needed.get(hedge)
+            req_key = needed.get(hedge)
             if req_key and not creds.get(req_key, False):
                 return web.json_response(
                     {"error": f"{hedge} credentials incomplete — add keys "
@@ -1455,9 +1435,13 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 fh.seek(max(0, size - 512 * 1024))
                 chunk = fh.read()
             lines = chunk.splitlines()
-            if size > 512 * 1024 and lines:
-                lines = lines[1:]          # drop the partial first line
-                truncated = True
+            if lines:
+                # Drop the first line either way: a partial row when the
+                # tail cut mid-file, or the header row itself when the whole
+                # (small) file fit in the window — otherwise the header is
+                # returned as a fake data row (seen on tiny trade CSVs).
+                lines = lines[1:]
+                truncated = size > 512 * 1024
             data_lines = [ln for ln in lines if ln.strip()]
             for ln in data_lines[-limit:][::-1]:    # newest first
                 try:

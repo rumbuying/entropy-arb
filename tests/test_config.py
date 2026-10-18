@@ -200,51 +200,54 @@ def test_lighter_base_needs_creds():
     assert not cfg.creds_complete
 
 
-def test_creds_per_leg(tmp_path):
-    """LIGHTER_BASE_*/LIGHTER_HEDGE_* override the shared LIGHTER_* triple so
-    a Lighter-mainnet base leg can coexist with a lighter-rh hedge leg."""
+def test_lighter_credentials_follow_deployment_on_either_leg(tmp_path, monkeypatch):
+    for key in list(os.environ):
+        if key.startswith("LIGHTER_"):
+            monkeypatch.delenv(key)
     env = tmp_path / ".env"
     env.write_text(
-        "LIGHTER_ACCOUNT_INDEX=11111\n"
-        "LIGHTER_API_KEY_INDEX=7\n"
+        "LIGHTER_ACCOUNT_INDEX=11111\nLIGHTER_API_KEY_INDEX=7\n"
         "LIGHTER_API_PRIVATE_KEY=0x" + "a" * 80 + "\n"
-        "LIGHTER_BASE_ACCOUNT_INDEX=12345\n"
-        "LIGHTER_BASE_API_KEY_INDEX=3\n"
-        "LIGHTER_BASE_API_PRIVATE_KEY=0x" + "b" * 80 + "\n")
+        "LIGHTER_RH_ACCOUNT_INDEX=22222\nLIGHTER_RH_API_KEY_INDEX=3\n"
+        "LIGHTER_RH_API_PRIVATE_KEY=0x" + "b" * 80 + "\n"
+        "LIGHTER_BASE_ACCOUNT_INDEX=99999\nLIGHTER_HEDGE_API_KEY_INDEX=9\n")
     saved = os.environ.copy()
     try:
-        # base leg picks the leg-specific triple
-        cfg = load_config(write_tmp(MINIMAL), str(env), symbol="ETH",
-                          hedge_venue="katana", base_venue="lighter")
-        assert cfg.entropy.creds.account_index == 12345
-        assert cfg.entropy.creds.api_key_index == 3
-        assert cfg.entropy.creds.api_private_key == "0x" + "b" * 80
-        assert cfg.entropy.creds.complete
-        # the rh worker keeps reading the shared triple (no cross-talk)
-        cfg2 = load_config(write_tmp(MINIMAL), str(env), symbol="ANTH",
-                           hedge_venue="lighter-rh", base_venue="hl")
-        assert cfg2.hedge.creds.account_index == 11111
-        assert cfg2.hedge.creds.api_private_key == "0x" + "a" * 80
+        for base, hedge in (("lighter", "lighter-rh"), ("lighter-rh", "lighter")):
+            cfg = load_config(write_tmp(MINIMAL), str(env), symbol="ETH",
+                              hedge_venue=hedge, base_venue=base)
+            for venue, leg in ((base, cfg.entropy), (hedge, cfg.hedge)):
+                rh = venue == "lighter-rh"
+                assert leg.creds.account_index == (22222 if rh else 11111)
+                assert leg.creds.api_key_index == (3 if rh else 7)
+                assert leg.creds.api_private_key == "0x" + ("b" if rh else "a") * 80
+                assert leg.creds.complete
     finally:
         os.environ.clear()
         os.environ.update(saved)
 
 
-def test_creds_fall_back_to_shared(tmp_path):
-    env = tmp_path / ".env"
-    env.write_text(
-        "LIGHTER_ACCOUNT_INDEX=11111\n"
-        "LIGHTER_API_KEY_INDEX=7\n"
-        "LIGHTER_API_PRIVATE_KEY=0x" + "a" * 80 + "\n")
-    saved = os.environ.copy()
-    try:
-        cfg = load_config(write_tmp(MINIMAL), str(env), symbol="ETH",
-                          hedge_venue="katana", base_venue="lighter")
-        assert cfg.entropy.creds.account_index == 11111
-        assert cfg.entropy.creds.complete
-    finally:
-        os.environ.clear()
-        os.environ.update(saved)
+def test_lighter_missing_deployment_never_borrows_other_credentials(tmp_path, monkeypatch):
+    from entropy_arb.venue_registry import creds_from_env, spec
+    for key in list(os.environ):
+        if key.startswith("LIGHTER_"):
+            monkeypatch.delenv(key)
+    for suffix, value in (("ACCOUNT_INDEX", "11111"), ("API_KEY_INDEX", "7"),
+                          ("API_PRIVATE_KEY", "0x" + "a" * 80)):
+        monkeypatch.setenv("LIGHTER_" + suffix, value)
+        monkeypatch.setenv("LIGHTER_BASE_" + suffix, value)
+        monkeypatch.setenv("LIGHTER_HEDGE_" + suffix, value)
+    for role in ("base", "hedge"):
+        assert creds_from_env(spec("lighter"), role).complete
+        rh = creds_from_env(spec("lighter-rh"), role)
+        assert not rh.complete and rh.api_private_key is None
+    monkeypatch.setenv("LIGHTER_RH_ACCOUNT_INDEX", "0")
+    assert not creds_from_env(spec("lighter-rh"), "base").complete
+    monkeypatch.setenv("LIGHTER_RH_API_KEY_INDEX", "0")
+    monkeypatch.setenv("LIGHTER_RH_API_PRIVATE_KEY", "0x" + "b" * 80)
+    monkeypatch.delenv("LIGHTER_API_PRIVATE_KEY")
+    assert creds_from_env(spec("lighter-rh"), "base").complete
+    assert not creds_from_env(spec("lighter"), "hedge").complete
 
 
 if __name__ == "__main__":

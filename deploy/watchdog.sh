@@ -223,37 +223,41 @@ if addr:
                        % (tag_dex, p.get("coin"), mark * abs(szi) / av, ml,
                           mark * abs(szi) / ml, av))
 
-idx = env("LIGHTER_ACCOUNT_INDEX")
-if idx:
-    try:
-        acct = (get("%s?by=index&value=%s" % (RH, idx)).get("accounts") or [{}])[0]
-    except Exception:
-        acct = {}
-    try:
-        coll = float(acct.get("collateral") or 0)
-        avail = float(acct.get("available_balance") or 0)
-    except (TypeError, ValueError):
-        coll = avail = 0.0
-    if coll > 0 and (coll - avail) / coll >= margin_warn:
-        report("lighter-margin:%s" % idx,
-               "Lighter/%s 保证金已用 %.0f%%（$%.2f / $%.2f）"
-               % (idx, (coll - avail) / coll * 100, coll - avail, coll))
-    for p in acct.get("positions") or []:
+for venue, prefix, endpoint in (
+    ("lighter", "LIGHTER_", "https://mainnet.zklighter.elliot.ai/api/v1/account"),
+    ("lighter-rh", "LIGHTER_RH_", RH),
+):
+    idx = env(prefix + "ACCOUNT_INDEX")
+    if idx:
         try:
-            qty = float(p.get("position") or 0)
-            sign = float(p.get("sign") or 1)
-            liq = float(p.get("liquidation_price") or 0)
-            mark = abs(float(p.get("position_value") or 0) / qty)
-        except (TypeError, ValueError, ZeroDivisionError):
-            continue
-        if not qty or liq <= 0 or mark <= 0:
-            continue
-        d = dist_bps(mark, liq, sign)
-        if d < liq_warn:
-            report("lighter-liq:%s" % p.get("symbol"),
-                   "Lighter/%s 距强平仅 %.1f%%（现价 %.2f，清算 %.2f）"
-                   "— 考虑减仓或补保证金"
-                   % (p.get("symbol"), d / 100, mark, liq))
+            acct = (get("%s?by=index&value=%s" % (endpoint, idx)).get("accounts") or [{}])[0]
+        except Exception:
+            acct = {}
+        try:
+            coll = float(acct.get("collateral") or 0)
+            avail = float(acct.get("available_balance") or 0)
+        except (TypeError, ValueError):
+            coll = avail = 0.0
+        if coll > 0 and (coll - avail) / coll >= margin_warn:
+            report("%s-margin:%s" % (venue, idx),
+                   "%s/%s 保证金已用 %.0f%%（$%.2f / $%.2f）"
+                   % (venue, idx, (coll - avail) / coll * 100, coll - avail, coll))
+        for p in acct.get("positions") or []:
+            try:
+                qty = float(p.get("position") or 0)
+                sign = float(p.get("sign") or 1)
+                liq = float(p.get("liquidation_price") or 0)
+                mark = abs(float(p.get("position_value") or 0) / qty)
+            except (TypeError, ValueError, ZeroDivisionError):
+                continue
+            if not qty or liq <= 0 or mark <= 0:
+                continue
+            d = dist_bps(mark, liq, sign)
+            if d < liq_warn:
+                report("%s-liq:%s:%s" % (venue, idx, p.get("symbol")),
+                       "%s/%s 距强平仅 %.1f%%（现价 %.2f，清算 %.2f）"
+                       "— 考虑减仓或补保证金"
+                       % (venue, p.get("symbol"), d / 100, mark, liq))
 
 for tag, text in out:
     print("%s\t%s" % (tag, text))

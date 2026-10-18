@@ -8,9 +8,7 @@
 
 // Credential cards come from /api/venue-catalog (registry-derived) —
 // fetching a new venue's keys/diag mapping from the backend table, not from
-// this file. The per-card special notes below (shared-view source line,
-// deployment note) are keyed by card id and only exist for the Lighter
-// family's override semantics.
+// this file. Help text and deployment notes are also supplied by the catalog.
 
 import { getJSON, postJSON } from "/static/api.js";
 import { t, getLang } from "/static/i18n.js";
@@ -53,7 +51,7 @@ export async function mount(container) {
     focusHold = cardsBox.contains(document.activeElement);
   });
 
-  function keyRow(key, st) {
+  function keyRow(key, st, helpKey) {
     const info = (st.keys || {})[key] || { set: false };
     const input = el("input", { type: "password", autocomplete: "off" });
     input.placeholder = t("v2.conn.leave_blank");
@@ -86,6 +84,11 @@ export async function mount(container) {
       el("div", { class: "num v2-keyname", text: key }),
       el("div", { class: "v2-keyedit" }, input, status),
       delLabel);
+    if (helpKey) {
+      const hint = el("div", { class: "note", id: `help-${key}` }, t(helpKey));
+      row.querySelector(".v2-keyedit").appendChild(hint);
+      input.setAttribute("aria-describedby", hint.id);
+    }
     return row;
   }
 
@@ -286,31 +289,24 @@ export async function mount(container) {
       c.appendChild(chips);
 
       // resolved credential source for this deployment/role
-      if (g.id === "lighter-rh") {
-        c.appendChild(el("div", { class: "note" },
-          t("v2.conn.rh_shared")));
-        const srcRow = el("div", { class: "note" },
-          `${t("v2.conn.source")}: ${t("v2.conn.src_" + (sources["lighter-hedge"] === "override" ? "override" : sources["lighter"] === "set" ? "shared" : "unset"))}`);
-        c.appendChild(srcRow);
-      } else if (g.source || g.completeness) {
-        const srcKey = g.source || g.completeness;
-        const s = sources[srcKey];
+      if (g.source) {
+        const s = sources[g.source];
         if (s) {
           c.appendChild(el("div", { class: "note" },
             `${t("v2.conn.source")}: ${t("v2.conn.src_" + s)}`));
-        }
-        if (g.completeness) {
-          c.appendChild(el("div", { class: "note" },
-            t("v2.conn.override_rule")));
         }
       }
 
       // editable key rows
       if (g.keys) {
-        for (const key of g.keys) c.appendChild(keyRow(key, st));
+        for (const key of g.keys) c.appendChild(keyRow(key, st, g.key_help?.[key]));
         c.appendChild(el("div", { style: "margin-top:8px" },
           el("button", { class: "primary", text: t("secrets.save"),
             onclick: () => saveDialog(g, st) })));
+      }
+      if (g.note_key) {
+        c.appendChild(el("div", { class: "note", style: "margin-top:6px" },
+          t(g.note_key)));
       }
       if (g.deploymentNote) {
         c.appendChild(el("div", { class: "note", style: "margin-top:6px" },
