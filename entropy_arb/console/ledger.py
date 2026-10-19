@@ -52,13 +52,14 @@ def D(v) -> Optional[Decimal]:
 class Fill:
     __slots__ = ("ts", "seq", "event_id", "account", "instrument", "side",
                  "qty", "price", "fee", "fee_currency", "fill_id",
-                 "multiplier", "leg")
+                 "multiplier", "leg", "fee_estimate")
 
     def __init__(self, *, ts: float, seq: int, event_id: str, account: str,
                  instrument: str, side: str, qty: Decimal, price: Decimal,
                  fee: Optional[Decimal], fee_currency: Optional[str],
                  fill_id: Optional[str], multiplier: Optional[Decimal] = None,
-                 leg: str = "") -> None:
+                 leg: str = "",
+                 fee_estimate: Optional[Decimal] = None) -> None:
         self.ts = ts
         self.seq = seq
         self.event_id = event_id
@@ -72,6 +73,9 @@ class Fill:
         self.fill_id = fill_id
         self.multiplier = multiplier or Decimal(1)
         self.leg = leg
+        # A CONFIGURED fee estimate is not an actual charge (§6.1): it is
+        # carried separately for display and NEVER enters `fee`.
+        self.fee_estimate = fee_estimate
 
 
 class _Lot:

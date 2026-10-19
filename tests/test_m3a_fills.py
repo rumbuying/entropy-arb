@@ -69,12 +69,15 @@ def test_fills_from_m3a_events():
     assert (buy.account, buy.side, buy.qty, buy.price) == \
         ("ENTROPY", "buy", D("1"), D("100"))
     assert buy.fill_id == "run-1:1:buy" and buy.fee is None
+    assert buy.fee_estimate == D("0.1")
     assert (sell.account, sell.side, sell.qty, sell.price) == \
         ("RH", "sell", D("1"), D("101"))
     assert sell.fill_id == "run-1:1:sell" and sell.fee is None
+    assert sell.fee_estimate == D("0.101")
     assert (hedge.account, hedge.side, hedge.qty, hedge.price) == \
         ("RH", "buy", D("1"), D("100.5"))
     assert hedge.fill_id == "run-1:2" and hedge.fee is None
+    assert hedge.fee_estimate == D("0.1005")
 
 
 def test_fills_require_a_real_fill_and_price():
@@ -218,6 +221,9 @@ def test_performance_replays_fills_but_net_stays_null_without_funding():
                    for m in perf["missing"])
         assert any(m["code"] == "fee_missing"
                    for m in perf["missing"])
+        # estimates are reported separately, never summed into paid fees
+        assert perf["components"]["trading_fees"] is None
+        assert perf["fee_estimate"] is not None
     finally:
         storage.close()
 
@@ -245,3 +251,30 @@ def test_importer_marks_fill_without_price_unresolved():
         assert [f.side for f in P.fills_from_events(rows)] == ["sell"]
     finally:
         storage.close()
+
+def test_real_venue_fill_fee_is_counted_reverse_control():
+    """P-03c reverse control: only source venue_fill/receipt may be summed as
+    a paid fee. Same shape, real source → Fill.fee populated and the ledger
+    subtracts it."""
+    payload = json.loads(json.dumps(TAKER_PAYLOAD))
+    payload["fill_id"] = "run-r:1"
+    payload["fee"] = {"buy_amount": 0.1, "sell_amount": 0.101,
+                      "currency": "USD", "source": "venue_fill"}
+    hedge = json.loads(json.dumps(HEDGE_PAYLOAD))
+    hedge["fill_id"] = "run-r:2"
+    hedge["fee"] = {"amount": 0.1005, "currency": "USD",
+                    "source": "venue_fill"}
+    fills = P.fills_from_events([
+        _event("taker_attempt", payload, 1000.0),
+        _event("hedge_fill", hedge, 1001.0, venue="RH")])
+    assert [f.fee for f in fills] == [D("0.1"), D("0.101"), D("0.1005")]
+    assert all(f.fee_estimate is None for f in fills)
+    res = L.compute_period(
+        fills_start=[], fills_period=fills,
+        marks_start={}, marks_end={},
+        funding_net=L.ZERO, fees_period=None, unresolved_in_scope=0,
+        fills_have_ids=True, funding_source="venue_api",
+        fee_source="venue_fill", mark_source=None,
+        unrealized_start=L.ZERO, unrealized_end=D("0.5"))
+    assert D(res["components"]["trading_fees"]) == D("0.3015")
+    assert D(res["net_pnl"]) == D("0.6985")

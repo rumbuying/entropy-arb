@@ -33,14 +33,26 @@ def _payload(ev: Dict[str, Any]) -> Dict[str, Any]:
     return p if isinstance(p, dict) else {}
 
 
-def _fee_of(p: Dict[str, Any], key: Optional[str] = None) -> tuple:
-    """(amount, currency) from a payload fee dict; a missing/None amount
-    stays None (never 0). key selects a per-leg estimate for taker rows."""
+# §6.1: only these sources are ACTUAL charges; a configured estimate must
+# never be presented (or summed) as a paid fee.
+REAL_FEE_SOURCES = ("venue_fill", "receipt")
+
+
+def _fee_parts(p: Dict[str, Any], key: Optional[str] = None) -> tuple:
+    """(fee, currency, fee_estimate) from a payload fee dict.
+
+    fee is populated ONLY for a real source (venue_fill/receipt); a
+    configured_estimate (or an unlabeled amount) goes to fee_estimate and
+    leaves `fee` None. key selects a per-leg amount for taker rows."""
     info = p.get("fee")
     if not isinstance(info, dict):
-        return None, None
+        return None, None, None
     raw = info.get(key) if key else info.get("amount")
-    return L.D(raw), info.get("currency")
+    amount = L.D(raw)
+    currency = info.get("currency")
+    if info.get("source") in REAL_FEE_SOURCES:
+        return amount, currency, None
+    return None, None, amount
 
 
 def fills_from_events(events: List[Dict[str, Any]]) -> List[L.Fill]:
@@ -73,7 +85,7 @@ def fills_from_events(events: List[Dict[str, Any]]) -> List[L.Fill]:
             price = L.D(p.get("price"))
             if qty is None or price is None:
                 continue
-            fee, fee_currency = _fee_of(p)
+            fee, fee_currency, fee_estimate = _fee_parts(p)
             seq += 1
             fills.append(L.Fill(
                 ts=ts, seq=seq, event_id=event_id,
@@ -81,7 +93,7 @@ def fills_from_events(events: List[Dict[str, Any]]) -> List[L.Fill]:
                 side="buy" if p.get("side") == "buy" else "sell",
                 qty=qty, price=price, fee=fee, fee_currency=fee_currency,
                 fill_id=(ev.get("dedupe_key") or fill_id),
-                leg=p.get("venue")))
+                leg=p.get("venue"), fee_estimate=fee_estimate))
         elif etype == "taker_attempt":
             for leg in ("buy", "sell"):
                 qty = L.D(p.get(f"{leg}_fill"))
@@ -89,18 +101,21 @@ def fills_from_events(events: List[Dict[str, Any]]) -> List[L.Fill]:
                 if qty is None or qty <= L.ZERO or price is None:
                     continue      # unfilled / no real avg price → no fill
                 # §6.1: a CONFIGURED fee estimate is not an actual charge,
-                # so it never enters Fill.fee. The estimate stays in the
-                # event payload (fee.{leg}_amount, source=configured_estimate)
-                # for display; the ledger keeps the fee unknown → net null.
+                # so it never enters Fill.fee — it is carried separately in
+                # `fee_estimate` for display; the ledger keeps the fee
+                # unknown → fee_missing → net null.
+                fee, fee_currency, fee_estimate = _fee_parts(
+                    p, f"{leg}_amount")
                 seq += 1
                 fills.append(L.Fill(
                     ts=ts, seq=seq, event_id=event_id,
                     account=(p.get(f"{leg}_venue")
                              or ev.get("venue") or "unknown"),
                     instrument=instrument, side=leg,
-                    qty=qty, price=price, fee=None, fee_currency=None,
+                    qty=qty, price=price, fee=fee,
+                    fee_currency=fee_currency,
                     fill_id=(f"{fill_id}:{leg}" if fill_id else None),
-                    leg=leg))
+                    leg=leg, fee_estimate=fee_estimate))
         else:                                   # hedge_fill
             qty = L.D(p.get("qty"))
             price = L.D(p.get("avg_px"))
@@ -108,13 +123,14 @@ def fills_from_events(events: List[Dict[str, Any]]) -> List[L.Fill]:
             if qty is None or qty <= L.ZERO or price is None \
                     or side not in ("buy", "sell"):
                 continue
-            # hedge fee is likewise configured_estimate → not a real fee
+            fee, fee_currency, fee_estimate = _fee_parts(p)
             seq += 1
             fills.append(L.Fill(
                 ts=ts, seq=seq, event_id=event_id,
                 account=p.get("venue") or ev.get("venue") or "unknown",
                 instrument=instrument, side=side, qty=qty, price=price,
-                fee=None, fee_currency=None, fill_id=fill_id, leg="hedge"))
+                fee=fee, fee_currency=fee_currency, fill_id=fill_id,
+                leg="hedge", fee_estimate=fee_estimate))
     return fills
 
 
@@ -137,8 +153,15 @@ def performance_for_strategy(storage, *, strategy_id: str,
     # taker/hedge fee is a configured_estimate, so the source must be
     # derived, never defaulted — unknown fees keep net_pnl null.
     fee_source = None
-    if fills_period and all(f.fee is not None for f in fills_period):
-        fee_source = "venue_fill"
+    if fills_period:
+        fee_source = ("venue_fill"
+                      if all(f.fee is not None for f in fills_period)
+                      else "missing")
+    # configured fee estimates are reported separately, never summed as paid
+    fee_estimate_total = sum(
+        (f.fee_estimate for f in fills_period if f.fee_estimate is not None),
+        L.ZERO) if any(f.fee_estimate is not None
+                      for f in fills_period) else None
     # Execution failures no longer count as "unresolved" under the M3a
     # resolution rules; keep them visible as an explicit coverage number.
     execution_failures = 0
@@ -294,6 +317,9 @@ def performance_for_strategy(storage, *, strategy_id: str,
                    "timezone": timezone},
         "currency": report_currency,
         "reconciliation_status": result["status"],
+        # configured_estimate fees (display only) — NOT part of net_pnl
+        "fee_estimate": (str(fee_estimate_total)
+                         if fee_estimate_total is not None else None),
         "sample_status": "insufficient",
         "net_pnl": result["net_pnl"],
         "estimated_net": None,
