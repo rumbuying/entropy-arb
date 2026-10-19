@@ -25,38 +25,96 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import ledger as L
 
 
+def _payload(ev: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        p = json.loads(ev.get("payload_json") or "{}")
+    except Exception:
+        return {}
+    return p if isinstance(p, dict) else {}
+
+
+def _fee_of(p: Dict[str, Any], key: Optional[str] = None) -> tuple:
+    """(amount, currency) from a payload fee dict; a missing/None amount
+    stays None (never 0). key selects a per-leg estimate for taker rows."""
+    info = p.get("fee")
+    if not isinstance(info, dict):
+        return None, None
+    raw = info.get(key) if key else info.get("amount")
+    return L.D(raw), info.get("currency")
+
+
 def fills_from_events(events: List[Dict[str, Any]]) -> List[L.Fill]:
-    """normalized_events → ledger Fill stream (maker_fill only; legacy CSV
-    rows and taker attempts lack per-leg prices by schema)."""
+    """normalized_events → ledger Fill stream.
+
+    Evidence accepted (M3a event schema v2):
+    * `maker_fill` — qty_delta/price/fee (as before);
+    * `taker_attempt` — one Fill per ACTUAL filled leg, using the engine's
+      per-leg `buy_avg_px`/`sell_avg_px`. A leg with no fill or no real
+      average price produces NO fill (never a fabricated 0 or limit price);
+    * `hedge_fill` — the reduce-only hedge execution, one real fill.
+
+    Legacy schema-1 taker attempts and CSV rows carry no per-leg fill price
+    by schema, so they stay evidence, never fills.
+    """
     fills: List[L.Fill] = []
     seq = 0
     for ev in events:
-        if ev.get("event_type") != "maker_fill":
+        etype = ev.get("event_type")
+        if etype not in ("maker_fill", "taker_attempt", "hedge_fill"):
             continue
-        try:
-            p = json.loads(ev.get("payload_json") or "{}")
-        except Exception:
-            continue
-        qty = L.D(p.get("qty_delta"))
-        price = L.D(p.get("price"))
-        if qty is None or price is None:
-            continue
-        fee = None
-        fee_currency = None
-        fee_info = p.get("fee") or {}
-        if isinstance(fee_info, dict):
-            fee = L.D(fee_info.get("amount"))
-            fee_currency = fee_info.get("currency")
-        seq += 1
-        fills.append(L.Fill(
-            ts=ev.get("event_ts") or 0.0, seq=seq,
-            event_id=ev.get("event_id") or f"e{seq}",
-            account=ev.get("venue") or "unknown",
-            instrument=ev.get("instrument") or (p.get("symbol") or "?"),
-            side="buy" if p.get("side") == "buy" else "sell",
-            qty=qty, price=price, fee=fee, fee_currency=fee_currency,
-            fill_id=(ev.get("dedupe_key") or None),
-            leg=p.get("venue")))
+        p = _payload(ev)
+        ts = ev.get("event_ts") or 0.0
+        instrument = ev.get("instrument") or p.get("symbol") or "?"
+        event_id = ev.get("event_id") or f"e{seq + 1}"
+        fill_id = p.get("fill_id") or None
+
+        if etype == "maker_fill":
+            qty = L.D(p.get("qty_delta"))
+            price = L.D(p.get("price"))
+            if qty is None or price is None:
+                continue
+            fee, fee_currency = _fee_of(p)
+            seq += 1
+            fills.append(L.Fill(
+                ts=ts, seq=seq, event_id=event_id,
+                account=ev.get("venue") or "unknown", instrument=instrument,
+                side="buy" if p.get("side") == "buy" else "sell",
+                qty=qty, price=price, fee=fee, fee_currency=fee_currency,
+                fill_id=(ev.get("dedupe_key") or fill_id),
+                leg=p.get("venue")))
+        elif etype == "taker_attempt":
+            fee_currency = (_fee_of(p)[1])
+            for leg in ("buy", "sell"):
+                qty = L.D(p.get(f"{leg}_fill"))
+                price = L.D(p.get(f"{leg}_avg_px"))
+                if qty is None or qty <= L.ZERO or price is None:
+                    continue      # unfilled / no real avg price → no fill
+                fee = _fee_of(p, f"{leg}_amount")[0]
+                seq += 1
+                fills.append(L.Fill(
+                    ts=ts, seq=seq, event_id=event_id,
+                    account=(p.get(f"{leg}_venue")
+                             or ev.get("venue") or "unknown"),
+                    instrument=instrument, side=leg,
+                    qty=qty, price=price, fee=fee,
+                    fee_currency=fee_currency,
+                    fill_id=(f"{fill_id}:{leg}" if fill_id else None),
+                    leg=leg))
+        else:                                   # hedge_fill
+            qty = L.D(p.get("qty"))
+            price = L.D(p.get("avg_px"))
+            side = p.get("side")
+            if qty is None or qty <= L.ZERO or price is None \
+                    or side not in ("buy", "sell"):
+                continue
+            fee, fee_currency = _fee_of(p)
+            seq += 1
+            fills.append(L.Fill(
+                ts=ts, seq=seq, event_id=event_id,
+                account=p.get("venue") or ev.get("venue") or "unknown",
+                instrument=instrument, side=side, qty=qty, price=price,
+                fee=fee, fee_currency=fee_currency, fill_id=fill_id,
+                leg="hedge"))
     return fills
 
 

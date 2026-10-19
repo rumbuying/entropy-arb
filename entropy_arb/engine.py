@@ -125,6 +125,7 @@ class Engine:
         # never influence order decisions. Adopted pre-V2 workers have no
         # env and keep the CSV-only collection (shown as "not upgraded").
         self._events = None
+        self._event_seq = 0            # per-run event fill-id sequence
         try:
             run_id = os.getenv("EVENTS_RUN_ID")
             if run_id:
@@ -140,6 +141,15 @@ class Engine:
     def _emit_event(self, event_type: str, **fields) -> None:
         if self._events is not None:
             self._events.emit(event_type, **fields)
+
+    def _next_event_fill_id(self):
+        """`<run_id>:<seq>` for event records — unique and traceable. None
+        when event collection is off (nothing is emitted then anyway).
+        Bystander helper: never consulted by order/hedge logic."""
+        if self._events is None:
+            return None
+        self._event_seq += 1
+        return f"{self._events.run_id}:{self._event_seq}"
 
     # ------------------------------------------------------------- utilities
 
@@ -645,7 +655,9 @@ class Engine:
                            None if unresolved else fill_edge,
                            f"{binfo['status']}/{sinfo['status']}", sent_ok)
         self._log_csv(direction, buy, sell, plan, sent_ok, bfill, sfill,
-                      binfo["status"], sinfo["status"], fill_edge, inv_bps)
+                      binfo["status"], sinfo["status"], fill_edge, inv_bps,
+                      buy_avg_px=binfo.get("avg_px"),
+                      sell_avg_px=sinfo.get("avg_px"))
         self.last_trade_ts = time.time()
         return bool(unresolved)
 
@@ -713,6 +725,22 @@ class Engine:
                         v.cash += fill * px * (1 - fee) if is_sell \
                             else -fill * px * (1 + fee)
                         v.volume_usd += fill * px
+                        # M3a: the hedge leg was previously invisible to the
+                        # ledger. Emit the REAL fill (bystander write only —
+                        # cash/position above are unchanged).
+                        self._emit_event(
+                            "hedge_fill",
+                            schema_version=2,
+                            fill_id=self._next_event_fill_id(),
+                            venue=v.name, symbol=self.cfg.symbol,
+                            side="sell" if is_sell else "buy",
+                            qty=fill,
+                            avg_px=info.get("avg_px"),
+                            limit_px=limit,
+                            fee={"amount": fill * px * fee,
+                                 "currency": "USD",
+                                 "source": "configured_estimate"},
+                            reduce_only=True)
                     log.info("[HEDGE SETTLED] %s %s %.6g/%.6g",
                              v.name, info["status"], fill, qty)
                 v.last_traded_ts = time.time()
@@ -1493,12 +1521,22 @@ class Engine:
                      " *** HALTED ***" if self.halted else "", mk)
 
     def _log_csv(self, direction, buy, sell, plan: ArbPlan, ok: bool, bfill,
-                 sfill, bstatus, sstatus, fill_edge, inv_bps) -> None:
+                 sfill, bstatus, sstatus, fill_edge, inv_bps,
+                 buy_avg_px=None, sell_avg_px=None) -> None:
         # V2 event: one attempt record per taker execution — same facts as
         # the CSV row, emitted BEFORE the file write; a logging failure
-        # must not affect either
+        # must not affect either. M3a (schema_version 2) adds the per-leg
+        # ACTUAL avg prices the engine already uses for cash, a traceable
+        # fill_id and fee estimates clearly marked as such — no trading
+        # behaviour lives here.
+        buy_fee_est = (bfill * buy_avg_px * plan.buy_fee
+                       if bfill and buy_avg_px is not None else None)
+        sell_fee_est = (sfill * sell_avg_px * plan.sell_fee
+                        if sfill and sell_avg_px is not None else None)
         self._emit_event(
             "taker_attempt",
+            schema_version=2,
+            fill_id=self._next_event_fill_id(),
             order_id=None,                      # engine has no order ids here
             venue_fill_id=None,
             side=direction,
@@ -1507,15 +1545,20 @@ class Engine:
             qty=plan.qty,
             buy_limit=plan.buy_limit, sell_limit=plan.sell_limit,
             buy_fill=bfill, sell_fill=sfill,
+            buy_avg_px=buy_avg_px,
+            sell_avg_px=sell_avg_px,
             buy_status=bstatus, sell_status=sstatus,
             ok=bool(ok),
             exp_edge_usd=plan.exp_edge_usd,
             gross_edge_usd=plan.gross_edge_usd,
             fill_edge_usd=fill_edge,
-            fee={"amount": None, "currency": None,
-                 "source": "missing",
-                 "reason": "taker path has no per-fill fee feed (V2-008 "
-                           "adapter review pending)"},
+            fee={"buy_amount": buy_fee_est,
+                 "sell_amount": sell_fee_est,
+                 "currency": "USD",
+                 "amount": None,
+                 "source": "configured_estimate",
+                 "reason": "fees estimated from configured fee_bps; "
+                           "per-fill venue fee parsed in M3b"},
             liquidity="taker")
         try:
             path = self.cfg.trades_csv

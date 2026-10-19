@@ -284,9 +284,23 @@ def import_events_jsonl(storage, *, path: str, run_id: str,
             fee = ev.get("fee")
             payload = {k: v for k, v in ev.items()
                        if k not in ("schema_version",)}
+            event_type = str(ev.get("event_type") or "unknown")
+            venue_fill_id = ev.get("venue_fill_id")
+            fill_id = ev.get("fill_id")
+            # M3a (event schema v2): a taker attempt now carries a traceable
+            # fill_id + both legs' actual avg prices, and hedge_fill is a
+            # real fill. Those are resolved evidence. Old events with no
+            # fill/venue id keep the historical unresolved=True semantics.
+            has_fill_id = bool(fill_id or venue_fill_id)
+            if venue_fill_id:
+                dedupe_key = f"f:{venue_fill_id}"
+            elif fill_id:
+                dedupe_key = f"t:{fill_id}"
+            else:
+                dedupe_key = None
             ok = storage.insert_event(
                 event_id=f"evjsonl:{src_id}:line:{i}",
-                event_type=str(ev.get("event_type") or "unknown"),
+                event_type=event_type,
                 import_batch=batch, source_id=src_id, source_line=i,
                 event_ts=ev.get("event_ts"),
                 payload=payload,
@@ -294,11 +308,10 @@ def import_events_jsonl(storage, *, path: str, run_id: str,
                 run_id=ev.get("run_id") or run_id,
                 venue=ev.get("venue"),
                 instrument=ev.get("symbol") or ev.get("instrument"),
-                dedupe_key=(f"f:{ev.get('venue_fill_id')}"
-                            if ev.get("venue_fill_id") else None),
-                unresolved=(ev.get("venue_fill_id") is None
-                            and ev.get("event_type") in
-                            ("maker_fill", "taker_attempt")), commit=False)
+                dedupe_key=dedupe_key,
+                unresolved=(not has_fill_id and event_type in
+                            ("maker_fill", "taker_attempt", "hedge_fill")),
+                commit=False)
             if ok:
                 imported += 1
         storage.db.commit()      # one commit per file (latency fix)
@@ -306,7 +319,8 @@ def import_events_jsonl(storage, *, path: str, run_id: str,
         storage.db.rollback()    # failed import leaves no partial rows
         raise
     notes = ["jsonl events carry venue fill ids when the adapter reports "
-             "them; fills without ids stay unresolved"]
+             "them; M3a schema-v2 taker/hedge fills also carry a run-scoped "
+             "fill_id; events without any id stay unresolved"]
     if torn_tail:
         notes.append("torn tail line (writer crashed mid-write) — gap "
                      "recorded, line not imported")
