@@ -231,7 +231,13 @@ def test_t1_rate_snapshot_is_unsupported_not_zero(monkeypatch):
                     "SELECT COUNT(*) FROM normalized_events"
                     " WHERE event_type='funding'").fetchone()[0]
                 assert n == 0, "预测费率被伪造成 funding 事件"
-                assert "funding unsupported" in logs.text()
+                import re as _re
+                warn_lines = [ln for ln in logs.text().splitlines()
+                              if "funding unsupported" in ln]
+                assert warn_lines, "缺少 funding unsupported WARNING"
+                assert any(_re.search(
+                    r"funding unsupported: (arcus|hl)\b", ln)
+                    for ln in warn_lines), warn_lines[:3]
                 assert "funding poll failed" not in logs.text()
 
                 # /api/ledger/health 必须区分 funding_unsupported 与
@@ -246,6 +252,11 @@ def test_t1_rate_snapshot_is_unsupported_not_zero(monkeypatch):
                 cov_health = [c for c in health["funding_coverage"]
                               if c.get("venue") == "arcus"]
                 assert cov_health and cov_health[0]["supported"] is False
+                # Chief 固定断言：两缺口码互斥
+                for st in health["strategies"]:
+                    both = {"funding_unsupported",
+                            "funding_missing"} <= set(st["gaps"])
+                    assert not both, (st["strategy_id"], st["gaps"])
             finally:
                 await srv.close()
         finally:
@@ -393,6 +404,35 @@ def test_t2_torn_tail_does_not_advance_into_bad_line():
     asyncio.run(run())
 
 
+def test_t2_hooks_import_and_cli():
+    """Chief 固定断言：run_import_once(app) 可调用；CLI 有
+    --auto-import / --auto-import-interval（默认 300，最小 5）。"""
+    from entropy_arb.console.server import run_import_once
+    import subprocess
+    env = Env()
+    write_profile(env.pdir, "P1", "logs/trades-BTC-katana.csv")
+    _seed_events_dir(env, files=2, events_per_file=3)
+    env.make_app(auto_import=False)          # 关闭时也能单独调用（测试钩子）
+    summary = run_import_once(env.app)
+    assert summary["errors"] == [], summary
+    assert env.storage.db.execute(
+        "SELECT COUNT(*) FROM normalized_events").fetchone()[0] == 6
+    # 与 app["run_import_once"] 等价
+    assert run_import_once(env.app)["profiles"] == \
+        env.app["run_import_once"]()["profiles"]
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    out = subprocess.run([sys.executable, "console.py", "--help"],
+                         cwd=root, capture_output=True, text=True,
+                         timeout=60).stdout + \
+        subprocess.run([sys.executable, "console.py", "--help"],
+                       cwd=root, capture_output=True, text=True,
+                       timeout=60).stderr
+    assert "--auto-import" in out
+    assert "--auto-import-interval" in out
+    assert "default 300" in out or "300" in out
+    env.close()
+
+
 def test_t2_reconciliation_dedupe():
     env = Env()
     sid = env.storage.create_strategy(
@@ -451,6 +491,21 @@ def test_t3_ledger_health_84_strategies_gaps_and_readonly():
             source_id=1, source_line=2, event_ts=now - 90,
             payload={"amount_usd": 1.0}, strategy_id=sids[2],
             unresolved=False)
+        # 85 号：场所都有付款接口但无 funding 事件 → funding_missing
+        sid_fm = env.storage.create_strategy(
+            name="FM", symbol="FM", type_="taker_basis",
+            base_venue="arcus", base_market="io",
+            hedge_venue="katana")["id"]
+        sids.append(sid_fm)
+        env.storage.create_run(
+            run_id=new_run_id(), worker_id="wfm", profile="P1",
+            symbol="FM", hedge="katana", base="arcus", mode="live",
+            pid=9999, cmdline_hash="h", started_ts=now - 3600,
+            strategy_id=sid_fm)
+        env.storage.insert_event(
+            event_id="qa:3", event_type="taker_attempt", import_batch="qa",
+            source_id=1, source_line=3, event_ts=now - 80, payload={},
+            strategy_id=sid_fm, unresolved=True)
         # 模拟 live funding loop 的运行时覆盖：arcus 无付款接口
         env.make_app(start_background=False)
         env.app["funding_coverage"]["x:arcus:hedge"] = {
@@ -463,7 +518,7 @@ def test_t3_ledger_health_84_strategies_gaps_and_readonly():
                 "SELECT COUNT(*) FROM normalized_events").fetchone()[0]
             data = await get_json(srv, "/api/ledger/health")
             assert data["schema_version"] == 1
-            assert data["summary"]["strategies"] == 84
+            assert data["summary"]["strategies"] == 85
             assert data["summary"]["no_events"] == 82
             by = {s["strategy_id"]: s for s in data["strategies"]}
             assert "no_events" in by[sids[0]]["gaps"]
@@ -472,6 +527,14 @@ def test_t3_ledger_health_84_strategies_gaps_and_readonly():
                 b["gaps"]), b["gaps"]
             assert "funding_missing" not in b["gaps"]
             assert "arcus" in b["funding"]["unsupported_venues"]
+            fm = by[sid_fm]
+            assert "funding_missing" in fm["gaps"], fm["gaps"]
+            assert "funding_unsupported" not in fm["gaps"], fm["gaps"]
+            assert fm["funding"]["unsupported_venues"] == []
+            for st in data["strategies"]:
+                both = {"funding_unsupported",
+                        "funding_missing"} <= set(st["gaps"])
+                assert not both, (st["strategy_id"], st["gaps"])
             c = by[sids[2]]
             assert "funding_missing" not in c["gaps"], c["gaps"]
             assert "no_events" not in c["gaps"]

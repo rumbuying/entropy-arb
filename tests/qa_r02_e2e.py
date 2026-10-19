@@ -304,6 +304,11 @@ async def run_e2e():
                                   or "no_events" in body), body[:500])
         check("U-05d 资金费覆盖区列出 unsupported 场所",
               "arcus" in body and "资金费" in body, body[:800])
+        check("U-05d2 图例含 funding_unsupported「场所无付款接口」说明",
+              "资金费接口不支持" in body
+              and ("不是 0" in body or "没数据" in body), body[:1500])
+        check("U-05d3 策略行显示 funding_unsupported 徽标",
+              "资金费接口不支持" in body, body[:1500])
         check("U-05e 体检页只读（无 POST/PATCH/DELETE 请求）",
               all(m in ("GET", "HEAD") for m in methods), methods)
         check("U-05f 体检页无未捕获 JS 错误", not err, err)
