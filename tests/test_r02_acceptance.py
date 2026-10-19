@@ -340,12 +340,14 @@ def test_t2_default_off_and_manual_round_idempotent():
             "SELECT COUNT(*) FROM normalized_events").fetchone()[0] == 0
         assert env.storage.db.execute(
             "SELECT COUNT(*) FROM import_sources").fetchone()[0] == 0
-        # 显式开 + 手动单轮（QA 测试钩子）
+        # 显式开：create_app 仍不得自起任务（R-02 事故修复契约），
+        # 单轮走 run_import_once 钩子
         env2 = Env()
         write_profile(env2.pdir, "P1", "logs/trades-BTC-katana.csv")
         _seed_events_dir(env2)
         env2.make_app(auto_import=True, auto_import_sec=3600)
-        assert "auto_import_task" in env2.app
+        assert "auto_import_task" not in env2.app
+        assert env2.app["auto_import_enabled"] is True
         r1 = env2.app["auto_import_round"]()
         n1 = env2.storage.db.execute(
             "SELECT COUNT(*) FROM normalized_events").fetchone()[0]
@@ -402,6 +404,181 @@ def test_t2_torn_tail_does_not_advance_into_bad_line():
         assert n2 == n1 + 1, f"修复后应补 1 条: {n1} -> {n2}"
         env.close()
     asyncio.run(run())
+
+
+def test_t2_start_after_bind_and_async_round_nonblocking():
+    """R-02 事故修复验收（Chief 两条）：
+    1) create_app 不创建导入任务，start_auto_import_loop 由入口在 HTTP
+       绑定后调用；
+    2) 后台轮次在 profile/event-file 之间让出事件循环，导入进行中
+       /api/workers 与 /api/ledger/health 延迟 < 2s。
+    """
+    from entropy_arb.console.server import start_auto_import_loop
+
+    async def run():
+        env = Env()
+        # 20 个 profile × 100 行 CSV + 15 个事件文件 × 20 事件，制造
+        # 与线上同形态的“首轮积压”（多文件、每文件有一定工作量）
+        for i in range(20):
+            rel = f"logs/trades-P{i}.csv"
+            write_profile(env.pdir, f"P{i}", rel)
+            path = os.path.join(env.root, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(TAKER_HEADER)
+                for j in range(100):
+                    w.writerow([time.time() - 3600 + j, "buy_entropy",
+                                "ENTROPY", "RH", 1, 100, 101, 100, 100,
+                                0.5, 0.5, 1, 0, 0, 1, 1, 0, "filled",
+                                "filled", 0.5])
+        events_dir = os.path.join(env.root, "logs", "events")
+        os.makedirs(events_dir, exist_ok=True)
+        for j in range(15):
+            with open(os.path.join(events_dir, f"run-qa-{j}.jsonl"),
+                      "w") as fh:
+                for k in range(20):
+                    fh.write(json.dumps({
+                        "schema_version": 1,
+                        "event_type": "taker_attempt",
+                        "event_ts": time.time() - 600 + k,
+                        "venue": "hl", "symbol": "BTC"}) + "\n")
+        env.make_app(auto_import=True, auto_import_sec=3600)
+        assert "auto_import_task" not in env.app, \
+            "create_app 不得在 HTTP 绑定前拉起导入任务"
+        srv = await env.server()          # HTTP 先可用
+        # 先单独验证延迟：只跑一轮异步导入（避免后台 loop 与手动轮次
+        # 重复导入导致测量失真）
+        round_task = asyncio.create_task(
+            env.app["auto_import_round_async"]())
+        lat = []
+        while not round_task.done():
+            for path in ("/api/workers", "/api/ledger/health"):
+                t0 = time.perf_counter()
+                await get_json(srv, path)
+                lat.append(time.perf_counter() - t0)
+            await asyncio.sleep(0.01)
+        await round_task
+        assert lat and max(lat) < 2.0, f"导入中最大延迟 {max(lat):.2f}s"
+        health = await get_json(srv, "/api/ledger/health")
+        assert health["imports"]["files"] >= 30, health["imports"]
+        assert env.storage.db.execute(
+            "SELECT COUNT(*) FROM normalized_events").fetchone()[0] >= 2000
+        # 再验证入口契约：绑定后调用才创建后台任务（立即取消，避免
+        # 与已完成的轮次重复）
+        task = start_auto_import_loop(env.app)
+        assert task is not None
+        assert env.app["auto_import_task"] is task
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await srv.close()
+        env.close()
+    asyncio.run(run())
+
+
+def test_t2_console_binds_under_5s_with_import_backlog():
+    """R-02 事故复现验收（Chief 第 1 条）：入口在 HTTP 绑定后才拉起
+    导入 loop，积压首轮导入进行中 8788 也能在 5 秒内被访问。
+    用 worktree 的临时副本 + 空 profiles + 合成积压，绝不碰生产。
+    """
+    import shutil
+    import socket
+    import subprocess as sp
+    import urllib.request
+
+    src = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    tmp = tempfile.mkdtemp(prefix="r02-startup-")
+    dst = os.path.join(tmp, "app")
+    shutil.copytree(
+        src, dst,
+        ignore=shutil.ignore_patterns(".git", "__pycache__", "data",
+                                      "tests", "docs", "*.pyc", "*.pyo"))
+    pdir = os.path.join(dst, "profiles")
+    os.makedirs(pdir, exist_ok=True)
+    for i in range(20):
+        rel = f"logs/trades-P{i}.csv"
+        write_profile(pdir, f"P{i}", rel)
+        path = os.path.join(dst, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(TAKER_HEADER)
+            for j in range(100):
+                w.writerow([time.time() - 3600 + j, "buy_entropy",
+                            "ENTROPY", "RH", 1, 100, 101, 100, 100,
+                            0.5, 0.5, 1, 0, 0, 1, 1, 0, "filled",
+                            "filled", 0.5])
+    events_dir = os.path.join(dst, "logs", "events")
+    os.makedirs(events_dir, exist_ok=True)
+    for j in range(15):
+        with open(os.path.join(events_dir, f"run-qa-{j}.jsonl"), "w") as fh:
+            for k in range(20):
+                fh.write(json.dumps({
+                    "schema_version": 1, "event_type": "taker_attempt",
+                    "event_ts": time.time() - 600 + k}) + "\n")
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    proc = sp.Popen(
+        [sys.executable, "console.py", "--host", "127.0.0.1",
+         "--port", str(port), "--token", "r02-startup",
+         "--profiles-dir", pdir,
+         "--env-file", os.path.join(dst, ".env-qa"),
+         "--base-port", "8971", "--auto-import",
+         "--auto-import-interval", "300"],
+        cwd=dst, stdout=sp.PIPE, stderr=sp.STDOUT, text=True)
+    headers = {"Authorization": "Bearer r02-startup"}
+
+    def get(path):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}", headers=headers)
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return json.loads(r.read())
+
+    try:
+        t0 = time.perf_counter()
+        ready = None
+        while time.perf_counter() - t0 < 20:
+            try:
+                if get("/api/workers") is not None:
+                    ready = time.perf_counter() - t0
+                    break
+            except Exception:
+                time.sleep(0.05)
+        assert ready is not None, "console 20s 内未开始监听"
+        assert ready < 5.0, f"8788 等价端口 {ready:.2f}s 才可访问（>5s）"
+        lat, files = [], 0
+        deadline = time.perf_counter() + 40
+        while time.perf_counter() < deadline:
+            for path in ("/api/workers", "/api/ledger/health"):
+                t1 = time.perf_counter()
+                try:
+                    data = get(path)
+                except Exception:
+                    lat.append(99.0)
+                    continue
+                lat.append(time.perf_counter() - t1)
+                if path.endswith("health"):
+                    files = data.get("imports", {}).get("files", 0)
+            if files >= 30:
+                break
+            time.sleep(0.1)
+        assert files >= 30, f"首轮导入未完成: files={files}"
+        assert lat and max(lat) < 2.0, \
+            f"导入中 API 最大延迟 {max(lat):.2f}s（>2s）"
+        print(f"[qa] startup_ready={ready:.2f}s "
+              f"max_api_latency={max(lat) * 1000:.0f}ms files={files}")
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except Exception:
+            proc.kill()
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_t2_hooks_import_and_cli():
