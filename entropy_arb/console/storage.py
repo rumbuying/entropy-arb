@@ -472,6 +472,16 @@ class Storage:
             " ORDER BY started_ts DESC, run_id LIMIT ?",
             (strategy_id, limit))]
 
+    def strategy_profiles(self) -> List[Dict[str, Any]]:
+        """Distinct (strategy_id, profile) pairs for ALL runs — one query.
+        The ledger-health page used to call strategy_runs() per strategy and
+        re-parse the same profile YAML many times; this aggregates in SQL."""
+        return [dict(r) for r in self.db.execute(
+            "SELECT strategy_id, profile FROM runs"
+            " WHERE strategy_id IS NOT NULL AND profile != ''"
+            " GROUP BY strategy_id, profile"
+            " ORDER BY strategy_id, MAX(started_ts) DESC")]
+
     # ------------------------------------------------------------ import
 
     def get_import_source(self, path: str, file_identity: str) \

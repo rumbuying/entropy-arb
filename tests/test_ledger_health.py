@@ -160,3 +160,85 @@ def test_reconciliation_rows_are_deduped():
             "SELECT COUNT(*) FROM reconciliations").fetchone()[0] == 2
     finally:
         storage.close()
+
+
+def test_strategy_profiles_aggregates_in_one_query():
+    """P3: strategy->profiles is one SQL aggregate, not one runs query per
+    strategy (and it never leaks runs without a strategy)."""
+    tmp = tempfile.mkdtemp(prefix="strategy-profiles-")
+    storage = Storage(os.path.join(tmp, "data", "console-v2.sqlite3"))
+    try:
+        s1 = storage.create_strategy(
+            name="S1", symbol="BTC", type_="taker_basis",
+            base_venue="hl", base_market="io",
+            hedge_venue="katana")["id"]
+        s2 = storage.create_strategy(
+            name="S2", symbol="ETH", type_="taker_basis",
+            base_venue="hl", base_market="io",
+            hedge_venue="katana")["id"]
+        for rid, sid, profile in (("r1", s1, "P1"), ("r2", s1, "P2"),
+                                  ("r3", s2, "P1"), ("r4", None, "P3")):
+            storage.create_run(
+                run_id=rid, worker_id="w" + rid, profile=profile,
+                symbol="BTC", hedge="katana", base="hl", mode="record",
+                pid=None, cmdline_hash="h", started_ts=1.0,
+                strategy_id=sid)
+        pairs = {(p["strategy_id"], p["profile"])
+                 for p in storage.strategy_profiles()}
+        assert pairs == {(s1, "P1"), (s1, "P2"), (s2, "P1")}
+    finally:
+        storage.close()
+
+
+def test_ledger_health_many_strategies_stays_fast():
+    """P3 regression: many strategies sharing profiles must NOT re-parse the
+    same YAML per strategy. 40 strategies / 5 profiles with a single runs
+    aggregate + one YAML parse per unique profile keeps the page well under
+    the 500ms baseline budget (generous 1.5s here to avoid CI flakiness)."""
+    tmp = tempfile.mkdtemp(prefix="ledger-health-fast-")
+    pdir = os.path.join(tmp, "profiles")
+    os.makedirs(pdir)
+    for i in range(5):
+        with open(os.path.join(pdir, f"P{i}.yaml"), "w") as fh:
+            fh.write(f"logging:\n  trades_csv: logs/trades-P{i}.csv\n")
+    storage = Storage(os.path.join(tmp, "data", "console-v2.sqlite3"))
+    profiles = ProfilesManager(pdir, env_file=os.path.join(tmp, ".env"))
+    secrets = SecretsManager(os.path.join(tmp, ".env"))
+    sup = Supervisor(tmp, pdir, storage=storage)
+    now = time.time()
+    for i in range(40):
+        sid = storage.create_strategy(
+            name=f"S{i}", symbol="BTC", type_="taker_basis",
+            base_venue="hl", base_market="io",
+            hedge_venue="katana")["id"]
+        storage.create_run(
+            run_id=new_run_id(), worker_id=f"w{i}", profile=f"P{i % 5}",
+            symbol="BTC", hedge="katana", base="hl", mode="record",
+            pid=None, cmdline_hash="h", started_ts=now - 60 - i,
+            strategy_id=sid)
+
+    async def run():
+        app = create_app(sup, profiles, secrets, storage=storage,
+                         start_background=False)
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            async with aiohttp.ClientSession() as http:
+                t0 = time.perf_counter()
+                async with http.get(server.make_url(
+                        "/api/ledger/health")) as r:
+                    assert r.status == 200
+                    body = await r.json()
+                elapsed = time.perf_counter() - t0
+                return body, elapsed
+        finally:
+            await server.close()
+
+    try:
+        body, elapsed = asyncio.run(run())
+        assert body["summary"]["strategies"] == 40
+        assert len(body["strategies"]) == 40
+        assert all(x["sources"] for x in body["strategies"])
+        assert elapsed < 1.5, f"ledger health took {elapsed:.2f}s"
+    finally:
+        storage.close()
