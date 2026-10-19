@@ -14,8 +14,8 @@ import { fmtTs } from "./tz.js";
 
 const REFRESH_MS = 30000;
 const GAP_CODES = ["no_events", "fee_missing", "funding_missing",
-                   "unresolved_events", "manual_import_stale",
-                   "source_file_missing"];
+                   "funding_unsupported", "unresolved_events",
+                   "manual_import_stale", "source_file_missing"];
 
 function num(v) {
   if (v === null || v === undefined || v === "") return null;
@@ -33,6 +33,7 @@ function gapBadge(code, descs) {
   const known = {
     fee_missing: "stale",
     funding_missing: "stale",
+    funding_unsupported: "stale",
     unresolved_events: "errored",
     manual_import_stale: "stale",
     no_events: "errored",
@@ -112,6 +113,8 @@ export function mount(container) {
         stale: imp.stale ?? s.import_stale ?? null,
         sources: s.sources,
         gaps: Array.isArray(s.gaps) ? s.gaps : [],
+        unsupportedVenues: Array.isArray((s.funding || {}).unsupported_venues)
+          ? (s.funding || {}).unsupported_venues : [],
       };
     });
     const descs = data.gap_codes || {};
@@ -183,7 +186,15 @@ export function mount(container) {
         if (!r.gaps.length) {
           gapCell.appendChild(el("span", { class: "muted", text: "—" }));
         } else {
-          for (const g of r.gaps) gapCell.appendChild(gapBadge(String(g), descs));
+          for (const g of r.gaps) {
+            gapCell.appendChild(gapBadge(String(g), descs));
+            // funding_unsupported: name the venues explicitly instead of
+            // letting the reader assume "no data" / zero
+            if (g === "funding_unsupported" && r.unsupportedVenues.length) {
+              gapCell.appendChild(el("span", { class: "muted",
+                text: " " + r.unsupportedVenues.join(", ") + " " }));
+            }
+          }
           if (r.unresolved)
             gapCell.appendChild(el("span", { class: "muted",
               text: t("v2.lh.unresolved", { n: String(r.unresolved) }) }));
