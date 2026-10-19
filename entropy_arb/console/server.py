@@ -1395,23 +1395,16 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             "created_ts": r["created_ts"], "updated_ts": r["updated_ts"],
         }
 
-    async def worker_trades(request):
-        """Recent trade rows for one worker (spec §3.1 Runs 迁移)：reads the
-        trades CSV the worker's profile declares (maker or taker schema) —
-        a backend-managed path, never a client-supplied one. Raw evidence
-        with its source named: NOT a reconciled ledger, and unlike the
-        engine's session view these rows survive restarts."""
-        wid = request.match_info["wid"]
-        w = supervisor.workers.get(wid)
-        if w is None:
-            return web.json_response({"error": "not found"}, status=404)
-        try:
-            limit = min(int(request.query.get("limit", "100")), 500)
-        except ValueError:
-            limit = 100
+    def _trades_payload(profile: str, symbol: str, hedge: str,
+                        limit: int) -> dict:
+        """Recent trade rows for one line, read from the trades CSV that the
+        profile declares (maker or taker schema) — a backend-managed path,
+        never a client-supplied one. Shared by /api/workers/{wid}/trades and
+        /api/pnl/lines so both endpoints return exactly the same row shape.
+        Raw evidence with its source named: NOT a reconciled ledger."""
         import csv as _csv
         from .venues import load_profile_yaml
-        py = load_profile_yaml(supervisor.profiles_dir, w.profile)
+        py = load_profile_yaml(supervisor.profiles_dir, profile)
         maker_on = bool((py.get("maker") or {}).get("enabled"))
         path = None
         if maker_on:
@@ -1419,10 +1412,13 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         if not path:
             path = (py.get("logging") or {}).get("trades_csv")
         if not path:
-            path = os.path.join("logs",
-                                f"trades-{w.symbol}-{w.hedge}.csv")
+            path = os.path.join("logs", f"trades-{symbol}-{hedge}.csv")
         if not os.path.isabs(path):
             path = os.path.join(supervisor.root, path)
+        try:
+            limit = max(0, min(int(limit), 500))
+        except (TypeError, ValueError):
+            limit = 500
         rows, header, truncated = [], None, False
         if os.path.exists(path):
             with open(path, newline="", errors="replace") as fh:
@@ -1443,23 +1439,204 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 lines = lines[1:]
                 truncated = size > 512 * 1024
             data_lines = [ln for ln in lines if ln.strip()]
-            for ln in data_lines[-limit:][::-1]:    # newest first
-                try:
-                    values = next(_csv.reader([ln]))
-                    rows.append(dict(zip(header or [], values)))
-                except Exception:
-                    continue
+            if limit:
+                for ln in data_lines[-limit:][::-1]:    # newest first
+                    try:
+                        values = next(_csv.reader([ln]))
+                        rows.append(dict(zip(header or [], values)))
+                    except Exception:
+                        continue
+        return {"schema": "maker" if maker_on else "taker",
+                "source_file": os.path.basename(path),
+                "exists": os.path.exists(path),
+                "tail_truncated": truncated,
+                "header": header or [], "rows": rows}
+
+    async def worker_trades(request):
+        """Recent trade rows for one worker (spec §3.1 Runs 迁移)."""
+        wid = request.match_info["wid"]
+        w = supervisor.workers.get(wid)
+        if w is None:
+            return web.json_response({"error": "not found"}, status=404)
+        try:
+            limit = min(int(request.query.get("limit", "100")), 500)
+        except ValueError:
+            limit = 100
+        data = _trades_payload(w.profile, w.symbol, w.hedge, limit)
         return web.json_response({
             "schema_version": 1, "as_of": time.time(),
             "worker": wid, "profile": w.profile,
-            "schema": "maker" if maker_on else "taker",
-            "source_file": os.path.basename(path),
-            "exists": os.path.exists(path),
-            "tail_truncated": truncated,
-            "header": header or [],
-            "rows": rows,
+            "schema": data["schema"],
+            "source_file": data["source_file"],
+            "exists": data["exists"],
+            "tail_truncated": data["tail_truncated"],
+            "header": data["header"],
+            "rows": data["rows"],
             "note": "原始成交日志（含未成交/失败行）——是证据，不是已核对"
                     "账本；金额与 edge 为引擎记录值",
+        })
+
+    # ------------------------------------------------------ pnl lines (R-01)
+
+    def _tz_or_400(name: str):
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise web.HTTPBadRequest(
+                text=json.dumps({"error": "invalid_range",
+                                 "message": f"unknown timezone {name!r}"}),
+                content_type="application/json")
+
+    def _line_identity(profile, symbol, hedge, base, mode) -> tuple:
+        return (profile or "", (symbol or "").upper(), hedge or "",
+                base or "", mode or "")
+
+    def _line_payload(*, key, strategy_id, name, symbol, hedge, base, mode,
+                      status, worker_id, run_id, profile, session,
+                      data) -> dict:
+        return {
+            "key": key, "strategy_id": strategy_id, "name": name,
+            "symbol": symbol, "hedge": hedge, "base": base, "mode": mode,
+            "status": status, "worker_id": worker_id, "run_id": run_id,
+            "profile": profile, "session": session,
+            "schema": data["schema"],
+            "trades_exists": data["exists"],
+            "tail_truncated": data["tail_truncated"],
+            "trades": data["rows"],
+        }
+
+    async def api_pnl_lines(request):
+        """Estimator-only P&L lines (R-01): every running worker plus the
+        most recent run of lines that stopped inside the lookback window —
+        each with the same trade rows as /api/workers/{wid}/trades. Read-only
+        and explicitly NOT a reconciled ledger (net_pnl stays a R-02 topic).
+        'Today' starts at local midnight in `tz` (default Asia/Shanghai),
+        computed here so the browser's timezone cannot move it."""
+        if storage is None:
+            return web.json_response(
+                {"error": "unsupported_source",
+                 "message": "no storage configured"}, status=501)
+        from datetime import datetime
+
+        q = request.query
+        try:
+            days = int(q.get("days", "2"))
+        except (TypeError, ValueError):
+            days = 0
+        if not 1 <= days <= 7:
+            raise web.HTTPBadRequest(
+                text=json.dumps({"error": "invalid_range",
+                                 "message": "days must be between 1 and 7"}),
+                content_type="application/json")
+        try:
+            limit = int(q.get("limit", "500"))
+        except (TypeError, ValueError):
+            limit = 500
+        limit = max(0, min(limit, 500))         # 0 is legal: rows only
+        tzname = (q.get("tz") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+        tz = _tz_or_400(tzname)
+        now = time.time()
+        day_start = datetime.now(tz).replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp()
+        window_start = now - days * 86400.0
+
+        all_runs = storage.list_runs(limit=500)
+        runs_by_id = {r["run_id"]: r for r in all_runs}
+        strat_cache: dict = {}
+
+        def side_info(sid):
+            if not sid:
+                return None, None
+            if sid not in strat_cache:
+                strat_cache[sid] = storage.get_strategy(sid) or {}
+            return sid, strat_cache[sid].get("name")
+
+        # one live snapshot per running worker (concurrently; each snapshot
+        # already has a 3s client timeout, so a dead worker cannot stall us)
+        running_ids = [wid for wid, w in supervisor.workers.items()
+                       if w.running]
+        snaps: dict = {}
+        if running_ids:
+            results = await asyncio.gather(
+                *(supervisor.snapshot(wid) for wid in running_ids),
+                return_exceptions=True)
+            for wid, res in zip(running_ids, results):
+                if isinstance(res, dict):
+                    snaps[wid] = res
+
+        candidates = []            # (sort_ts, line identity, payload)
+        seen_run_ids = set()
+        for wid, w in list(supervisor.workers.items()):
+            run = runs_by_id.get(w.run_id) if w.run_id else None
+            if run is not None:
+                seen_run_ids.add(run["run_id"])
+            sid, name = side_info((run or {}).get("strategy_id"))
+            data = _trades_payload(w.profile, w.symbol, w.hedge, limit)
+            running = w.running
+            upl = None
+            if running:
+                sess = (snaps.get(wid) or {}).get("session") or {}
+                v = sess.get("unrealized_usd")
+                try:
+                    upl = float(v) if v is not None else None
+                except (TypeError, ValueError):
+                    upl = None
+            payload = _line_payload(
+                key=f"worker:{wid}", strategy_id=sid, name=name,
+                symbol=w.symbol, hedge=w.hedge, base=w.base, mode=w.mode,
+                status="running" if running else "stopped", worker_id=wid,
+                run_id=(run or {}).get("run_id") or w.run_id,
+                profile=w.profile,
+                session={"unrealized_usd": upl} if running else None,
+                data=data)
+            started = w.started_ts or (run or {}).get("started_ts") or 0.0
+            candidates.append((started, _line_identity(
+                w.profile, w.symbol, w.hedge, w.base, w.mode), payload))
+
+        # stopped lines: latest persisted run per line active in the window.
+        # Runs owned by a live/known worker are already covered above.
+        for r in all_runs:
+            if r["run_id"] in seen_run_ids:
+                continue
+            visible_end = r["ended_ts"] if r["ended_ts"] is not None \
+                else r["started_ts"]
+            if visible_end < window_start and r["started_ts"] < window_start:
+                continue
+            sid, name = side_info(r.get("strategy_id"))
+            data = _trades_payload(r["profile"], r["symbol"], r["hedge"],
+                                   limit)
+            payload = _line_payload(
+                key=f"run:{r['run_id']}", strategy_id=sid, name=name,
+                symbol=r["symbol"], hedge=r["hedge"], base=r["base"],
+                mode=r["mode"], status="stopped", worker_id=r["worker_id"],
+                run_id=r["run_id"], profile=r["profile"], session=None,
+                data=data)
+            candidates.append((r["started_ts"], _line_identity(
+                r["profile"], r["symbol"], r["hedge"], r["base"], r["mode"]),
+                payload))
+
+        # one row per line: running wins, otherwise the most recent run
+        best: dict = {}
+        for started, ident, payload in candidates:
+            cur = best.get(ident)
+            if cur is None:
+                best[ident] = (started, payload)
+                continue
+            cur_started, cur_payload = cur
+            if payload["status"] == "running" \
+                    and cur_payload["status"] != "running":
+                best[ident] = (started, payload)
+            elif payload["status"] == cur_payload["status"] \
+                    and started > cur_started:
+                best[ident] = (started, payload)
+        lines = [p for _, p in sorted(
+            best.values(),
+            key=lambda c: (0 if c[1]["status"] == "running" else 1,
+                           -float(c[0] or 0.0)))]
+        return web.json_response({
+            "schema_version": 1, "as_of": now, "timezone": tzname,
+            "day_start_ts": day_start, "lines": lines,
         })
 
     def _probe_candidates() -> dict:
@@ -1916,6 +2093,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_get("/api/workers/{wid}/ws", worker_ws)
     app.router.add_get("/api/workers/{wid}/logs", worker_logs)
     app.router.add_get("/api/workers/{wid}/trades", worker_trades)
+    app.router.add_get("/api/pnl/lines", api_pnl_lines)
     app.router.add_post("/api/workers/{wid}/stop", worker_stop)
     app.router.add_post("/api/workers/{wid}/restart", worker_restart)
     app.router.add_delete("/api/workers/{wid}", worker_delete)
