@@ -579,16 +579,39 @@ class Storage:
                             net_pnl: Optional[str],
                             components: dict, missing: list,
                             residual: dict) -> str:
+        """Persist one reconciliation, DEDUPED (O5): a re-run that produces
+        the identical verdict (same scope/rule/status/net/components/missing/
+        residual) returns the existing row instead of appending a new one.
+        The old behaviour wrote a row on every performance GET, which let
+        this table grow without bound while adding no information."""
+        scope_json = json.dumps(scope)
+        components_json = json.dumps(components, ensure_ascii=False)
+        missing_json = json.dumps(missing, ensure_ascii=False)
+        residual_json = json.dumps(residual, ensure_ascii=False)
+        prev = self.db.execute(
+            "SELECT id, scope_json, rule_version, status, net_pnl,"
+            " components_json, missing_json, residual_json"
+            " FROM reconciliations WHERE strategy_id=?"
+            " ORDER BY created_ts DESC, id DESC LIMIT 1",
+            (strategy_id,)).fetchone()
+        if prev is not None and (
+                prev["scope_json"] == scope_json
+                and prev["rule_version"] == rule_version
+                and prev["status"] == status
+                and prev["net_pnl"] == net_pnl
+                and prev["components_json"] == components_json
+                and prev["missing_json"] == missing_json
+                and prev["residual_json"] == residual_json):
+            return prev["id"]
         import uuid as _uuid
         rid = f"rec-{_uuid.uuid4().hex}"
         self.db.execute(
             "INSERT INTO reconciliations(id, strategy_id, scope_json,"
             " rule_version, status, net_pnl, components_json, missing_json,"
             " residual_json, created_ts) VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (rid, strategy_id, json.dumps(scope), rule_version, status,
-             net_pnl, json.dumps(components, ensure_ascii=False),
-             json.dumps(missing, ensure_ascii=False),
-             json.dumps(residual, ensure_ascii=False), time.time()))
+            (rid, strategy_id, scope_json, rule_version, status,
+             net_pnl, components_json, missing_json, residual_json,
+             time.time()))
         self.db.commit()
         return rid
 
@@ -597,6 +620,15 @@ class Storage:
         return [dict(r) for r in self.db.execute(
             "SELECT * FROM reconciliations WHERE strategy_id=?"
             " ORDER BY created_ts DESC, id LIMIT ?", (strategy_id, limit))]
+
+    def event_summary(self) -> List[Dict[str, Any]]:
+        """One aggregate over normalized_events for the ledger health page:
+        strategy x event_type x unresolved counts + latest event ts. Avoids
+        a per-strategy scan (84 strategies)."""
+        return [dict(r) for r in self.db.execute(
+            "SELECT strategy_id, event_type, unresolved, COUNT(*) AS n,"
+            " MAX(event_ts) AS last_ts FROM normalized_events"
+            " GROUP BY strategy_id, event_type, unresolved")]
 
     def save_valuation(self, *, strategy_id: str, boundary: str, ts: float,
                        mark_source: Optional[str], payload: dict) -> None:

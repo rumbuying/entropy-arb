@@ -88,8 +88,24 @@ async def amain(args) -> None:
     profiles = ProfilesManager(args.profiles_dir, args.env_file, audit_log=audit)
     secrets = SecretsManager(args.env_file, audit_log=audit)
     token = resolve_token(args)
+    # Auto-import (T2) is DEFAULT OFF. It must run inside this console
+    # process — storage is a single-connection single-writer design, so a
+    # systemd timer / second CLI writer would break its invariants.
+    auto_import = bool(getattr(args, "auto_import", False)) or \
+        os.environ.get("ENTROPY_AUTO_IMPORT", "").strip().lower() \
+        in ("1", "true", "yes", "on")
+    try:
+        auto_import_sec = float(
+            os.environ.get("ENTROPY_AUTO_IMPORT_SEC", "300"))
+    except ValueError:
+        auto_import_sec = 300.0
+    if auto_import:
+        print(f"auto-import ENABLED (every {auto_import_sec:.0f}s, console "
+              f"process is the only storage writer)", flush=True)
     app = create_app(supervisor, profiles, secrets, token=token,
-                     storage=storage)
+                     storage=storage, funding_collect=True,
+                     auto_import=auto_import,
+                     auto_import_sec=auto_import_sec)
     try:
         from entropy_arb.console.analytics import register_analytics
         register_analytics(app, profiles)
@@ -117,9 +133,10 @@ async def amain(args) -> None:
     try:
         await asyncio.Event().wait()
     finally:
-        loop_task = app.get("discovery_loop")
-        if loop_task:
-            loop_task.cancel()
+        for task_key in ("discovery_loop", "auto_import_task"):
+            loop_task = app.get(task_key)
+            if loop_task:
+                loop_task.cancel()
         aclose = (app.get("discovery") or {}).get("aclose")
         if aclose:
             with contextlib.suppress(Exception):
@@ -142,6 +159,10 @@ def main() -> None:
     p.add_argument("--token", default="",
                    help="API token; required (or auto-generated) for "
                         "non-loopback hosts")
+    p.add_argument("--auto-import", action="store_true",
+                   help="enable the in-process periodic CSV/event importer "
+                        "(default off; env ENTROPY_AUTO_IMPORT=1 also works, "
+                        "interval ENTROPY_AUTO_IMPORT_SEC, default 300s)")
     args = p.parse_args()
     setup_logging("logs/console-server.log")
     try:

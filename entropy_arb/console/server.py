@@ -33,10 +33,40 @@ log = logging.getLogger("console")
 POLL_SEC = 1.0
 DIAG_VENUES = tuple(sorted(set(BASE_VENUES) | set(HEDGE_VENUES)))
 
+# A funding payment row is a REAL signed payment: {ts, amount_usd, ...}.
+# Some venue adapters' fetch_funding still returns a PREDICTED-RATE snapshot
+# ({market, rate, interval_ends}); treating that as a payment would
+# fabricate funding, so it is rejected EXPLICITLY (never silently counted
+# as 0). See funding_payment_rows().
+FUNDING_PAYMENT_FIELDS = ("ts", "amount_usd")
+
+
+def funding_payment_rows(rows):
+    """Split one leg's fetch_funding output into actual payment rows.
+
+    Returns (payments, unsupported_reason). reason is None for a usable
+    payment API (possibly with an empty list — no payments in the window),
+    or "payment_api_unavailable" when the adapter returned a rate snapshot
+    instead of payments.
+    """
+    if not rows:
+        return [], None
+    payments = []
+    for row in rows:
+        if not isinstance(row, dict) or any(
+                row.get(k) is None for k in FUNDING_PAYMENT_FIELDS):
+            return [], "payment_api_unavailable"
+        payments.append(row)
+    return payments, None
+
 
 def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                secrets: SecretsManager, *, token: Optional[str] = None,
-               storage=None, ops_service: Optional[OperationService] = None) \
+               storage=None, ops_service: Optional[OperationService] = None,
+               start_background: bool = True,
+               funding_collect: bool = False,
+               auto_import: bool = False,
+               auto_import_sec: float = 300.0) \
         -> web.Application:
     app = web.Application()
     app["token"] = token
@@ -181,18 +211,38 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 log.exception("valuation snapshot round failed")
             await asyncio.sleep(300)
 
-    if storage is not None:
+    if storage is not None and start_background:
         app["valuation_task"] = asyncio.create_task(
             _valuation_loop(), name="v2-valuations")
 
     # ---- funding collection (spec §7.3/§8): poll VERIFIED funding APIs
     # per running strategy leg and store signed USD payments as resolved
     # events (dedupe key f:{venue}:{market}:{ts_ms}). Only venue kinds with
-    # a live-verified API are polled; unsupported venues are recorded once
-    # so the performance gates can declare funding coverage PARTIAL.
+    # a live-verified payment API are polled; unsupported venues and
+    # rate-snapshot-only adapters are recorded with an explicit reason so
+    # the health page / performance gates declare funding PARTIAL instead
+    # of silently counting 0.
+    funding_coverage: dict = {}        # "sid:venue:leg" -> coverage note
+    app["funding_coverage"] = funding_coverage
+
     async def _funding_loop():
+        from . import ops as ops_mod    # local: same module, explicit name
         seen: set = set()              # (sid, venue, market, ts_ms)
-        covered_notes: dict = {}
+        warned: set = set()            # coverage keys already logged
+        covered_notes: dict = {}       # kept for callers/tests
+
+        def _note(*, sid, venue_kind, leg, supported, reason=None,
+                  note=""):
+            rec = {"strategy_id": sid, "leg": leg, "venue": venue_kind,
+                   "supported": supported, "updated_ts": time.time()}
+            if reason:
+                rec["reason"] = reason
+            if note:
+                rec["note"] = note
+            funding_coverage[f"{sid}:{venue_kind}:{leg}"] = rec
+            covered_notes[(sid, venue_kind, leg)] = rec
+            return rec
+
         while True:
             try:
                 if storage is not None:
@@ -221,42 +271,66 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                      "hedge",
                                      "xyz" if hedge == "tradexyz" else ""))
                         for venue_kind, leg, leg_dex in legs:
+                            note_key = f"{sid}:{venue_kind}:{leg}"
                             supported = venue_registry.spec(
                                 venue_kind).funding_supported
                             if not supported:
-                                covered_notes.setdefault(
-                                    (sid, venue_kind, leg), {
-                                        "strategy_id": sid, "leg": leg,
-                                        "venue": venue_kind,
-                                        "supported": False})
+                                _note(sid=sid, venue_kind=venue_kind,
+                                      leg=leg, supported=False,
+                                      reason="venue_unsupported",
+                                      note="该场所没有资金费付款接口"
+                                           "（未实测/不支持）—— 未计入，不是 0")
                                 continue
                             import aiohttp as _aio
                             probe_sess = _aio.ClientSession()
                             try:
                                 v = ops_mod._make_venue(
-                                    _diag_conf(
+                                    ops_mod._diag_conf(
                                         venue_kind, s["symbol"],
                                         "hedge" if venue_kind == "katana"
                                         else leg, leg_dex,
                                         secrets.env_path),
                                     probe_sess, 5.0)
-                                await v.load_market()
+                                await asyncio.wait_for(v.load_market(), 30)
                                 v.init_signer()
                                 rows = await asyncio.wait_for(
                                     v.fetch_funding(), 30)
                             except Exception as e:
-                                log.warning("funding poll failed %s %s: %r",
-                                            sid[:16], venue_kind, e)
+                                _note(sid=sid, venue_kind=venue_kind,
+                                      leg=leg, supported=False,
+                                      reason="poll_failed",
+                                      note=f"资金费轮询失败："
+                                           f"{type(e).__name__}")
+                                if note_key not in warned:
+                                    warned.add(note_key)
+                                    log.warning(
+                                        "funding unsupported %s %s: %r",
+                                        sid[:16], venue_kind, e)
                                 continue
                             finally:
                                 try:
                                     await probe_sess.close()
                                 except Exception:
                                     pass
-                            covered_notes.setdefault(
-                                (sid, venue_kind, leg), {
-                                    "strategy_id": sid, "leg": leg,
-                                    "venue": venue_kind, "supported": True})
+                            payments, unsupported = \
+                                funding_payment_rows(rows)
+                            if unsupported:
+                                _note(
+                                    sid=sid, venue_kind=venue_kind, leg=leg,
+                                    supported=False, reason=unsupported,
+                                    note="该场所只返回预测费率，没有付款"
+                                         "接口 —— 未计入，不是 0")
+                                if note_key not in warned:
+                                    warned.add(note_key)
+                                    log.warning(
+                                        "funding unsupported %s %s: %s "
+                                        "(adapter returns a rate snapshot, "
+                                        "not payments)", sid[:16],
+                                        venue_kind, unsupported)
+                                continue
+                            _note(sid=sid, venue_kind=venue_kind, leg=leg,
+                                  supported=True,
+                                  note="付款接口可用")
                             # shared account-market: the funding payment
                             # belongs to the ACCOUNT (§6.4) — mark events
                             # shared so performance refuses to sum them
@@ -273,7 +347,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                             supervisor.profiles_dir, o))
                             ]
                             shared = bool(others)
-                            for row in rows:
+                            for row in payments:
                                 key = (sid, row["market"],
                                        int(row["ts"] * 1000))
                                 if key in seen:
@@ -290,10 +364,11 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                     payload={
                                         "amount_usd": row["amount_usd"],
                                         "market": row["market"],
-                                        "rate": row["rate"],
-                                        "index_price": row["index_price"],
+                                        "rate": row.get("rate"),
+                                        "index_price":
+                                            row.get("index_price"),
                                         "position_qty":
-                                            row["position_qty"],
+                                            row.get("position_qty"),
                                         "venue": venue_kind, "leg": leg,
                                         "shared_account_market": shared,
                                         "shared_with": others,
@@ -312,7 +387,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 log.exception("funding collection round failed")
             await asyncio.sleep(900)
 
-    if storage is not None:
+    # funding collection is its own switch (console.py enables it): direct
+    # create_app() embedders/tests must not trigger venue network calls
+    if storage is not None and funding_collect:
         app["funding_task"] = asyncio.create_task(
             _funding_loop(), name="v2-funding")
 
@@ -1005,16 +1082,67 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         if not profiles.exists(profile):
             return web.json_response({"error": "not_found",
                 "message": "unknown profile"}, status=404)
-        files = importer.discover_csvs(profiles, profile,
-                                       supervisor.profiles_dir)
+        # CSV paths are engine-relative (engine cwd == project root), so
+        # resolve against the project root — NOT the profiles dir.
+        files = importer.discover_csvs(profiles, profile, supervisor.root)
         return web.json_response({"schema_version": 1, "as_of": time.time(),
                                   "files": files})
+
+    def _strategy_for_profile(profile: str) -> Optional[str]:
+        """Explicit mapping: the strategy this profile launches into now —
+        never guessed from file names."""
+        try:
+            import yaml as _y
+            with open(os.path.join(supervisor.profiles_dir,
+                                   f"{profile}.yaml")) as fh:
+                raw = _y.safe_load(fh) or {}
+            stype = "maker_hedge" if (raw.get("maker") or {}).get("enabled") \
+                else "taker_basis"
+            return sup_strategy_id(profile, raw, stype)
+        except Exception:
+            log.exception("import mapping failed for %s", profile)
+            return None
+
+    def _import_events_dir(strategy_fallback=None) -> list:
+        """V2-008: this console's own run event files (backend-managed dir)."""
+        from . import importer
+        reports = []
+        events_dir = os.path.join(supervisor.root, "logs", "events")
+        if not os.path.isdir(events_dir):
+            return reports
+        for fn in sorted(os.listdir(events_dir)):
+            if not fn.endswith(".jsonl"):
+                continue
+            run_id = fn[:-6]
+            row = storage.get_run(run_id)
+            sid = (row or {}).get("strategy_id") or strategy_fallback
+            reports.append(importer.import_events_jsonl(
+                storage, path=os.path.join(events_dir, fn),
+                run_id=run_id, strategy_id=sid))
+        return reports
+
+    def _import_profile(profile: str) -> dict:
+        """One profile's CSVs + the run event files. Idempotent by stored
+        offset AND event id; a failure raises before the importer advances
+        its offset, so a later round safely retries the same lines."""
+        from . import importer
+        strategy_id = _strategy_for_profile(profile)
+        # CSV paths are engine-relative (engine cwd == project root), so
+        # resolve against the project root — NOT the profiles dir.
+        files = importer.discover_csvs(profiles, profile, supervisor.root)
+        reports = [importer.import_csv(
+            storage, path=f["path"], strategy_id=strategy_id)
+            for f in files]
+        reports.extend(_import_events_dir(strategy_id))
+        return {"profile": profile, "strategy_id": strategy_id,
+                "mapping": "explicit-by-launch-identity"
+                if strategy_id else "unresolved",
+                "reports": reports}
 
     async def api_import_run(request):
         """Incrementally import the profile's CSVs into normalized_events.
         Returns coverage + bad rows; legacy evidence stays 'unresolved' —
         this is NOT a reconciled ledger."""
-        from . import importer
         b = await body(request)
         profile = b.get("profile") or ""
         if not profiles.exists(profile):
@@ -1023,45 +1151,11 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         if storage is None:
             return web.json_response({"error": "unsupported_source",
                 "message": "no storage configured"}, status=501)
-        # explicit mapping: the strategy the profile launches into right now
-        strategy_id = None
-        try:
-            from . import identity as ident_mod
-            import yaml as _y
-            with open(os.path.join(supervisor.profiles_dir,
-                                   f"{profile}.yaml")) as fh:
-                raw = _y.safe_load(fh) or {}
-            stype = "maker_hedge" if (raw.get("maker") or {}).get("enabled") \
-                else "taker_basis"
-            strategy_id = sup_strategy_id(profile, raw, stype)
-        except Exception:
-            log.exception("import mapping failed")
-        files = importer.discover_csvs(profiles, profile,
-                                       supervisor.profiles_dir)
-        reports = []
-        for f in files:
-            reports.append(importer.import_csv(
-                storage, path=f["path"], strategy_id=strategy_id))
-        # V2-008: this console's own run event files (backend-managed dir)
-        events_dir = os.path.join(supervisor.root, "logs", "events")
-        if os.path.isdir(events_dir):
-            for fn in sorted(os.listdir(events_dir)):
-                if not fn.endswith(".jsonl"):
-                    continue
-                run_id = fn[:-6]
-                row = storage.get_run(run_id)
-                sid = (row or {}).get("strategy_id") or strategy_id
-                reports.append(importer.import_events_jsonl(
-                    storage, path=os.path.join(events_dir, fn),
-                    run_id=run_id, strategy_id=sid))
-        audit(f"import: profile={profile} strategy={strategy_id} "
-              f"files={len(reports)}")
+        out = _import_profile(profile)
+        audit(f"import: profile={profile} strategy={out['strategy_id']} "
+              f"files={len(out['reports'])}")
         return web.json_response({"schema_version": 1, "as_of": time.time(),
-                                  "profile": profile,
-                                  "strategy_id": strategy_id,
-                                  "mapping": "explicit-by-launch-identity"
-                                  if strategy_id else "unresolved",
-                                  "reports": reports})
+                                  **out})
 
     def sup_strategy_id(profile: str, raw: dict, stype: str) -> Optional[str]:
         from .identity import resolve_strategy
@@ -1079,6 +1173,49 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 strategy_type=stype)
             return strategy["id"]
         return None
+
+    # ---- auto-import (T2, DEFAULT OFF): console-process loop only. The
+    # storage is a single-connection single-writer design; a second CLI /
+    # systemd writer would break its migration + transaction assumptions.
+    def _auto_import_round() -> dict:
+        if storage is None:
+            return {"profiles": 0, "files": 0, "errors": []}
+        names = [p.get("name") if isinstance(p, dict) else str(p)
+                 for p in profiles.list()]
+        reports, errors = [], []
+        for name in names:
+            try:
+                reports.extend(_import_profile(name)["reports"])
+            except Exception as e:
+                log.exception("auto-import failed for profile %s", name)
+                errors.append({"profile": name, "error": repr(e)[:200]})
+        try:
+            reports.extend(_import_events_dir(None))
+        except Exception as e:
+            log.exception("auto-import of run event files failed")
+            errors.append({"profile": None, "error": repr(e)[:200]})
+        return {"profiles": len(names), "files": len(reports),
+                "errors": errors}
+
+    async def _auto_import_loop():
+        log.info("auto-import loop started (every %.0fs; console is the "
+                 "only storage writer)", auto_import_sec)
+        while True:
+            try:
+                summary = _auto_import_round()
+                if summary["errors"]:
+                    log.warning("auto-import round: %d files, %d errors",
+                                summary["files"], len(summary["errors"]))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("auto-import round failed")
+            await asyncio.sleep(max(1.0, float(auto_import_sec)))
+
+    app["auto_import_round"] = _auto_import_round
+    if storage is not None and auto_import:
+        app["auto_import_task"] = asyncio.create_task(
+            _auto_import_loop(), name="v2-auto-import")
 
     def _abs_range_or_400(request) -> tuple:
         from .analytics import RangeError, abs_range
@@ -1492,6 +1629,31 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         return (profile or "", (symbol or "").upper(), hedge or "",
                 base or "", mode or "")
 
+    def _leg_scope(venue_kind: str, dex: str = "") -> str:
+        """Account scope label for one leg. This is a VENUE scope, not a
+        real account id: HL's main dex and hl:io are merged upstream, so
+        the label matches what account_equity / /api/accounts record."""
+        vk = (venue_kind or "").strip().lower()
+        if vk == "hl":
+            d = (dex or "io").strip() or "io"
+            return "HL(io)" if d == "io" else f"HL({d})"
+        if vk == "tradexyz":
+            return "HL(xyz)"
+        try:
+            return venue_registry.spec(vk).display
+        except Exception:
+            return venue_kind or "?"
+
+    def _scopes_for_line(profile: str, base: str, hedge: str) -> list:
+        """Account scopes a line's two legs report into (venue scope)."""
+        from .venues import load_profile_yaml
+        raw = load_profile_yaml(supervisor.profiles_dir, profile)
+        dex = ((raw.get("entropy") or {}).get("dex") or "").strip()
+        h = "hl" if hedge == "tradexyz" else (hedge or "")
+        hdex = "xyz" if hedge == "tradexyz" else (dex or "io")
+        out = [_leg_scope(base or "hl", dex), _leg_scope(h, hdex)]
+        return list(dict.fromkeys(out))
+
     def _line_state_view(snap: dict) -> dict:
         """Whitelisted state fields for the P&L board (brief §3): the three
         columns it restores — positions (E/H), premium vs band, equity per
@@ -1523,12 +1685,15 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
 
     def _line_payload(*, key, strategy_id, name, symbol, hedge, base, mode,
                       status, worker_id, run_id, profile, session, state,
-                      data) -> dict:
+                      scopes, data) -> dict:
         return {
             "key": key, "strategy_id": strategy_id, "name": name,
             "symbol": symbol, "hedge": hedge, "base": base, "mode": mode,
             "status": status, "worker_id": worker_id, "run_id": run_id,
             "profile": profile, "session": session, "state": state,
+            # venue-scope account labels for the "account truth vs strategy
+            # estimate" panel (M2/T4); joins /api/accounts period changes
+            "scopes": scopes,
             "schema": data["schema"],
             "trades_exists": data["exists"],
             "tail_truncated": data["tail_truncated"],
@@ -1637,7 +1802,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 run_id=(run or {}).get("run_id") or w.run_id,
                 profile=w.profile,
                 session={"unrealized_usd": upl} if running else None,
-                state=state, data=data)
+                state=state,
+                scopes=_scopes_for_line(w.profile, w.base, w.hedge),
+                data=data)
             started = w.started_ts or (run or {}).get("started_ts") or 0.0
             candidates.append((started, _line_identity(
                 w.profile, w.symbol, w.hedge, w.base, w.mode), payload))
@@ -1661,7 +1828,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 symbol=r["symbol"], hedge=r["hedge"], base=r["base"],
                 mode=r["mode"], status="stopped", worker_id=r["worker_id"],
                 run_id=r["run_id"], profile=r["profile"], session=None,
-                state=None, data=data)
+                state=None,
+                scopes=_scopes_for_line(r["profile"], r["base"], r["hedge"]),
+                data=data)
             candidates.append((r["started_ts"], _line_identity(
                 r["profile"], r["symbol"], r["hedge"], r["base"], r["mode"]),
                 payload))
@@ -2043,6 +2212,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 clamped = bool(
                     v0 is not None and v1 is not None
                     and v0["ts"] > ps + FRESH)
+                last_snapshot_ts = v1["ts"] if v1 else None
+                boundary = ("missing" if v0 is None or v1 is None
+                            else "clamped" if clamped else "exact")
                 changes.append({
                     "scope": scope, "equity_start": eq0,
                     "equity_end": eq1,
@@ -2050,15 +2222,41 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                               if eq0 is not None and eq1 is not None
                               else None),
                     "start_ts": v0["ts"] if v0 else None,
-                    "end_ts": v1["ts"] if v1 else None,
+                    "end_ts": last_snapshot_ts,
                     "clamped": clamped,
+                    # venue scope: HL's main dex and hl:io are merged
+                    # upstream — this is NOT a real account id (T4/D2)
+                    "identity_status": "venue_scope",
+                    # deposits / withdrawals / manual trades are not
+                    # detected anywhere yet, so delta ≠ profit
+                    "transfer_coverage": "undetected",
+                    "last_snapshot_ts": last_snapshot_ts,
+                    "last_snapshot_age_sec": (
+                        round(now_ts - last_snapshot_ts, 1)
+                        if last_snapshot_ts is not None else None),
+                    "coverage": {
+                        "start_ts": v0["ts"] if v0 else None,
+                        "end_ts": last_snapshot_ts,
+                        "clamped": clamped,
+                        "boundary": boundary,
+                    },
+                    # strategy attribution arrives with M3; until then the
+                    # strategy-vs-account gap is explicitly unexplained
+                    "unexplained_delta": None,
+                    "unexplained_reason":
+                        "strategy_attribution_deferred_m3",
+                    "note": "账户权益变动含已实现/浮盈/资金费/费用/出入金/"
+                            "人工交易；期间若有划转则不可比（出入金未检测）",
                 })
             period = {
                 "start": ps, "end": pe, "effective_end": eff_end,
                 "timezone": ptz,
+                "identity_status": "venue_scope",
+                "transfer_coverage": "undetected",
                 "changes": changes,
-                "note": "账户权益变动含已实现/浮盈/资金费/费用 —— 是账户"
-                        "维度事实；与策略归因（总览各策略分项）对照看。"
+                "note": "账户权益变动 = 场所级（venue scope）真值：含已实现"
+                        "/浮盈/资金费/费用/出入金/人工交易，期间若有划转则"
+                        "不可比；HL 主 dex 与 hl:io 合并，不是真实 account_id。"
                         "期初缺失时变动自区间内首个快照起（已标注）",
             }
 
@@ -2119,6 +2317,137 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             "reconciliation_status": "no_data",
         })
 
+    # --------------------------------------------------- ledger health (T3)
+
+    def _declared_sources(profile: str) -> list:
+        """Profile-declared trade CSVs WITH an existence flag. The importer's
+        discover_csvs only returns files that exist; the health page must be
+        able to show a missing source instead of silently omitting it."""
+        import yaml as _y
+        out = []
+        try:
+            with open(os.path.join(supervisor.profiles_dir,
+                                   f"{profile}.yaml")) as fh:
+                raw = _y.safe_load(fh) or {}
+        except Exception:
+            return out
+        for sect, hint in (("logging", "taker"), ("maker", "maker")):
+            cfg = raw.get(sect) or {}
+            if sect == "maker" and not cfg.get("enabled"):
+                continue
+            rel = cfg.get("trades_csv")
+            if not rel:
+                continue
+            path = rel if os.path.isabs(rel) \
+                else os.path.join(supervisor.root, rel)
+            out.append({"profile": profile, "path": path,
+                        "kind": hint, "exists": os.path.exists(path)})
+        return out
+
+    async def api_ledger_health(request):
+        """Evidence-coverage health per strategy: event counts, last import,
+        gap codes and source files. READ-ONLY. This is explicitly NOT a P&L
+        number — it answers "what does the ledger lack, and by how much"."""
+        if storage is None:
+            return web.json_response({"error": "unsupported_source",
+                "message": "no storage configured"}, status=501)
+        now = time.time()
+        STALE_SEC = 86400.0
+        import_sources = storage.list_import_sources(limit=1000)
+        last_import = max(((s["last_import_ts"] or 0) for s in import_sources),
+                          default=0) or None if import_sources else None
+        by_path: dict = {}
+        for s in import_sources:
+            ts = s["last_import_ts"] or 0
+            if by_path.get(s["path"], -1) < ts:
+                by_path[s["path"]] = ts
+        events_by_sid: dict = {}
+        for row in storage.event_summary():
+            sid = row["strategy_id"]
+            rec = events_by_sid.setdefault(
+                sid, {"total": 0, "unresolved": 0, "by_type": {},
+                      "last_event_ts": None})
+            n = int(row["n"] or 0)
+            rec["total"] += n
+            if row["unresolved"]:
+                rec["unresolved"] += n
+            et = row["event_type"]
+            rec["by_type"][et] = rec["by_type"].get(et, 0) + n
+            ts = row["last_ts"]
+            if ts is not None and (rec["last_event_ts"] is None
+                                   or ts > rec["last_event_ts"]):
+                rec["last_event_ts"] = ts
+        out, summary = [], {"strategies": 0, "with_events": 0,
+                            "no_events": 0, "stale_imports": 0,
+                            "unresolved": 0}
+        for s in storage.list_strategies(limit=500):
+            sid = s["id"]
+            runs = storage.strategy_runs(sid, limit=100)
+            profs = sorted({r["profile"] for r in runs if r.get("profile")})
+            ev = events_by_sid.get(sid) or {
+                "total": 0, "unresolved": 0, "by_type": {},
+                "last_event_ts": None}
+            gaps, srcs = [], []
+            import_ts = None
+            for p in profs:
+                for src in _declared_sources(p):
+                    srcs.append(src)
+                    ts = by_path.get(src["path"])
+                    if ts is not None and (import_ts is None
+                                           or ts > import_ts):
+                        import_ts = ts
+            if any(not x["exists"] for x in srcs):
+                gaps.append("source_file_missing")
+            if ev["total"] == 0:
+                gaps.append("no_events")
+            else:
+                types = ev["by_type"]
+                if ev["unresolved"] > 0:
+                    gaps.append("unresolved_events")
+                if types.get("taker_attempt") or types.get("taker_csv_row"):
+                    gaps.append("fee_missing")
+                if not types.get("funding"):
+                    gaps.append("funding_missing")
+            stale = bool(import_ts is None or now - import_ts > STALE_SEC)
+            if stale:
+                gaps.append("manual_import_stale")
+            summary["strategies"] += 1
+            summary["with_events" if ev["total"] else "no_events"] += 1
+            summary["unresolved"] += ev["unresolved"]
+            summary["stale_imports"] += 1 if stale else 0
+            out.append({
+                "strategy_id": sid, "name": s["name"],
+                "symbol": s["symbol"], "type": s["type"],
+                "archived_ts": s.get("archived_ts"),
+                "profiles": profs,
+                "events": ev,
+                "import": {"last_import_ts": import_ts, "stale": stale,
+                           "stale_after_sec": STALE_SEC},
+                "gaps": gaps,
+                "sources": srcs,
+            })
+        return web.json_response({
+            "schema_version": 1, "as_of": now,
+            "note": "证据覆盖体检 —— 不是收益数字；缺口代码见 gap_codes",
+            "gap_codes": {
+                "no_events": "该策略没有任何已导入事件",
+                "unresolved_events": "事件缺少真实成交ID，账本只当证据",
+                "fee_missing": "taker 证据无逐笔手续费",
+                "funding_missing": "没有任何资金费事件",
+                "manual_import_stale": "最近一次导入超过 24h 或从未导入",
+                "source_file_missing": "profile 声明的成交文件不存在",
+            },
+            "imports": {
+                "files": len(import_sources),
+                "last_import_ts": last_import,
+                "stale": bool(last_import is None
+                              or now - last_import > STALE_SEC),
+            },
+            "funding_coverage": list(app["funding_coverage"].values()),
+            "summary": summary,
+            "strategies": out,
+        })
+
     # ------------------------------------------------------------- routes
 
     app.router.add_get("/", index)
@@ -2177,6 +2506,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_get("/api/experiments/{eid}/comparison",
                        api_experiment_comparison)
     app.router.add_get("/api/accounts", api_accounts)
+    app.router.add_get("/api/ledger/health", api_ledger_health)
     app.router.add_post("/api/import/scan", api_import_scan)
     app.router.add_post("/api/import/run", api_import_run)
 
