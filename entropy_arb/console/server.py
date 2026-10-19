@@ -1492,14 +1492,43 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         return (profile or "", (symbol or "").upper(), hedge or "",
                 base or "", mode or "")
 
+    def _line_state_view(snap: dict) -> dict:
+        """Whitelisted state fields for the P&L board (brief §3): the three
+        columns it restores — positions (E/H), premium vs band, equity per
+        leg. Never pass the snapshot through: it also carries books, events,
+        config and other large evidence consumers of this endpoint never
+        need. Missing values stay null so the UI can show '—'."""
+        sess = snap.get("session") or {}
+        sig = snap.get("signal") or {}
+        venues = snap.get("venues") or {}
+        out = {
+            "session": {"unrealized_usd": sess.get("unrealized_usd"),
+                        "equity_sum": sess.get("equity_sum")},
+            "signal": {"mid_premium_bps": sig.get("mid_premium_bps"),
+                       "band_low_bps": sig.get("band_low_bps"),
+                       "band_high_bps": sig.get("band_high_bps")},
+            "venues": {},
+        }
+        for leg in ("entropy", "hedge"):
+            v = venues.get(leg)
+            if not isinstance(v, dict):
+                out["venues"][leg] = None
+                continue
+            out["venues"][leg] = {
+                "name": v.get("name"), "position": v.get("position"),
+                "equity": v.get("equity"), "volume_usd": v.get("volume_usd"),
+                "down": v.get("down"), "fresh": v.get("fresh"),
+            }
+        return out
+
     def _line_payload(*, key, strategy_id, name, symbol, hedge, base, mode,
-                      status, worker_id, run_id, profile, session,
+                      status, worker_id, run_id, profile, session, state,
                       data) -> dict:
         return {
             "key": key, "strategy_id": strategy_id, "name": name,
             "symbol": symbol, "hedge": hedge, "base": base, "mode": mode,
             "status": status, "worker_id": worker_id, "run_id": run_id,
-            "profile": profile, "session": session,
+            "profile": profile, "session": session, "state": state,
             "schema": data["schema"],
             "trades_exists": data["exists"],
             "tail_truncated": data["tail_truncated"],
@@ -1509,10 +1538,13 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     async def api_pnl_lines(request):
         """Estimator-only P&L lines (R-01): every running worker plus the
         most recent run of lines that stopped inside the lookback window —
-        each with the same trade rows as /api/workers/{wid}/trades. Read-only
-        and explicitly NOT a reconciled ledger (net_pnl stays a R-02 topic).
-        'Today' starts at local midnight in `tz` (default Asia/Shanghai),
-        computed here so the browser's timezone cannot move it."""
+        each with the same trade rows as /api/workers/{wid}/trades. Running
+        lines also carry a whitelisted `state` view (session/signal/venues
+        only, from the same snapshot — no extra HTTP call); stopped lines
+        have state=null. Read-only and explicitly NOT a reconciled ledger
+        (net_pnl stays a R-02 topic). 'Today' starts at local midnight in
+        `tz` (default Asia/Shanghai), computed here so the browser's
+        timezone cannot move it."""
         if storage is None:
             return web.json_response(
                 {"error": "unsupported_source",
@@ -1574,14 +1606,18 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             sid, name = side_info((run or {}).get("strategy_id"))
             data = _trades_payload(w.profile, w.symbol, w.hedge, limit)
             running = w.running
+            snap = snaps.get(wid) if running else None
             upl = None
+            state = None
             if running:
-                sess = (snaps.get(wid) or {}).get("session") or {}
+                sess = (snap or {}).get("session") or {}
                 v = sess.get("unrealized_usd")
                 try:
                     upl = float(v) if v is not None else None
                 except (TypeError, ValueError):
                     upl = None
+                if snap is not None:
+                    state = _line_state_view(snap)
             payload = _line_payload(
                 key=f"worker:{wid}", strategy_id=sid, name=name,
                 symbol=w.symbol, hedge=w.hedge, base=w.base, mode=w.mode,
@@ -1589,7 +1625,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 run_id=(run or {}).get("run_id") or w.run_id,
                 profile=w.profile,
                 session={"unrealized_usd": upl} if running else None,
-                data=data)
+                state=state, data=data)
             started = w.started_ts or (run or {}).get("started_ts") or 0.0
             candidates.append((started, _line_identity(
                 w.profile, w.symbol, w.hedge, w.base, w.mode), payload))
@@ -1611,7 +1647,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 symbol=r["symbol"], hedge=r["hedge"], base=r["base"],
                 mode=r["mode"], status="stopped", worker_id=r["worker_id"],
                 run_id=r["run_id"], profile=r["profile"], session=None,
-                data=data)
+                state=None, data=data)
             candidates.append((r["started_ts"], _line_identity(
                 r["profile"], r["symbol"], r["hedge"], r["base"], r["mode"]),
                 payload))

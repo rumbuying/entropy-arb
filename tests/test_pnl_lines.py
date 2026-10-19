@@ -164,10 +164,35 @@ def _fixture():
     # acceptance case), profile deleted → no CSV on disk
     _make_worker(sup, "w3", "P3", "ZEC", "arcus", running=False,
                  started_ts=now - 800)
+    # running worker whose state snapshot is unavailable (engine not up yet)
+    _make_worker(sup, "w6", "P6", "NONE", "arcus", running=True,
+                 started_ts=now - 700)
 
     async def fake_snapshot(wid):
         if wid == "w1":
-            return {"session": {"unrealized_usd": 12.5}}
+            # deliberately includes forbidden fields (book/events/config/
+            # unrelated session+signal+venue keys) to prove the endpoint
+            # whitelists rather than passing the snapshot through
+            return {
+                "ts": 1.0,
+                "config": {"secret": "nope"},
+                "events": [["nope"]],
+                "book": {"levels": [1, 2, 3]},
+                "session": {"unrealized_usd": 12.5, "equity_sum": 1000.0,
+                            "pnl_mtm": 99.0, "trades": 3},
+                "signal": {"mid_premium_bps": 2.5, "band_low_bps": -3.0,
+                           "band_high_bps": 3.0, "armed": ["x"]},
+                "venues": {
+                    "entropy": {"name": "lighter", "position": 53.0,
+                                "equity": 500.0, "volume_usd": 12345.0,
+                                "down": False, "fresh": True,
+                                "book": {"bid": 1}, "liq_px": 42.0},
+                    "hedge": {"name": "lighter-rh", "position": -53.0,
+                              "equity": 495.0, "volume_usd": 23456.0,
+                              "down": True, "fresh": False,
+                              "fee_bps": 1.0},
+                },
+            }
         return None
     sup.snapshot = fake_snapshot
 
@@ -236,6 +261,25 @@ def test_pnl_lines_running_and_stopped():
                         p1["mode"]) == ("SNDK", "lighter-rh", "hl",
                                         "record")
                 assert p1["session"] == {"unrealized_usd": 12.5}
+                # brief §3 whitelist: exactly the three UI columns, nothing
+                # large/unrelated leaks through from the snapshot
+                assert p1["state"] == {
+                    "session": {"unrealized_usd": 12.5,
+                                "equity_sum": 1000.0},
+                    "signal": {"mid_premium_bps": 2.5,
+                               "band_low_bps": -3.0,
+                               "band_high_bps": 3.0},
+                    "venues": {
+                        "entropy": {"name": "lighter", "position": 53.0,
+                                    "equity": 500.0,
+                                    "volume_usd": 12345.0,
+                                    "down": False, "fresh": True},
+                        "hedge": {"name": "lighter-rh", "position": -53.0,
+                                  "equity": 495.0,
+                                  "volume_usd": 23456.0,
+                                  "down": True, "fresh": False},
+                    },
+                }
                 assert p1["schema"] == "taker"
                 assert p1["trades_exists"] is True
                 assert len(p1["trades"]) == 4
@@ -249,10 +293,11 @@ def test_pnl_lines_running_and_stopped():
                 assert sum(1 for x in body["lines"]
                            if x["profile"] == "P1") == 1
 
-                # stopped line from storage: session null, trades present
+                # stopped line from storage: session/state null, trades present
                 p2 = lines["P2"]
                 assert p2["status"] == "stopped"
                 assert p2["session"] is None
+                assert p2["state"] is None
                 assert p2["run_id"] == f["rid_stopped"]
                 assert p2["worker_id"] == "w2"
                 assert len(p2["trades"]) == 2
@@ -262,6 +307,7 @@ def test_pnl_lines_running_and_stopped():
                 assert p3["status"] == "stopped"
                 assert p3["worker_id"] == "w3"
                 assert p3["session"] is None
+                assert p3["state"] is None
                 assert p3["trades_exists"] is False
                 assert p3["trades"] == []
 
@@ -270,6 +316,14 @@ def test_pnl_lines_running_and_stopped():
                 assert p5["status"] == "stopped"
                 assert p5["run_id"] == f["rid_stale"]
                 assert p5["session"] is None
+                assert p5["state"] is None
+
+                # running but snapshot unavailable: state is null, not fake 0s
+                # (session stays an object with null — contract §3)
+                p6 = lines["P6"]
+                assert p6["status"] == "running"
+                assert p6["session"] == {"unrealized_usd": None}
+                assert p6["state"] is None
 
                 # outside default days=2 window
                 assert "P4" not in lines
