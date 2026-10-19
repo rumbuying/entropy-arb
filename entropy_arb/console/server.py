@@ -74,6 +74,28 @@ def run_import_once(app) -> dict:
     return fn()
 
 
+def start_auto_import_loop(app):
+    """Start the auto-import background task (T2).
+
+    MUST be called only AFTER the HTTP server is listening: the first round
+    walks every profile and event file and, although it yields between
+    units, it must never delay the bind. This is the R-02 outage fix — the
+    task used to be created inside create_app(), before site.start().
+    Returns the task, or None when the feature is disabled.
+    """
+    if not app.get("auto_import_enabled"):
+        return None
+    task = app.get("auto_import_task")
+    if task is not None and not task.done():
+        return task
+    loop_fn = app.get("_auto_import_loop")
+    if loop_fn is None:
+        raise KeyError("auto-import loop unavailable")
+    task = asyncio.create_task(loop_fn(), name="v2-auto-import")
+    app["auto_import_task"] = task
+    return task
+
+
 def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                secrets: SecretsManager, *, token: Optional[str] = None,
                storage=None, ops_service: Optional[OperationService] = None,
@@ -1196,7 +1218,60 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     # ---- auto-import (T2, DEFAULT OFF): console-process loop only. The
     # storage is a single-connection single-writer design; a second CLI /
     # systemd writer would break its migration + transaction assumptions.
+    #
+    # Startup ordering: create_app() never creates this task. console.py
+    # calls start_auto_import_loop(app) only AFTER site.start(), because the
+    # first round walks every profile/event file and must never delay the
+    # bind (R-02 outage: 8788 did not listen while round one ran).
+    def _import_profile_csvs(profile: str) -> dict:
+        """CSV half of one profile's import; event files are separate units
+        so the background loop can yield between them."""
+        from . import importer
+        strategy_id = _strategy_for_profile(profile)
+        files = importer.discover_csvs(profiles, profile, supervisor.root)
+        reports = [importer.import_csv(
+            storage, path=f["path"], strategy_id=strategy_id)
+            for f in files]
+        return {"profile": profile, "strategy_id": strategy_id,
+                "reports": reports}
+
+    def _event_files() -> list:
+        events_dir = os.path.join(supervisor.root, "logs", "events")
+        if not os.path.isdir(events_dir):
+            return []
+        return sorted(fn for fn in os.listdir(events_dir)
+                      if fn.endswith(".jsonl"))
+
+    def _import_event_file(fn: str, strategy_fallback=None) -> dict:
+        from . import importer
+        run_id = fn[:-6]
+        row = storage.get_run(run_id)
+        sid = (row or {}).get("strategy_id") or strategy_fallback
+        return importer.import_events_jsonl(
+            storage, path=os.path.join(supervisor.root, "logs", "events",
+                                       fn),
+            run_id=run_id, strategy_id=sid)
+
+    def _import_events_dir(strategy_fallback=None) -> list:
+        return [_import_event_file(fn, strategy_fallback)
+                for fn in _event_files()]
+
+    def _import_profile(profile: str) -> dict:
+        """One profile's CSVs + the run event files. Idempotent by stored
+        offset AND event id; a failure raises before the importer advances
+        its offset, so a later round safely retries the same lines."""
+        out = _import_profile_csvs(profile)
+        reports = list(out["reports"])
+        reports.extend(_import_events_dir(out["strategy_id"]))
+        return {"profile": profile, "strategy_id": out["strategy_id"],
+                "mapping": "explicit-by-launch-identity"
+                if out["strategy_id"] else "unresolved",
+                "reports": reports}
+
     def _auto_import_round() -> dict:
+        """Synchronous single round (T2 test hook / /api/import/run reuse).
+        The BACKGROUND loop uses _auto_import_round_async, which yields
+        between units so the console keeps answering HTTP."""
         if storage is None:
             return {"profiles": 0, "files": 0, "errors": []}
         names = [p.get("name") if isinstance(p, dict) else str(p)
@@ -1216,12 +1291,40 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         return {"profiles": len(names), "files": len(reports),
                 "errors": errors}
 
+    async def _auto_import_round_async() -> dict:
+        """One round that YIELDS to the event loop between units (a unit is
+        one profile's CSVs, then one run event file). Imports stay on this
+        loop/thread — no second sqlite writer."""
+        if storage is None:
+            return {"profiles": 0, "files": 0, "errors": []}
+        names = [p.get("name") if isinstance(p, dict) else str(p)
+                 for p in profiles.list()]
+        files, errors = 0, []
+        for name in names:
+            await asyncio.sleep(0)          # serve pending HTTP first
+            try:
+                files += len(_import_profile_csvs(name)["reports"])
+            except Exception as e:
+                log.exception("auto-import failed for profile %s", name)
+                errors.append({"profile": name, "error": repr(e)[:200]})
+        for fn in _event_files():
+            await asyncio.sleep(0)
+            try:
+                _import_event_file(fn)
+                files += 1
+            except Exception as e:
+                log.exception("auto-import failed for event file %s", fn)
+                errors.append({"profile": None, "file": fn,
+                               "error": repr(e)[:200]})
+        return {"profiles": len(names), "files": files, "errors": errors}
+
     async def _auto_import_loop():
         log.info("auto-import loop started (every %.0fs; console is the "
                  "only storage writer)", auto_import_sec)
         while True:
             try:
-                summary = _auto_import_round()
+                await asyncio.sleep(0)      # never block the startup tick
+                summary = await _auto_import_round_async()
                 if summary["errors"]:
                     log.warning("auto-import round: %d files, %d errors",
                                 summary["files"], len(summary["errors"]))
@@ -1233,9 +1336,11 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
 
     app["run_import_once"] = _auto_import_round      # T2 test hook (QA)
     app["auto_import_round"] = _auto_import_round    # back-compat alias
-    if storage is not None and auto_import:
-        app["auto_import_task"] = asyncio.create_task(
-            _auto_import_loop(), name="v2-auto-import")
+    app["auto_import_round_async"] = _auto_import_round_async
+    app["_auto_import_loop"] = _auto_import_loop
+    # task created ONLY by start_auto_import_loop() after the HTTP bind
+    app["auto_import_enabled"] = bool(storage is not None and auto_import)
+    app["auto_import_sec"] = float(auto_import_sec)
 
     def _abs_range_or_400(request) -> tuple:
         from .analytics import RangeError, abs_range

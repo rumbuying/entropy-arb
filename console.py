@@ -28,7 +28,8 @@ from aiohttp import web  # noqa: E402
 
 from entropy_arb.console.profiles import ProfilesManager  # noqa: E402
 from entropy_arb.console.secrets import SecretsManager, audit_writer  # noqa: E402
-from entropy_arb.console.server import create_app  # noqa: E402
+from entropy_arb.console.server import (create_app,  # noqa: E402
+                                         start_auto_import_loop)
 from entropy_arb.console.supervisor import Supervisor  # noqa: E402
 
 
@@ -128,6 +129,9 @@ async def amain(args) -> None:
     await runner.setup()
     site = web.TCPSite(runner, args.host, args.port)
     await site.start()
+    # T2 fix: the import round is started only AFTER the socket is
+    # listening — it must never delay the bind (R-02 outage).
+    start_auto_import_loop(app)
     url = f"http://{args.host}:{args.port}"
     if token:
         url += f"/?token={token}"

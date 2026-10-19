@@ -517,8 +517,13 @@ class Storage:
                      venue: Optional[str] = None,
                      instrument: Optional[str] = None,
                      dedupe_key: Optional[str] = None,
-                     unresolved: bool = True) -> bool:
-        """Idempotent by event_id (src:line). Returns True when inserted."""
+                     unresolved: bool = True, commit: bool = True) -> bool:
+        """Idempotent by event_id (src:line). Returns True when inserted.
+
+        commit=False lets bulk importers batch one transaction per FILE:
+        per-row commits cost ~10-40ms of fsync each, which made a 300-row
+        CSV block the console event loop for seconds (R-02 outage). The
+        caller must commit (or roll back) itself."""
         cur = self.db.execute(
             "INSERT OR IGNORE INTO normalized_events(event_id, dedupe_key,"
             " event_type, strategy_id, run_id, account_id, venue, instrument,"
@@ -528,7 +533,8 @@ class Storage:
              account_id, venue, instrument, event_ts,
              json.dumps(payload, ensure_ascii=False), source_id, source_line,
              int(unresolved), import_batch))
-        self.db.commit()
+        if commit:
+            self.db.commit()
         return cur.rowcount > 0
 
     def events_for_strategy(self, strategy_id: str, *,

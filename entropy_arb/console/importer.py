@@ -144,47 +144,52 @@ def import_csv(storage, *, path: str, strategy_id: Optional[str],
     imported = bad_rows = total = 0
     bad: List[dict] = []
     torn = False
-    with open(path, newline="", errors="replace") as fh:
-        reader = csv.reader(fh)
-        next(reader)                              # header
-        for lineno, row in enumerate(reader, start=2):
-            if lineno - 2 < start_line:           # already imported
-                continue
-            total += 1
-            if not row or all(not c.strip() for c in row):
-                continue                          # blank tail
-            try:
-                payload = _parse_row(kind, header, row)
-                if payload is None:
-                    raise ValueError("unparsable fields")
-            except ValueError as e:
-                if "truncated line" in str(e):
-                    # torn tail — leave it for the next round: the offset
-                    # stops BEFORE this line so completion gets imported
-                    torn = True
-                    break
-                bad_rows += 1
-                bad.append({"line": lineno, "reason": str(e)[:120],
-                            "raw": ",".join(row)[:200]})
-                continue
-            except Exception as e:
-                bad_rows += 1
-                bad.append({"line": lineno, "reason": str(e)[:120],
-                            "raw": ",".join(row)[:200]})
-                continue
-            event_ts = payload.pop("event_ts", None)
-            # no real fill ids exist in these schemas → dedupe_key stays
-            # null: line-offset idempotence is import idempotence only
-            ok = storage.insert_event(
-                event_id=f"src:{src_id}:line:{lineno}",
-                event_type=f"{kind}_csv_row",
-                import_batch=batch, source_id=src_id, source_line=lineno,
-                event_ts=event_ts, payload=payload,
-                strategy_id=strategy_id,
-                venue=payload.get("sell_venue") or payload.get("hedge_dir"),
-                unresolved=True)
-            if ok:
-                imported += 1
+    try:
+        with open(path, newline="", errors="replace") as fh:
+            reader = csv.reader(fh)
+            next(reader)                              # header
+            for lineno, row in enumerate(reader, start=2):
+                if lineno - 2 < start_line:           # already imported
+                    continue
+                total += 1
+                if not row or all(not c.strip() for c in row):
+                    continue                          # blank tail
+                try:
+                    payload = _parse_row(kind, header, row)
+                    if payload is None:
+                        raise ValueError("unparsable fields")
+                except ValueError as e:
+                    if "truncated line" in str(e):
+                        # torn tail — leave it for the next round: the offset
+                        # stops BEFORE this line so completion gets imported
+                        torn = True
+                        break
+                    bad_rows += 1
+                    bad.append({"line": lineno, "reason": str(e)[:120],
+                                "raw": ",".join(row)[:200]})
+                    continue
+                except Exception as e:
+                    bad_rows += 1
+                    bad.append({"line": lineno, "reason": str(e)[:120],
+                                "raw": ",".join(row)[:200]})
+                    continue
+                event_ts = payload.pop("event_ts", None)
+                # no real fill ids exist in these schemas → dedupe_key stays
+                # null: line-offset idempotence is import idempotence only
+                ok = storage.insert_event(
+                    event_id=f"src:{src_id}:line:{lineno}",
+                    event_type=f"{kind}_csv_row",
+                    import_batch=batch, source_id=src_id, source_line=lineno,
+                    event_ts=event_ts, payload=payload,
+                    strategy_id=strategy_id,
+                    venue=payload.get("sell_venue") or payload.get("hedge_dir"),
+                    unresolved=True, commit=False)
+                if ok:
+                    imported += 1
+        storage.db.commit()      # one commit per file (latency fix)
+    except Exception:
+        storage.db.rollback()    # failed import leaves no partial rows
+        raise
     consumed = total if not torn else max(0, total - 1)
     storage.upsert_import_source(
         path=path, file_identity=ident, header_hash=hh,
@@ -269,32 +274,37 @@ def import_events_jsonl(storage, *, path: str, run_id: str,
                   path=path, file_identity=ident, header_hash=hh,
                   offset_line=0, rows_total=0, rows_bad=0, bad=None))
     imported = 0
-    for i, ev in enumerate(events, start=1):
-        if i <= start:
-            continue
-        if not isinstance(ev, dict):
-            bad.append({"line": i, "reason": "not an object"})
-            continue
-        fee = ev.get("fee")
-        payload = {k: v for k, v in ev.items()
-                   if k not in ("schema_version",)}
-        ok = storage.insert_event(
-            event_id=f"evjsonl:{src_id}:line:{i}",
-            event_type=str(ev.get("event_type") or "unknown"),
-            import_batch=batch, source_id=src_id, source_line=i,
-            event_ts=ev.get("event_ts"),
-            payload=payload,
-            strategy_id=ev.get("strategy_id") or strategy_id,
-            run_id=ev.get("run_id") or run_id,
-            venue=ev.get("venue"),
-            instrument=ev.get("symbol") or ev.get("instrument"),
-            dedupe_key=(f"f:{ev.get('venue_fill_id')}"
-                        if ev.get("venue_fill_id") else None),
-            unresolved=(ev.get("venue_fill_id") is None
-                        and ev.get("event_type") in
-                        ("maker_fill", "taker_attempt")))
-        if ok:
-            imported += 1
+    try:
+        for i, ev in enumerate(events, start=1):
+            if i <= start:
+                continue
+            if not isinstance(ev, dict):
+                bad.append({"line": i, "reason": "not an object"})
+                continue
+            fee = ev.get("fee")
+            payload = {k: v for k, v in ev.items()
+                       if k not in ("schema_version",)}
+            ok = storage.insert_event(
+                event_id=f"evjsonl:{src_id}:line:{i}",
+                event_type=str(ev.get("event_type") or "unknown"),
+                import_batch=batch, source_id=src_id, source_line=i,
+                event_ts=ev.get("event_ts"),
+                payload=payload,
+                strategy_id=ev.get("strategy_id") or strategy_id,
+                run_id=ev.get("run_id") or run_id,
+                venue=ev.get("venue"),
+                instrument=ev.get("symbol") or ev.get("instrument"),
+                dedupe_key=(f"f:{ev.get('venue_fill_id')}"
+                            if ev.get("venue_fill_id") else None),
+                unresolved=(ev.get("venue_fill_id") is None
+                            and ev.get("event_type") in
+                            ("maker_fill", "taker_attempt")), commit=False)
+            if ok:
+                imported += 1
+        storage.db.commit()      # one commit per file (latency fix)
+    except Exception:
+        storage.db.rollback()    # failed import leaves no partial rows
+        raise
     notes = ["jsonl events carry venue fill ids when the adapter reports "
              "them; fills without ids stay unresolved"]
     if torn_tail:

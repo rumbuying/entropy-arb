@@ -25,8 +25,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from entropy_arb.console.importer import TAKER_HEADER  # noqa: E402
 from entropy_arb.console.profiles import ProfilesManager  # noqa: E402
 from entropy_arb.console.secrets import SecretsManager  # noqa: E402
-from entropy_arb.console.server import (create_app,  # noqa: E402
-                                        run_import_once)
+from entropy_arb.console.server import (  # noqa: E402
+    create_app, run_import_once, start_auto_import_loop)
 from entropy_arb.console.storage import Storage, new_run_id  # noqa: E402
 from entropy_arb.console.supervisor import Supervisor  # noqa: E402
 
@@ -109,7 +109,11 @@ def test_auto_import_off_means_no_writes():
                          storage=env["storage"])
         try:
             await asyncio.sleep(0.2)
+            # the task is created ONLY by start_auto_import_loop(), and the
+            # switch is off → the starter is a no-op (no writers at all)
             assert app.get("auto_import_task") is None
+            assert app.get("auto_import_enabled") is False
+            assert start_auto_import_loop(app) is None
             assert callable(app.get("run_import_once"))
             assert _counts(env["storage"]) == (0, 0)
         finally:
@@ -130,8 +134,12 @@ def test_auto_import_on_is_incremental_and_idempotent():
                          storage=env["storage"], start_background=False,
                          auto_import=True,
                          auto_import_sec=0.05)
-        task = app.get("auto_import_task")
+        # startup-ordering contract: create_app() must NOT start the loop,
+        # even when enabled — the console starts it after site.start()
+        assert app.get("auto_import_task") is None
+        task = start_auto_import_loop(app)
         assert task is not None
+        assert app.get("auto_import_task") is task
         try:
             # first round runs immediately; wait for both sources
             ok = await _wait_until(lambda: _counts(env["storage"])[0] >= 7)
@@ -191,6 +199,30 @@ def test_auto_import_failure_does_not_advance_offset():
                 task = app.get(key)
                 if task is not None:
                     task.cancel()
+    try:
+        asyncio.run(run())
+    finally:
+        env["storage"].close()
+
+def test_auto_import_round_yields_to_event_loop():
+    """The background round must yield between units so HTTP can be served
+    (R-02 outage fix). A call_soon callback proves a loop iteration happened
+    inside the round."""
+    env = _env(n_rows=3, n_events=2)
+    async def run():
+        app = create_app(env["sup"], env["profiles"], env["secrets"],
+                         storage=env["storage"], start_background=False,
+                         auto_import=True)
+        ticks = {"n": 0}
+        asyncio.get_running_loop().call_soon(
+            lambda: ticks.__setitem__("n", ticks["n"] + 1))
+        summary = await app["auto_import_round_async"]()
+        assert ticks["n"] >= 1, "round never yielded to the event loop"
+        assert summary["errors"] == []
+        assert _counts(env["storage"])[0] == 5   # 3 csv rows + 2 events
+        # a second async round is idempotent
+        await app["auto_import_round_async"]()
+        assert _counts(env["storage"])[0] == 5
     try:
         asyncio.run(run())
     finally:
