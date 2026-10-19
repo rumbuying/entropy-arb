@@ -25,7 +25,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from entropy_arb.console.importer import TAKER_HEADER  # noqa: E402
 from entropy_arb.console.profiles import ProfilesManager  # noqa: E402
 from entropy_arb.console.secrets import SecretsManager  # noqa: E402
-from entropy_arb.console.server import create_app  # noqa: E402
+from entropy_arb.console.server import (create_app,  # noqa: E402
+                                        run_import_once)
 from entropy_arb.console.storage import Storage, new_run_id  # noqa: E402
 from entropy_arb.console.supervisor import Supervisor  # noqa: E402
 
@@ -109,6 +110,7 @@ def test_auto_import_off_means_no_writes():
         try:
             await asyncio.sleep(0.2)
             assert app.get("auto_import_task") is None
+            assert callable(app.get("run_import_once"))
             assert _counts(env["storage"]) == (0, 0)
         finally:
             for key in ("valuation_task", "funding_task"):
@@ -170,7 +172,7 @@ def test_auto_import_failure_does_not_advance_offset():
                 raise RuntimeError("injected storage failure")
 
             storage.insert_event = boom
-            summary = app["auto_import_round"]()
+            summary = run_import_once(app)
             assert summary["errors"], "failure must be reported, not swallowed"
             assert _counts(storage)[0] == 0
             offsets = [s["offset_line"] for s in
@@ -178,7 +180,7 @@ def test_auto_import_failure_does_not_advance_offset():
             assert offsets and all(o == 0 for o in offsets), offsets
 
             storage.insert_event = original
-            summary = app["auto_import_round"]()
+            summary = run_import_once(app)
             assert summary["errors"] == []
             assert _counts(storage)[0] == 5         # 3 csv rows + 2 events
             offsets = [s["offset_line"] for s in

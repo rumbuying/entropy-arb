@@ -50,19 +50,22 @@ def test_ledger_health_reports_gaps_without_500():
     sup = Supervisor(tmp, pdir, storage=storage)
     now = time.time()
 
-    def strategy(name, symbol, profile):
+    def strategy(name, symbol, profile, base="hl", hedge="katana"):
         sid = storage.create_strategy(
             name=name, symbol=symbol, type_="taker_basis",
-            base_venue="hl", base_market="io", hedge_venue="katana")["id"]
+            base_venue=base, base_market="io",
+            hedge_venue=hedge)["id"]
         storage.create_run(
             run_id=new_run_id(), worker_id="w-" + sid[-6:], profile=profile,
-            symbol=symbol, hedge="katana", base="hl", mode="record",
+            symbol=symbol, hedge=hedge, base=base, mode="record",
             pid=os.getpid(), cmdline_hash="h", started_ts=now - 120,
             strategy_id=sid)
         return sid
 
-    s1 = strategy("BTC katana", "BTC", "P1")
+    s1 = strategy("BTC katana", "BTC", "P1")          # hl unsupported leg
     s2 = strategy("MISSING case", "MISSING", "P2")
+    s3 = strategy("BULK supported", "SUP", "P1", base="bulk",
+                  hedge="katana")                     # both legs supported
     src_id = storage.upsert_import_source(
         path=csv_path, file_identity="hh-g1", header_hash="hh",
         offset_line=2, rows_total=2, rows_bad=0, bad=None)
@@ -73,10 +76,20 @@ def test_ledger_health_reports_gaps_without_500():
             source_id=src_id, source_line=i + 2, event_ts=now - 100 + i,
             payload={"direction": "buy_entropy"}, strategy_id=s1,
             unresolved=True)
+    storage.insert_event(
+        event_id=f"src:{src_id}:line:9", event_type="taker_csv_row",
+        import_batch="test", source_id=src_id, source_line=9,
+        event_ts=now - 50, payload={"direction": "buy_entropy"},
+        strategy_id=s3, unresolved=True)
 
     async def run():
         app = create_app(sup, profiles, secrets, storage=storage,
                          start_background=False)
+        # runtime coverage (T1): adapters that only return predicted rates
+        # add an explicitly unsupported venue on top of the registry check
+        app["funding_coverage"]["x"] = {
+            "strategy_id": s1, "leg": "hedge", "venue": "arcus",
+            "supported": False, "reason": "payment_api_unavailable"}
         server = TestServer(app)
         await server.start_server()
         try:
@@ -95,15 +108,18 @@ def test_ledger_health_reports_gaps_without_500():
 
     assert body["schema_version"] == 1
     assert "不是收益数字" in body["note"]
-    assert body["summary"]["strategies"] == 2
-    assert body["summary"]["with_events"] == 1
+    assert body["summary"]["strategies"] == 3
+    assert body["summary"]["with_events"] == 2
     assert body["summary"]["no_events"] == 1
     by_id = {s["strategy_id"]: s for s in body["strategies"]}
     assert by_id[s1]["events"]["total"] == 2
     assert by_id[s1]["events"]["unresolved"] == 2
     gaps1 = set(by_id[s1]["gaps"])
     assert {"unresolved_events", "fee_missing",
-            "funding_missing"} <= gaps1
+            "funding_unsupported"} <= gaps1
+    # unsupported venues are named and NEVER reported as missing/zero
+    assert by_id[s1]["funding"]["unsupported_venues"] == ["arcus", "hl"]
+    assert "funding_missing" not in gaps1
     assert "no_events" not in gaps1
     assert by_id[s1]["import"]["last_import_ts"] is not None
     assert by_id[s1]["import"]["stale"] is False
@@ -111,7 +127,14 @@ def test_ledger_health_reports_gaps_without_500():
     assert {"no_events", "manual_import_stale",
             "source_file_missing"} <= gaps2
     assert by_id[s2]["sources"][0]["exists"] is False
-    assert isinstance(body["funding_coverage"], list)
+    # all legs have a payment API, none delivered → funding_missing (allowed)
+    gaps3 = set(by_id[s3]["gaps"])
+    assert "funding_missing" in gaps3
+    assert "funding_unsupported" not in gaps3
+    assert by_id[s3]["funding"]["unsupported_venues"] == []
+    assert "funding_unsupported" in body["gap_codes"]
+    assert len(body["funding_coverage"]) == 1
+    assert body["funding_coverage"][0]["venue"] == "arcus"
 
 
 def test_reconciliation_rows_are_deduped():

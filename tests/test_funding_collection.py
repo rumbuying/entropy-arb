@@ -151,9 +151,11 @@ def test_funding_round_inserts_payment_events():
         env["storage"].close()
 
 
-def test_funding_round_handles_rate_snapshot_without_raising():
+def test_funding_round_handles_rate_snapshot_without_raising(caplog):
+    import logging
     env = _env([RATE_SNAPSHOT])
     try:
+        caplog.set_level(logging.WARNING)
         app = _run_one_round(env)
         events = env["storage"].events_for_strategy(env["sid"], limit=100)
         assert [e for e in events if e["event_type"] == "funding"] == []
@@ -161,6 +163,14 @@ def test_funding_round_handles_rate_snapshot_without_raising():
         assert arcus["supported"] is False
         assert arcus["reason"] == "payment_api_unavailable"
         assert "付款" in arcus["note"]
+        # T1/Chief: exactly one `funding unsupported: <venue>` WARNING per
+        # round, no exception, wording carries the venue name
+        msgs = [r.getMessage() for r in caplog.records
+                if r.levelno == logging.WARNING
+                and "funding unsupported" in r.getMessage()]
+        assert any(m.startswith("funding unsupported: arcus") for m in msgs)
+        assert sum(1 for m in msgs if ": arcus" in m) == 1
+        assert all(m.startswith("funding unsupported: ") for m in msgs)
     finally:
         env["ops_mod"]._make_venue = env["orig"]
         env["storage"].close()

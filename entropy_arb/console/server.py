@@ -60,6 +60,20 @@ def funding_payment_rows(rows):
     return payments, None
 
 
+def run_import_once(app) -> dict:
+    """Run ONE auto-import round for an app built by create_app().
+
+    T2 test hook (Chief/QA): deterministic and immediate, so acceptance
+    tests do not have to wait for the background interval. It uses the same
+    storage writer as the console (single-writer design) — do not call it
+    concurrently with the background loop.
+    """
+    fn = app.get("run_import_once")
+    if fn is None:
+        raise KeyError("run_import_once hook unavailable on this app")
+    return fn()
+
+
 def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                secrets: SecretsManager, *, token: Optional[str] = None,
                storage=None, ops_service: Optional[OperationService] = None,
@@ -228,7 +242,6 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     async def _funding_loop():
         from . import ops as ops_mod    # local: same module, explicit name
         seen: set = set()              # (sid, venue, market, ts_ms)
-        warned: set = set()            # coverage keys already logged
         covered_notes: dict = {}       # kept for callers/tests
 
         def _note(*, sid, venue_kind, leg, supported, reason=None,
@@ -244,6 +257,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             return rec
 
         while True:
+            round_warned: set = set()  # at most one WARNING per venue/round
             try:
                 if storage is not None:
                     from entropy_arb.console import venues as venues_mod
@@ -271,7 +285,6 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                      "hedge",
                                      "xyz" if hedge == "tradexyz" else ""))
                         for venue_kind, leg, leg_dex in legs:
-                            note_key = f"{sid}:{venue_kind}:{leg}"
                             supported = venue_registry.spec(
                                 venue_kind).funding_supported
                             if not supported:
@@ -280,6 +293,11 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                       reason="venue_unsupported",
                                       note="该场所没有资金费付款接口"
                                            "（未实测/不支持）—— 未计入，不是 0")
+                                if venue_kind not in round_warned:
+                                    round_warned.add(venue_kind)
+                                    log.warning("funding unsupported: %s "
+                                                "(venue_unsupported)",
+                                                venue_kind)
                                 continue
                             import aiohttp as _aio
                             probe_sess = _aio.ClientSession()
@@ -301,11 +319,12 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                       reason="poll_failed",
                                       note=f"资金费轮询失败："
                                            f"{type(e).__name__}")
-                                if note_key not in warned:
-                                    warned.add(note_key)
+                                if venue_kind not in round_warned:
+                                    round_warned.add(venue_kind)
                                     log.warning(
-                                        "funding unsupported %s %s: %r",
-                                        sid[:16], venue_kind, e)
+                                        "funding unsupported: %s "
+                                        "(poll_failed: %s)", venue_kind,
+                                        type(e).__name__)
                                 continue
                             finally:
                                 try:
@@ -320,13 +339,13 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                                     supported=False, reason=unsupported,
                                     note="该场所只返回预测费率，没有付款"
                                          "接口 —— 未计入，不是 0")
-                                if note_key not in warned:
-                                    warned.add(note_key)
+                                if venue_kind not in round_warned:
+                                    round_warned.add(venue_kind)
                                     log.warning(
-                                        "funding unsupported %s %s: %s "
-                                        "(adapter returns a rate snapshot, "
-                                        "not payments)", sid[:16],
-                                        venue_kind, unsupported)
+                                        "funding unsupported: %s (%s: "
+                                        "adapter returns a rate snapshot, "
+                                        "not payments)", venue_kind,
+                                        unsupported)
                                 continue
                             _note(sid=sid, venue_kind=venue_kind, leg=leg,
                                   supported=True,
@@ -1212,7 +1231,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 log.exception("auto-import round failed")
             await asyncio.sleep(max(1.0, float(auto_import_sec)))
 
-    app["auto_import_round"] = _auto_import_round
+    app["run_import_once"] = _auto_import_round      # T2 test hook (QA)
+    app["auto_import_round"] = _auto_import_round    # back-compat alias
     if storage is not None and auto_import:
         app["auto_import_task"] = asyncio.create_task(
             _auto_import_loop(), name="v2-auto-import")
@@ -2377,6 +2397,38 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             if ts is not None and (rec["last_event_ts"] is None
                                    or ts > rec["last_event_ts"]):
                 rec["last_event_ts"] = ts
+        coverage_by_sid: dict = {}
+        for rec in app["funding_coverage"].values():
+            sid_cov = rec.get("strategy_id")
+            if sid_cov:
+                coverage_by_sid.setdefault(sid_cov, []).append(rec)
+
+        def _funding_venues(s) -> tuple:
+            """(unsupported_venues, supported_venues) for one strategy.
+
+            The registry tells us whether a leg has any funding-payment API;
+            the live collection coverage adds runtime reasons (adapters that
+            only return predicted rates). A venue listed as unsupported must
+            NEVER be reported as 'missing data' or as a 0 amount (T1)."""
+            unsupported, supported = set(), set()
+            for vk in (s.get("base_venue"), s.get("hedge_venue")):
+                if not vk:
+                    continue
+                try:
+                    ok = venue_registry.spec(vk).funding_supported
+                except Exception:
+                    ok = False
+                (supported if ok else unsupported).add(vk)
+            for rec in coverage_by_sid.get(s["id"], []):
+                venue = rec.get("venue")
+                if not venue:
+                    continue
+                if rec.get("supported") is False:
+                    unsupported.add(venue)
+                else:
+                    supported.add(venue)
+            return sorted(unsupported), sorted(supported)
+
         out, summary = [], {"strategies": 0, "with_events": 0,
                             "no_events": 0, "stale_imports": 0,
                             "unresolved": 0}
@@ -2388,6 +2440,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 "total": 0, "unresolved": 0, "by_type": {},
                 "last_event_ts": None}
             gaps, srcs = [], []
+            unsupported_venues, supported_venues = _funding_venues(s)
             import_ts = None
             for p in profs:
                 for src in _declared_sources(p):
@@ -2406,7 +2459,11 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                     gaps.append("unresolved_events")
                 if types.get("taker_attempt") or types.get("taker_csv_row"):
                     gaps.append("fee_missing")
-                if not types.get("funding"):
+                if unsupported_venues:
+                    # venue has no payment API — explicitly NOT missing data
+                    # and NOT a 0 amount (T1/Chief's acceptance rule)
+                    gaps.append("funding_unsupported")
+                elif not types.get("funding"):
                     gaps.append("funding_missing")
             stale = bool(import_ts is None or now - import_ts > STALE_SEC)
             if stale:
@@ -2423,6 +2480,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 "events": ev,
                 "import": {"last_import_ts": import_ts, "stale": stale,
                            "stale_after_sec": STALE_SEC},
+                "funding": {"unsupported_venues": unsupported_venues,
+                            "supported_venues": supported_venues},
                 "gaps": gaps,
                 "sources": srcs,
             })
@@ -2433,7 +2492,10 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 "no_events": "该策略没有任何已导入事件",
                 "unresolved_events": "事件缺少真实成交ID，账本只当证据",
                 "fee_missing": "taker 证据无逐笔手续费",
-                "funding_missing": "没有任何资金费事件",
+                "funding_missing": "资金费接口存在但没有任何资金费事件",
+                "funding_unsupported": "该场所没有资金费付款接口（按 venue "
+                                       "列在 funding.unsupported_venues）"
+                                       "—— 未计入，不是 0",
                 "manual_import_stale": "最近一次导入超过 24h 或从未导入",
                 "source_file_missing": "profile 声明的成交文件不存在",
             },

@@ -94,11 +94,16 @@ async def amain(args) -> None:
     auto_import = bool(getattr(args, "auto_import", False)) or \
         os.environ.get("ENTROPY_AUTO_IMPORT", "").strip().lower() \
         in ("1", "true", "yes", "on")
-    try:
-        auto_import_sec = float(
-            os.environ.get("ENTROPY_AUTO_IMPORT_SEC", "300"))
-    except ValueError:
-        auto_import_sec = 300.0
+    # interval: CLI flag wins, env can override; acceptance tests use a
+    # small value, production default is 300s (never below 5s)
+    interval = float(getattr(args, "auto_import_interval", 300.0))
+    env_sec = os.environ.get("ENTROPY_AUTO_IMPORT_SEC", "").strip()
+    if env_sec:
+        try:
+            interval = float(env_sec)
+        except ValueError:
+            pass
+    auto_import_sec = max(5.0, interval)
     if auto_import:
         print(f"auto-import ENABLED (every {auto_import_sec:.0f}s, console "
               f"process is the only storage writer)", flush=True)
@@ -161,8 +166,11 @@ def main() -> None:
                         "non-loopback hosts")
     p.add_argument("--auto-import", action="store_true",
                    help="enable the in-process periodic CSV/event importer "
-                        "(default off; env ENTROPY_AUTO_IMPORT=1 also works, "
-                        "interval ENTROPY_AUTO_IMPORT_SEC, default 300s)")
+                        "(default off; env ENTROPY_AUTO_IMPORT=1 also works)")
+    p.add_argument("--auto-import-interval", type=float, default=300.0,
+                   metavar="SEC",
+                   help="auto-import interval in seconds (default 300, "
+                        "minimum 5; env ENTROPY_AUTO_IMPORT_SEC overrides)")
     args = p.parse_args()
     setup_logging("logs/console-server.log")
     try:
