@@ -1544,7 +1544,12 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         have state=null. Read-only and explicitly NOT a reconciled ledger
         (net_pnl stays a R-02 topic). 'Today' starts at local midnight in
         `tz` (default Asia/Shanghai), computed here so the browser's
-        timezone cannot move it."""
+        timezone cannot move it.
+
+        Default returns `mode=live` lines only: the console also supervises
+        record-only observation collectors, and their engine-estimated fills
+        must never be presented as trading P&L. `include_record=1` opts in
+        explicitly (operator forensics, not the board)."""
         if storage is None:
             return web.json_response(
                 {"error": "unsupported_source",
@@ -1552,6 +1557,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         from datetime import datetime
 
         q = request.query
+        include_record = (q.get("include_record") or "").strip().lower() \
+            in ("1", "true", "yes", "on")
         try:
             days = int(q.get("days", "2"))
         except (TypeError, ValueError):
@@ -1585,9 +1592,12 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             return sid, strat_cache[sid].get("name")
 
         # one live snapshot per running worker (concurrently; each snapshot
-        # already has a 3s client timeout, so a dead worker cannot stall us)
-        running_ids = [wid for wid, w in supervisor.workers.items()
-                       if w.running]
+        # already has a 3s client timeout, so a dead worker cannot stall us).
+        # Record-only observers are skipped unless explicitly requested —
+        # both a correctness filter and a real cost saving (dozens of them).
+        running_ids = [
+            wid for wid, w in supervisor.workers.items()
+            if w.running and (include_record or w.mode == "live")]
         snaps: dict = {}
         if running_ids:
             results = await asyncio.gather(
@@ -1600,6 +1610,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         candidates = []            # (sort_ts, line identity, payload)
         seen_run_ids = set()
         for wid, w in list(supervisor.workers.items()):
+            if not include_record and w.mode != "live":
+                continue
             run = runs_by_id.get(w.run_id) if w.run_id else None
             if run is not None:
                 seen_run_ids.add(run["run_id"])
@@ -1634,6 +1646,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         # Runs owned by a live/known worker are already covered above.
         for r in all_runs:
             if r["run_id"] in seen_run_ids:
+                continue
+            if not include_record and r["mode"] != "live":
                 continue
             visible_end = r["ended_ts"] if r["ended_ts"] is not None \
                 else r["started_ts"]

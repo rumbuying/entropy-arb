@@ -139,34 +139,42 @@ def _fixture():
 
     rid_run = add_run(profile="P1", symbol="SNDK", hedge="lighter-rh",
                       worker_id="w1", started_ts=now - 600,
-                      strategy_id=sid)
+                      strategy_id=sid, mode="live")
     # previous run of the *same line* — must be collapsed into the running row
     rid_prev = add_run(profile="P1", symbol="SNDK", hedge="lighter-rh",
-                       worker_id="w0", started_ts=now - 2000)
+                       worker_id="w0", started_ts=now - 2000, mode="live")
     storage.finish_run(rid_prev, ended_ts=now - 1800, state="stopped",
                        exit_code=0)
     rid_stopped = add_run(profile="P2", symbol="ANTH", hedge="lighter-rh",
-                          worker_id="w2", started_ts=now - 4000)
+                          worker_id="w2", started_ts=now - 4000, mode="live")
     storage.finish_run(rid_stopped, ended_ts=now - 3500, state="stopped",
                        exit_code=0)
     rid_old = add_run(profile="P4", symbol="OLD", hedge="arcus",
-                      mode="record", worker_id="w4",
-                      started_ts=now - 5 * 86400)
+                      worker_id="w4", started_ts=now - 5 * 86400,
+                      mode="live")
     storage.finish_run(rid_old, ended_ts=now - 5 * 86400 + 100,
                        state="stopped", exit_code=0)
     # stale "running" row whose process/console is gone: no live worker owns it
     rid_stale = add_run(profile="P5", symbol="STALE", hedge="arcus",
-                        worker_id="w5", started_ts=now - 900)
+                        worker_id="w5", started_ts=now - 900, mode="live")
+    # record-only observer line (in the same window): hidden by default
+    rid_rec = add_run(profile="P8", symbol="REC", hedge="arcus",
+                      worker_id="w8", started_ts=now - 4000, mode="record")
+    storage.finish_run(rid_rec, ended_ts=now - 3500, state="stopped",
+                       exit_code=0)
 
-    _make_worker(sup, "w1", "P1", "SNDK", "lighter-rh",
+    _make_worker(sup, "w1", "P1", "SNDK", "lighter-rh", mode="live",
                  running=True, started_ts=now - 600, run_id=rid_run)
     # stopped worker still in memory (the "stop a line and it stays visible"
     # acceptance case), profile deleted → no CSV on disk
-    _make_worker(sup, "w3", "P3", "ZEC", "arcus", running=False,
-                 started_ts=now - 800)
+    _make_worker(sup, "w3", "P3", "ZEC", "arcus", mode="live",
+                 running=False, started_ts=now - 800)
     # running worker whose state snapshot is unavailable (engine not up yet)
-    _make_worker(sup, "w6", "P6", "NONE", "arcus", running=True,
-                 started_ts=now - 700)
+    _make_worker(sup, "w6", "P6", "NONE", "arcus", mode="live",
+                 running=True, started_ts=now - 700)
+    # running record-only observer (must stay out of the default board)
+    _make_worker(sup, "w7", "P7", "OBS", "arcus", mode="record",
+                 running=True, started_ts=now - 50)
 
     async def fake_snapshot(wid):
         if wid == "w1":
@@ -200,7 +208,7 @@ def _fixture():
             "profiles": profiles, "secrets": secrets, "now": now,
             "sid": sid, "rid_run": rid_run, "rid_prev": rid_prev,
             "rid_stopped": rid_stopped, "rid_old": rid_old,
-            "rid_stale": rid_stale}
+            "rid_stale": rid_stale, "rid_rec": rid_rec}
 
 
 @contextlib.asynccontextmanager
@@ -259,7 +267,7 @@ def test_pnl_lines_running_and_stopped():
                 assert p1["name"] == "SNDK RH basis"
                 assert (p1["symbol"], p1["hedge"], p1["base"],
                         p1["mode"]) == ("SNDK", "lighter-rh", "hl",
-                                        "record")
+                                        "live")
                 assert p1["session"] == {"unrealized_usd": 12.5}
                 # brief §3 whitelist: exactly the three UI columns, nothing
                 # large/unrelated leaks through from the snapshot
@@ -329,6 +337,22 @@ def test_pnl_lines_running_and_stopped():
                 assert "P4" not in lines
                 # running lines sort first
                 assert body["lines"][0]["status"] == "running"
+
+                # default is live-only: record-only observers never reach the
+                # board (running or stopped); include_record=1 opts in
+                assert all(x["mode"] == "live" for x in body["lines"])
+                assert "P7" not in lines and "P8" not in lines
+                async with http.get(
+                        url.with_query({"include_record": "1"})) as r:
+                    assert r.status == 200
+                    rec = _by_profile(await r.json())
+                assert rec["P7"]["mode"] == "record"
+                assert rec["P7"]["status"] == "running"
+                assert rec["P8"]["mode"] == "record"
+                assert rec["P8"]["status"] == "stopped"
+                # record lines are additive, not a replacement
+                assert {"P1", "P2", "P3", "P5", "P6", "P7", "P8"} \
+                    <= set(rec)
         finally:
             f["storage"].close()
     asyncio.run(run())
