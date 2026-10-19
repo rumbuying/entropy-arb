@@ -28,6 +28,16 @@ function usd(v) {
   return (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2);
 }
 
+function bps(v) {
+  if (v === null || !Number.isFinite(v)) return "—";
+  return (v > 0 ? "+" : "") + Number(v).toFixed(1);
+}
+
+function signedQty(v) {
+  if (v === null) return "—";
+  return (v > 0 ? "+" : "") + v.toFixed(2);
+}
+
 function pnlCls(v) {
   if (v === null || !Number.isFinite(v)) return "zero";
   return v > 0.005 ? "pos" : v < -0.005 ? "neg" : "zero";
@@ -99,9 +109,12 @@ export function mount(container, ctx) {
     t("v2.pnl.col.line"), t("v2.pnl.col.state"),
     t("v2.pnl.col.fills"), t("v2.pnl.col.vol"),
     t("v2.pnl.col.locked"), t("v2.pnl.col.float"),
-    t("v2.pnl.col.data"),
+    t("v2.pnl.col.pos"), t("v2.pnl.col.prem"), t("v2.pnl.col.eq"),
   ]);
-  tableCard.append(note, tbl.node);
+  // 9 列在窄屏/1440 下会超宽：横向滚动限制在卡片内，避免整页溢出
+  const tblScroll = el("div", { class: "v2-pnl-tbl",
+                                style: "overflow-x:auto" }, tbl.node);
+  tableCard.append(note, tblScroll);
   container.append(scope, gapPanel(), kpis, tableCard);
 
   function showError(e) {
@@ -148,8 +161,14 @@ export function mount(container, ctx) {
       const floatPnl = running
         ? fnum(ses.unrealized_usd ?? ses.unrealized_pnl) : null;
       const hasData = l.trades_exists !== false;
+      // state 白名单：只有 running 线有值，停止线为 null
+      const st = running ? (l.state || null) : null;
+      const venues = (st && st.venues) || {};
+      const vE = venues.entropy || null;
+      const vH = venues.hedge || null;
+      const sig = (st && st.signal) || {};
       return { l, today, complete, realized, volToday, running, floatPnl,
-               hasData };
+               hasData, st, vE, vH, sig };
     });
 
     const runCount = stat.filter(s => s.running).length;
@@ -203,23 +222,40 @@ export function mount(container, ctx) {
         ? el("a", { href: `#/runtime/${encodeURIComponent(l.worker_id)}` },
             el("b", { text: label }))
         : el("b", { text: label });
-      const pair = [l.hedge, l.base].filter(Boolean).join(" ↔ ");
-      const sub = [pair, l.profile].filter(Boolean).join(" · ");
+      const venuePair = (s.vE && s.vH) ? `${s.vE.name} ↔ ${s.vH.name}` : "";
+      const pair = venuePair || [l.hedge, l.base].filter(Boolean).join(" ↔ ");
+      const sub = [pair, l.profile, l.schema].filter(Boolean).join(" · ");
       tr.appendChild(el("td", {}, head,
         sub ? el("div", { class: "muted" }, sub) : null));
 
-      // 状态：running / stopped（停止线不再从列表消失）
-      tr.appendChild(el("td", {},
+      // 状态：running / stopped（停止线不再从列表消失）；运行线带场所健康
+      const statusCell = [
         s.running
           ? badge(t("v2.pnl.status.running"), "badge running")
           : badge(t("v2.pnl.status.stopped"), "badge stopped"),
-        l.run_id ? el("div", { class: "muted", text: l.run_id }) : null));
+      ];
+      if (s.running) {
+        if (s.vE && s.vE.down)
+          statusCell.push(badge(`${s.vE.name} DOWN`, "badge errored"));
+        if (s.vH && s.vH.down)
+          statusCell.push(badge(`${s.vH.name} DOWN`, "badge errored"));
+        if ((s.vE && !s.vE.fresh) || (s.vH && !s.vH.fresh))
+          statusCell.push(badge("STALE", "badge stale"));
+      }
+      if (l.run_id) statusCell.push(el("div", { class: "muted", text: l.run_id }));
+      tr.appendChild(el("td", {}, ...statusCell));
 
+      const src = [];
+      if (l.trades_exists === false)
+        src.push(badge(t("v2.pnl.data.missing"), "badge stale"));
+      else if (l.tail_truncated)
+        src.push(badge(t("v2.pnl.data.truncated"), "badge stale"));
       tr.appendChild(el("td", { class: "num" },
         s.hasData ? `${s.complete.length}` : "—",
         s.hasData
           ? el("span", { class: "muted", text: ` / ${s.today.length}` })
-          : null));
+          : null,
+        ...(src.length ? [el("div", {}, ...src)] : [])));
 
       tr.appendChild(el("td", { class: "num" },
         s.hasData ? usd(s.volToday) : "—"));
@@ -236,15 +272,33 @@ export function mount(container, ctx) {
         el("div", { class: "muted",
           text: s.running ? t("v2.pnl.hint.open") : t("v2.pnl.hint.stopped") })));
 
-      // 数据来源状态：CSV 缺失 / 尾部截断 / schema，别让缺数据看起来像 0
-      const src = [];
-      if (l.trades_exists === false)
-        src.push(badge(t("v2.pnl.data.missing"), "badge stale"));
-      else if (l.tail_truncated)
-        src.push(badge(t("v2.pnl.data.truncated"), "badge stale"));
-      if (l.schema) src.push(badge(String(l.schema), "badge dim"));
-      tr.appendChild(el("td", {},
-        ...(src.length ? src : [el("span", { class: "muted", text: "—" })])));
+      // 盯盘三列：仓位（E / H）、溢价 vs band、权益（两腿）
+      // 数据来自 state 白名单；停止线没有实时快照 → 统一 "—"
+      const posE = s.vE ? fnum(s.vE.position) : null;
+      const posH = s.vH ? fnum(s.vH.position) : null;
+      tr.appendChild(el("td", { class: "num" },
+        s.st ? `${signedQty(posE)} / ${signedQty(posH)}` : "—"));
+
+      const midPrem = fnum(s.sig.mid_premium_bps);
+      const bandLow = fnum(s.sig.band_low_bps);
+      const bandHigh = fnum(s.sig.band_high_bps);
+      tr.appendChild(el("td", { class: "num" },
+        s.st
+          ? el("div", { text: bps(midPrem) })
+          : "—",
+        s.st
+          ? el("div", { class: "muted" },
+              `[${bps(bandLow)} .. ${bps(bandHigh)}]`)
+          : null));
+
+      tr.appendChild(el("td", { class: "num" },
+        s.st
+          ? el("div", {}, usd(s.vE ? fnum(s.vE.equity) : null))
+          : "—",
+        s.st
+          ? el("div", { class: "muted" },
+              usd(s.vH ? fnum(s.vH.equity) : null))
+          : null));
 
       tbl.tbody.appendChild(tr);
     }

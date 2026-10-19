@@ -142,3 +142,7 @@
   .v2-pnl-gap, .v2-pnl-gaps-foot { font-size: 14px; }
   .v2-pnl-gaps { padding: 10px 12px; }
 }
+
+/* P&L board: 10 dense columns — tighter padding keeps them in one screen */
+.v2-pnl-tbl table.data th,
+.v2-pnl-tbl table.data td { padding-left: 5px; padding-right: 5px; }
