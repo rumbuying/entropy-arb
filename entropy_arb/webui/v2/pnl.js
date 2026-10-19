@@ -135,7 +135,10 @@ export function mount(container, ctx) {
     }
     if (data === undefined) return;                 // superseded cycle
 
-    const lines = Array.isArray(data.lines) ? data.lines : [];
+    // 仅实盘线：观察线（record）不进盈亏看板。
+    // 后端默认已过滤（include_record 才返回），前端再兜底一层。
+    const allLines = Array.isArray(data.lines) ? data.lines : [];
+    const lines = allLines.filter(l => l.mode === "live");
     const cutoff = fnum(data.day_start_ts) || 0;
     if (!lines.length) {
       kpis.replaceChildren();
