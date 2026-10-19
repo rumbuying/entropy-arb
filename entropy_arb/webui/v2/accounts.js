@@ -1,12 +1,37 @@
 /* 账户与风险 — per-exchange equity / positions from the legacy aggregation.
-   V2-001: shows RUNNING workers only, with the aggregation caveats spelled
-   out (max-equity groups, session-MTM semantics). True account identity
-   dedup and stopped-engine residuals arrive with V2-003 / V2-006+. */
+   R-02 M1/M2 (D1=B / D2=A / D3=A):
+   - the period table is the ACCOUNT-LEVEL truth ("场所级", venue_scope) and
+     explicitly says transfers are undetected → 期间若有划转则不可比;
+   - a comparison card puts that truth next to the engine-fill ESTIMATE of the
+     live lines (same numbers as the P&L board) — never labelled reconciled;
+   - dates are computed in Asia/Shanghai, not the browser's local timezone. */
 
 import { getJSON } from "/static/api.js";
 import { fmtUsd, fmtNum, fmtQty } from "/static/fmt.js";
 import { t } from "/static/i18n.js";
-import { el, card, table, stateBox, updatedStamp, seqGuard } from "./components.js";
+import {
+  el, card, table, stateBox, badge, updatedStamp, seqGuard,
+} from "./components.js";
+import { estimateLine } from "./pnlcalc.js";
+import { shanghaiDate, fmtTs } from "./tz.js";
+
+const SNAPSHOT_FRESH_SEC = 900;      // console writes equity every ~5 min
+
+function usd(v) {
+  if (v === null || v === undefined || !Number.isFinite(Number(v))) return "—";
+  const n = Number(v);
+  return (n < 0 ? "-$" : "+$") + Math.abs(n).toFixed(2);
+}
+
+function cls(v) {
+  if (v === null || v === undefined || !Number.isFinite(Number(v))) return "muted";
+  const n = Number(v);
+  return n > 0 ? "pos" : n < 0 ? "neg" : "muted";
+}
+
+function tag(text, klass, title) {
+  return el("span", { class: klass, text, title: title || null });
+}
 
 export function mount(container) {
   const seq = seqGuard();
@@ -32,31 +57,37 @@ export function mount(container) {
   ]);
   exCard.appendChild(exTbl.node);
 
-  // ---- equity change per account (account dimension of "where did the
-  // money move") — snapshots recorded by the console every ~5 min
+  // ---- equity change per account (ACCOUNT TRUTH, venue-scope snapshots) ----
   const chgRange = el("select", {},
     el("option", { value: "1" }, t("v2.time.today")),
     el("option", { value: "2" }, t("v2.time.yesterday")),
     el("option", { value: "7" }, t("v2.time.d7")));
   const chgBtn = el("button", { class: "primary",
-    text: t("v2.det.attr_load") });
+    text: t("v2.acct.truth_load") });
   const chgOut = el("div");
   const chgCard = card(t("v2.acct.change_title"),
-    el("div", { style: "display:flex;gap:10px;align-items:center;margin-bottom:8px" },
-      chgRange, chgBtn), chgOut);
+    el("div", { class: "v2-acct-controls" }, chgRange, chgBtn), chgOut);
+
+  // ---- account truth vs strategy estimate (today, D1 two-column view) ----
+  const cmpOut = el("div");
+  const cmpCard = card(t("v2.acct.cmp_title"),
+    el("div", { class: "note" }, t("v2.acct.cmp_sub")), cmpOut);
+
+  function periodQuery(days) {
+    const q = new URLSearchParams({
+      start: shanghaiDate(-(days - 1)),
+      end: shanghaiDate(0),
+      timezone: "Asia/Shanghai",
+    });
+    return q;
+  }
 
   async function loadChanges() {
     chgOut.replaceChildren(stateBox({ status: "loading" }));
     let data;
     try {
-      const now = new Date();
-      const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1)
-        .padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      const start = fmt(new Date(now - (Number(chgRange.value) - 1)
-        * 86400000));
-      const q = new URLSearchParams({
-        start, end: fmt(now), timezone: "Asia/Shanghai" });
-      data = await getJSON(`/api/accounts?${q}`);
+      const days = Number(chgRange.value) || 1;
+      data = await getJSON(`/api/accounts?${periodQuery(days)}`);
     } catch (e) {
       chgOut.replaceChildren(stateBox({
         status: "error", message: String(e.message || e),
@@ -65,50 +96,207 @@ export function mount(container) {
       return;
     }
     chgOut.replaceChildren();
-    if (!data.period || !data.period.changes) {
+    const period = data.period;
+    if (!period || !period.changes) {
       chgOut.appendChild(el("div", { class: "note" },
         t("v2.acct.change_none")));
       return;
     }
-    const tbl = table([
-      t("col.venue"), t("v2.acct.chg_start"), t("v2.acct.chg_end"),
-      t("v2.acct.chg_delta"),
-    ]);
-    for (const ch of data.period.changes) {
-      const tr = el("tr");
-      tr.appendChild(el("td", {}, ch.scope,
-        ch.delta !== null && ch.delta !== undefined ? el("span", {},
-          el("span", { class: "muted", text: "  " }),
-          el("a", { class: "muted", href: "#/strategies",
-                    title: t("v2.acct.chg_link") }, "→")) : null));
-      tr.appendChild(el("td", { class: "num" },
-        ch.equity_start === null ? "—" : fmtNum(Number(ch.equity_start), 2)));
-      tr.appendChild(el("td", { class: "num" },
-        ch.equity_end === null ? "—" : fmtNum(Number(ch.equity_end), 2)));
-      const d = ch.delta;
-      tr.appendChild(el("td", {
-        class: "num " + (d > 0 ? "pos" : d < 0 ? "neg" : "muted"),
-        text: d === null ? "—" : (d > 0 ? "+" : "") + Number(d).toFixed(2),
+    if (!period.changes.length) {
+      chgOut.appendChild(stateBox({
+        status: "empty", message: t("v2.acct.change_none"),
       }));
+      return;
+    }
+    const tbl = table([
+      t("v2.acct.chg_scope"), t("v2.acct.chg_start"),
+      t("v2.acct.chg_end"), t("v2.acct.chg_delta"),
+      t("v2.acct.chg_last_snapshot"), t("v2.acct.chg_coverage"),
+    ]);
+    const now = Date.now() / 1000;
+    for (const ch of period.changes) {
+      const tr = el("tr");
+      const ids = (ch.identity_status || "venue_scope") === "venue_scope"
+        ? [tag(t("v2.acct.badge.venue_scope"), "badge dim",
+               t("v2.acct.badge.venue_scope_title"))]
+        : [];
+      if (ch.transfer_coverage === "undetected")
+        ids.push(tag(t("v2.acct.badge.transfer_undetected"),
+                     "badge stale", t("v2.acct.transfer_title")));
+      tr.appendChild(el("td", {}, ch.scope, ...ids));
+
+      const eq0 = ch.equity_start, eq1 = ch.equity_end;
+      tr.appendChild(el("td", { class: "num" },
+        eq0 === null || eq0 === undefined ? "—" : fmtNum(Number(eq0), 2)));
+      tr.appendChild(el("td", { class: "num" },
+        eq1 === null || eq1 === undefined ? "—" : fmtNum(Number(eq1), 2)));
+      tr.appendChild(el("td", { class: "num " + cls(ch.delta),
+        text: ch.delta === null || ch.delta === undefined
+          ? "—" : usd(ch.delta) }));
+
+      const snap = ch.last_snapshot_ts ?? ch.end_ts ?? null;
+      const stale = snap !== null && (now - Number(snap)) > SNAPSHOT_FRESH_SEC;
+      tr.appendChild(el("td", { class: "num " + (stale ? "neg" : ""),
+        text: fmtTs(snap), title: snap === null
+          ? t("v2.acct.no_snapshot") : "" }));
+
+      const cov = ch.coverage || {};
+      const notes = [];
+      const clamped = cov.clamped ?? ch.clamped;
+      if (clamped) notes.push(t("v2.acct.cov_clamped"));
+      if ((eq0 === null || eq0 === undefined)
+          && (eq1 === null || eq1 === undefined))
+        notes.push(t("v2.acct.cov_missing"));
+      if (ch.unexplained_delta === null && ch.unexplained_reason)
+        notes.push(t("v2.acct.cov_unexplained"));
+      tr.appendChild(el("td", { class: "note",
+        text: notes.length ? notes.join(" · ") : "—" }));
       tbl.tbody.appendChild(tr);
     }
     chgOut.appendChild(tbl.node);
     chgOut.appendChild(el("div", { class: "note" },
-      data.period.note || ""));
+      t("v2.acct.truth_period", {
+        start: fmtTs(period.start),
+        end: fmtTs(period.effective_end ?? period.end),
+        tz: period.timezone || "Asia/Shanghai",
+      })));
+    chgOut.appendChild(el("div", { class: "note v2-acct-warn" },
+      t("v2.acct.transfer_caveat")));
+    chgOut.appendChild(el("div", { class: "note" },
+      t("v2.acct.truth_note")));
+    if (period.note) chgOut.appendChild(el("div", { class: "note" }, period.note));
   }
+
+  async function loadCompare() {
+    cmpOut.replaceChildren(stateBox({ status: "loading" }));
+    const q = periodQuery(1);
+    let acc, pnl;
+    try {
+      [acc, pnl] = await Promise.all([
+        getJSON(`/api/accounts?${q}`),
+        getJSON("/api/pnl/lines?days=2&limit=500"),
+      ]);
+    } catch (e) {
+      cmpOut.replaceChildren(stateBox({
+        status: "error", message: String(e.message || e),
+        onRetry: loadCompare,
+      }));
+      return;
+    }
+    cmpOut.replaceChildren();
+    const changes = ((acc.period || {}).changes || []);
+    const truthScopes = new Set(changes
+      .filter(c => c.equity_start !== null && c.equity_start !== undefined
+                   && c.equity_end !== null && c.equity_end !== undefined)
+      .map(c => c.scope));
+    const truthRows = changes.filter(c =>
+      c.delta !== null && c.delta !== undefined);
+    const truthTotal = truthRows.reduce((a, c) => a + Number(c.delta), 0);
+    const missingScopes = changes.filter(c =>
+      c.delta === null || c.delta === undefined).map(c => c.scope);
+
+    const cutoff = Number(pnl.day_start_ts) || 0;
+    const lines = (Array.isArray(pnl.lines) ? pnl.lines : [])
+      .filter(l => l.mode === "live");
+    const est = lines.map(l => {
+      const e = estimateLine(l, cutoff);
+      return {
+        l, ...e,
+        scopes: Array.isArray(l.scopes) ? l.scopes : [],
+        total: e.hasData ? e.realized + (e.floatPnl || 0) : null,
+      };
+    });
+    const estComplete = est.every(x => x.hasData);
+    const estTotal = estComplete
+      ? est.reduce((a, x) => a + (x.total || 0), 0) : null;
+    const diff = (estTotal !== null && truthRows.length === changes.length)
+      ? estTotal - truthTotal : null;
+
+    // two rows: account truth vs engine estimate (D1)
+    const pair = table([
+      t("v2.acct.cmp.basis"), t("v2.acct.cmp.today"),
+      t("v2.acct.cmp.what"),
+    ]);
+    pair.tbody.appendChild(el("tr", {},
+      el("td", {}, t("v2.acct.cmp.truth_label")),
+      el("td", { class: "num " + cls(truthTotal) },
+        truthRows.length ? usd(truthTotal) : "—"),
+      el("td", { class: "note" },
+        missingScopes.length
+          ? t("v2.acct.cmp.truth_missing", { n: missingScopes.length })
+          : t("v2.acct.cmp.truth_what",
+              { n: String(truthRows.length) }))));
+    pair.tbody.appendChild(el("tr", {},
+      el("td", {}, t("v2.acct.cmp.est_label")),
+      el("td", { class: "num " + cls(estTotal) },
+        estTotal === null ? "—" : usd(estTotal)),
+      el("td", { class: "note" }, estComplete
+        ? t("v2.acct.cmp.est_what", { n: String(est.length) })
+        : t("v2.acct.cmp.est_incomplete"))));
+    pair.tbody.appendChild(el("tr", {},
+      el("td", {}, t("v2.acct.cmp.diff_label")),
+      el("td", { class: "num " + cls(diff) },
+        diff === null ? "—" : usd(diff)),
+      el("td", { class: "note" }, t("v2.acct.cmp.diff_what"))));
+    cmpOut.appendChild(pair.node);
+    cmpOut.appendChild(el("div", { class: "note v2-acct-warn" },
+      t("v2.acct.cmp_caveat")));
+
+    // per-line engine estimates + which venue scopes they touch
+    const tbl = table([
+      t("v2.acct.cmp.line"), t("v2.acct.cmp.scopes"),
+      t("v2.acct.cmp.realized"), t("v2.acct.cmp.float"),
+      t("v2.acct.cmp.line_total"),
+    ]);
+    for (const x of est) {
+      const tr = el("tr");
+      tr.appendChild(el("td", {},
+        el("b", { text: x.l.symbol || x.l.key || "—" }),
+        el("div", { class: "muted",
+          text: [x.l.hedge, x.l.base].filter(Boolean).join(" ↔ ") })));
+      const scopeCell = el("td", {});
+      if (!x.scopes.length) scopeCell.appendChild(el("span", { class: "muted" }, "—"));
+      for (const s of x.scopes) {
+        scopeCell.appendChild(el("span", { class: "muted" }, s + " "));
+        if (!truthScopes.has(s))
+          scopeCell.appendChild(tag(t("v2.acct.badge.no_snapshot"),
+                                   "badge stale"));
+      }
+      tr.appendChild(scopeCell);
+      tr.appendChild(el("td", { class: "num" },
+        x.hasData ? usd(x.realized) : "—"));
+      tr.appendChild(el("td", { class: "num " + cls(x.floatPnl) },
+        x.hasData ? usd(x.floatPnl) : "—"));
+      tr.appendChild(el("td", { class: "num " + cls(x.total) },
+        x.total === null ? "—" : usd(x.total)));
+      tbl.tbody.appendChild(tr);
+    }
+    if (!est.length) {
+      tbl.tbody.appendChild(el("tr", {},
+        el("td", { colspan: "5", class: "muted",
+                   text: t("v2.acct.cmp.no_lines") })));
+    }
+    cmpOut.appendChild(tbl.node);
+    cmpOut.appendChild(el("div", { class: "note" },
+      t("v2.acct.cmp_footnote")));
+  }
+
   chgBtn.onclick = () => loadChanges().catch(() => {});
   loadChanges().catch(() => {});
+  loadCompare().catch(() => {});
   const chgTimer = setInterval(loadChanges, 60000);
+  const cmpTimer = setInterval(loadCompare, 60000);
+
   const posCard = card(t("v2.acct.positions"));
   const posTbl = table([
     t("col.venue"), t("venue.col.strategy"), t("venue.col.symbol"),
-    t("venue.col.leg"), t("venue.col.side"), t("venue.col.size"),
+    t("v2.acct.col.leg"), t("venue.col.side"), t("venue.col.size"),
     t("venue.col.notional"),
   ]);
   posCard.appendChild(posTbl.node);
   const note = el("div", { class: "note" }, t("v2.acct.note"));
   const mtmNote = el("div", { class: "note" }, t("v2.acct.mtm_note"));
-  container.append(totals, note, chgCard, exCard, posCard, mtmNote);
+  container.append(totals, note, chgCard, cmpCard, exCard, posCard, mtmNote);
 
   async function refresh() {
     const my = seq.begin();
@@ -132,7 +320,7 @@ export function mount(container) {
           ? el("span", { class: "muted" }, "—")
           : el("span", { text: fmtNum(Number(data.total_free), 2) + " USD" }));
       asof.textContent = t("v2.acct.asof",
-        { t: new Date((data.asof || 0) * 1000).toLocaleTimeString() });
+        { t: fmtTs(data.asof) });
       exTbl.tbody.replaceChildren();
       for (const ex of data.exchanges || []) {
         const probed = ex.source === "console_probe";
@@ -215,11 +403,11 @@ export function mount(container) {
   refresh();
   const timer = setInterval(refresh, 5000);
   return { refresh,
-           destroy() { clearInterval(timer); clearInterval(chgTimer); } };
+           destroy() { clearInterval(timer); clearInterval(chgTimer);
+                       clearInterval(cmpTimer); } };
 }
 
 function fmtUsd0(x) {
   if (x === null || x === undefined || !Number.isFinite(Number(x))) return "—";
-  const n = Number(x);
-  return fmtNum(n, 2);
+  return fmtNum(Number(x), 2);
 }

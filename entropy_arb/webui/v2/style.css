@@ -146,3 +146,22 @@
 /* P&L board: 10 dense columns — tighter padding keeps them in one screen */
 .v2-pnl-tbl table.data th,
 .v2-pnl-tbl table.data td { padding-left: 5px; padding-right: 5px; }
+
+/* ---------------- R-02 M1/M2: account truth + ledger health ---------------- */
+.v2-acct-controls {
+  display: flex; gap: 10px; align-items: center; margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.v2-acct-warn { color: var(--yellow); }
+.v2-acct-controls select { max-width: 160px; }
+
+.v2-lh-intro { margin-bottom: 10px; color: var(--yellow); }
+.v2-lh-legend-row {
+  display: flex; gap: 10px; align-items: center; margin: 3px 0;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 767px) {
+  .v2-acct-controls select { max-width: 100%; }
+  .v2-lh-intro { font-size: 14px; }
+}

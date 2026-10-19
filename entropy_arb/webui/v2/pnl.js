@@ -13,15 +13,10 @@ import { getJSON } from "/static/api.js";
 import { t } from "/static/i18n.js";
 import { el, card, table, stateBox, badge, updatedStamp, seqGuard }
   from "./components.js";
+import { fnum, lotStats } from "./pnlcalc.js";
 
 const REFRESH_MS = 15000;
 const API = "/api/pnl/lines?days=2&limit=500";
-
-function fnum(v) {
-  if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
 
 function usd(v) {
   if (v === null || !Number.isFinite(v)) return "—";
@@ -41,43 +36,6 @@ function signedQty(v) {
 function pnlCls(v) {
   if (v === null || !Number.isFinite(v)) return "zero";
   return v > 0.005 ? "pos" : v < -0.005 ? "neg" : "zero";
-}
-
-// 熵腿实际成交量（多头腿方向）——决定仓位路径
-function legQty(r) {
-  if (r.direction === "buy_entropy") return fnum(r.buy_fill) || 0;
-  if (r.direction === "sell_entropy") return fnum(r.sell_fill) || 0;
-  return 0;
-}
-
-// FIFO 配对：今日已平仓部分的配对盈亏（入场+离场两腿价差，含引擎估费）
-function lotStats(rows, cutoff) {
-  const chrono = (rows || []).slice().reverse();   // API 新→旧，反转成时间正序
-  const lots = [];
-  let realizedToday = 0;
-  for (const r of chrono) {
-    const q = legQty(r);
-    if (!(q > 0)) continue;                        // 单腿/未成交行不动仓位
-    const e = fnum(r.fill_edge_usd) ?? fnum(r.edge_usd) ?? 0;
-    const epu = e / q;
-    const signed = r.direction === "buy_entropy" ? q : -q;
-    if (!lots.length || Math.sign(signed) === Math.sign(lots[0].qty)) {
-      lots.push({ qty: signed, epu });
-      continue;
-    }
-    let remain = q;
-    while (remain > 1e-12 && lots.length) {
-      const lot = lots[0];
-      const take = Math.min(remain, Math.abs(lot.qty));
-      const pnl = take * (lot.epu + epu);
-      if ((fnum(r.ts) || 0) >= cutoff) realizedToday += pnl;
-      if (take >= Math.abs(lot.qty) - 1e-12) lots.shift();
-      else lot.qty -= take * Math.sign(lot.qty);
-      remain -= take;
-    }
-    if (remain > 1e-12) lots.push({ qty: signed > 0 ? remain : -remain, epu });
-  }
-  return { realizedToday };
 }
 
 // 首屏口径说明：5 项缺失 + “估算不是账本”，每条一行

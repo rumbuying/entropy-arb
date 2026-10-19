@@ -10,21 +10,58 @@ import { t } from "/static/i18n.js";
 import { el, card, table, stateBox, pendingBadge, badge, netPnlCell,
          updatedStamp, seqGuard } from "./components.js";
 import { store } from "./store.js";
+import { estimateLine } from "./pnlcalc.js";
+import { shanghaiDate } from "./tz.js";
+
+function usd(v) {
+  if (v === null || v === undefined || !Number.isFinite(Number(v))) return "—";
+  const n = Number(v);
+  return (n < 0 ? "-$" : "+$") + Math.abs(n).toFixed(2);
+}
+
+function cls(v) {
+  if (v === null || v === undefined || !Number.isFinite(Number(v))) return "muted";
+  const n = Number(v);
+  return n > 0 ? "pos" : n < 0 ? "neg" : "zero";
+}
 
 export function mount(container, ctx) {
   const seq = seqGuard();
   const stamp = updatedStamp();
 
   const kpis = el("div", { class: "kpi-strip" });
+  const truthV = el("div", { class: "value" }, "…");
+  const truthSub = el("div", { class: "sub" }, t("v2.ov.truth_loading"));
+  const estV = el("div", { class: "value" }, "…");
+  const estSub = el("div", { class: "sub" });
+  const equityV = el("div", { class: "value" }, "…");
+  const equitySub = el("div", { class: "sub" });
+  const pendV = el("div", { class: "value" });
+  const pendSub = el("div", { class: "sub" });
+  kpis.append(
+    el("div", { class: "kpi" },
+      el("div", { class: "label" }, t("v2.ov.truth_kpi")),
+      truthV, truthSub),
+    el("div", { class: "kpi" },
+      el("div", { class: "label" }, t("v2.ov.est_kpi")),
+      estV, estSub),
+    el("div", { class: "kpi" },
+      el("div", { class: "label" }, t("v2.ov.funding_risk")),
+      equityV, equitySub),
+    el("div", { class: "kpi" },
+      el("div", { class: "label" }, t("v2.ov.pending_items")),
+      pendV, pendSub));
   const contribCard = buildContributionCard();
   const strategyCard = card(t("v2.ov.strategies"));
   const stratNote = el("div", { class: "note", style: "margin-bottom:8px" },
     t("v2.det.list_note"));
   const stratTbl = table([
     t("v2.det.col.name"), t("v2.det.col.market"), t("v2.det.col.type"),
-    t("v2.det.col.live"), t("v2.ov.col.net"), t("v2.ov.col.next"),
+    t("v2.det.col.live"), t("v2.ov.col.est"),
+    t("v2.ov.col.net"), t("v2.ov.col.next"),
   ]);
-  strategyCard.append(stratNote, stratTbl.node);
+  const basisNote = el("div", { class: "note" }, t("v2.ov.two_basis_note"));
+  strategyCard.append(stratNote, basisNote, stratTbl.node);
   const sessionCard = card(t("v2.ov.live_sessions"));
   const sessionTbl = table([
     t("v2.ov.col.name"), t("v2.ov.col.state"), t("v2.ov.col.net"),
@@ -86,7 +123,10 @@ export function mount(container, ctx) {
         tr.appendChild(cell(s.gross_realized));
         tr.appendChild(cell(s.trading_fees, false));
         tr.appendChild(cell(s.funding_net));
-        tr.appendChild(el("td", {}, netPnlCell(s.net_pnl)));
+        const est = estByStrategy.get(s.strategy_id);
+      tr.appendChild(el("td", { class: "num " + cls(est ? est.total : null) },
+        est ? usd(est.total) : el("span", { class: "muted" }, "—")));
+      tr.appendChild(el("td", {}, netPnlCell(s.net_pnl)));
         tr.appendChild(el("td", {},
           badge(s.status, s.status === "estimated"
             ? "badge stale" : s.status === "reconciled"
@@ -113,6 +153,7 @@ export function mount(container, ctx) {
       seq.run(my, () => getJSON("/api/workers")),
       seq.run(my, () => getJSON("/api/secrets")),
       seq.run(my, () => getJSON("/api/venues")),
+      seq.run(my, () => getJSON("/api/pnl/lines?days=2&limit=500")),
     ]);
     const strategies = results[0].status === "fulfilled"
       ? (results[0].value.strategies || []) : null;
@@ -121,6 +162,8 @@ export function mount(container, ctx) {
       : null;
     const venues = results[3].status === "fulfilled" ? results[3].value
       : null;
+    const pnl = results[4] && results[4].status === "fulfilled"
+      ? results[4].value : null;
     if (!strategies) {
       strategyCard.replaceChildren(stratNote, stateBox({
         status: "error", message: t("v2.state.error"), onRetry: refresh,
@@ -135,49 +178,68 @@ export function mount(container, ctx) {
     const incompleteCreds = secrets && secrets.venues
       ? Object.entries(secrets.venues).filter(([, ok]) => !ok)
           .map(([k]) => k) : [];
-    kpis.replaceChildren(
-      el("div", { class: "kpi" },
-        el("div", { class: "label" }, t("v2.ov.period_pnl")),
-        el("div", { class: "value" }, pendingBadge()),
-        el("div", { class: "sub" }, t("v2.pnl.pending_hint"))),
-      el("div", { class: "kpi" },
-        el("div", { class: "label" }, t("v2.ov.funding_risk")),
-        el("div", { class: "value" },
-          venues && venues.total_equity !== null
-            && venues.total_equity !== undefined
-            ? el("span", {
-                text: `${Number(venues.total_equity).toLocaleString(
-                  undefined, { minimumFractionDigits: 0,
-                               maximumFractionDigits: 0 })} USD`,
-              })
-            : el("a", { href: "#/accounts" }, t("v2.nav.accounts"))),
-        el("div", { class: "sub" },
-          venues && venues.total_equity !== null
-            && venues.total_equity !== undefined
-            ? el("a", { href: "#/accounts" },
-                `${t("v2.acct.total_equity")} · ${t("v2.ov.col.state")}: `
-                + `${running.length}`)
-            : `${t("v2.ov.col.state")}: ${running.length}`)),
-      el("div", { class: "kpi" },
-        el("div", { class: "label" }, t("v2.ov.pending_items")),
-        el("div", { class: "value" },
-          errored.length || incompleteCreds.length
-            ? el("span", { class: "warn" },
-                errored.length
-                  ? t("v2.ov.att_worker_down", { n: errored.length })
-                  : "",
-                errored.length && incompleteCreds.length ? " · " : "",
-                incompleteCreds.length
-                  ? t("v2.ov.att_creds", { keys: incompleteCreds.join(", ") })
-                  : "")
-            : t("v2.ov.att_none"))),
-    );
+    // 策略估算（引擎成交口径）— 每个 strategy 今天的锁定 + 浮动
+    const cutoff = Number(pnl && pnl.day_start_ts) || 0;
+    const estByStrategy = new Map();
+    let estTotal = 0, estN = 0, estComplete = true;
+    for (const l of ((pnl && pnl.lines) || [])
+        .filter(x => x.mode === "live")) {
+      const e = estimateLine(l, cutoff);
+      estN++;
+      if (!e.hasData) { estComplete = false; continue; }
+      const total = e.realized + (e.floatPnl || 0);
+      estTotal += total;
+      const sid = l.strategy_id || `_line:${l.key}`;
+      const cur = estByStrategy.get(sid) || { total: 0, n: 0 };
+      cur.total += total;
+      cur.n += 1;
+      estByStrategy.set(sid, cur);
+    }
+    estV.replaceChildren(el("span", {
+      class: "num " + cls(estN ? estTotal : null),
+      text: estN ? usd(estTotal) : "—",
+    }));
+    estSub.textContent = estN
+      ? t("v2.ov.est_sub", { n: String(estN) })
+        + (estComplete ? "" : " " + t("v2.ov.est_partial"))
+      : t("v2.ov.est_none");
+
+    equityV.replaceChildren(
+      venues && venues.total_equity !== null
+        && venues.total_equity !== undefined
+        ? el("span", {
+            text: `${Number(venues.total_equity).toLocaleString(
+              undefined, { minimumFractionDigits: 0,
+                           maximumFractionDigits: 0 })} USD`,
+          })
+        : el("a", { href: "#/accounts" }, t("v2.nav.accounts")));
+    equitySub.replaceChildren(
+      venues && venues.total_equity !== null
+        && venues.total_equity !== undefined
+        ? el("a", { href: "#/accounts" },
+            `${t("v2.acct.total_equity")} · ${t("v2.ov.col.state")}: `
+            + `${running.length}`)
+        : document.createTextNode(
+            `${t("v2.ov.col.state")}: ${running.length}`));
+
+    pendV.replaceChildren(
+      errored.length || incompleteCreds.length
+        ? el("span", { class: "warn" },
+            errored.length
+              ? t("v2.ov.att_worker_down", { n: errored.length })
+              : "",
+            errored.length && incompleteCreds.length ? " · " : "",
+            incompleteCreds.length
+              ? t("v2.ov.att_creds", { keys: incompleteCreds.join(", ") })
+              : "")
+        : document.createTextNode(t("v2.ov.att_none")));
+    pendSub.textContent = "";
 
     // ---- persistent strategies (operations state joined from live runs)
     stratTbl.tbody.replaceChildren();
     if (!strategies.length) {
       stratTbl.tbody.appendChild(el("tr", {},
-        el("td", { colspan: "6", class: "muted",
+        el("td", { colspan: "7", class: "muted",
                    text: t("v2.det.none") })));
     }
     for (const s of strategies) {
@@ -194,6 +256,9 @@ export function mount(container, ctx) {
         s.live_workers.length
           ? badge(s.live_workers.join(", "), "badge running")
           : badge(t("status.stopped"), "badge stopped")));
+      const est = estByStrategy.get(s.strategy_id);
+      tr.appendChild(el("td", { class: "num " + cls(est ? est.total : null) },
+        est ? usd(est.total) : el("span", { class: "muted" }, "—")));
       tr.appendChild(el("td", {}, netPnlCell(s.net_pnl)));
       tr.appendChild(el("td", {},
         el("a", { href: `#/strategies/${s.strategy_id}` },
@@ -223,7 +288,38 @@ export function mount(container, ctx) {
     }
   }
 
+  // 账户真值（venue scope，今日）— slower than the 5s ops refresh
+  async function loadTruth() {
+    try {
+      const q = new URLSearchParams({
+        start: shanghaiDate(0), end: shanghaiDate(0),
+        timezone: "Asia/Shanghai",
+      });
+      const acc = await getJSON(`/api/accounts?${q}`);
+      const changes = ((acc.period || {}).changes) || [];
+      const rows = changes.filter(c =>
+        c.delta !== null && c.delta !== undefined);
+      const total = rows.reduce((a, c) => a + Number(c.delta), 0);
+      const missing = changes.length - rows.length;
+      truthV.replaceChildren(el("span", {
+        class: "num " + cls(rows.length ? total : null),
+        text: rows.length ? usd(total) : "—",
+      }));
+      truthSub.textContent = rows.length
+        ? t("v2.ov.truth_sub", { n: String(rows.length) })
+          + (missing ? " " + t("v2.ov.truth_missing", { n: String(missing) })
+                     : "")
+        : t("v2.ov.truth_none");
+    } catch (_) {
+      truthV.replaceChildren(el("span", { class: "muted" }, "—"));
+      truthSub.textContent = t("v2.state.error");
+    }
+  }
+  loadTruth().catch(() => {});
+  const truthTimer = setInterval(loadTruth, 30000);
+
   refresh();
   const timer = setInterval(refresh, 5000);
-  return { refresh, destroy() { clearInterval(timer); } };
+  return { refresh, destroy() { clearInterval(timer);
+                                clearInterval(truthTimer); } };
 }
