@@ -2520,6 +2520,10 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             profiles_by_sid.setdefault(row["strategy_id"], []).append(
                 row["profile"])
         src_cache: dict = {}
+        failed_by_sid: dict = {}
+        for row in storage.failed_attempt_counts():
+            if row.get("strategy_id"):
+                failed_by_sid[row["strategy_id"]] = int(row["n"] or 0)
 
         coverage_by_sid: dict = {}
         for rec in app["funding_coverage"].values():
@@ -2555,13 +2559,15 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
 
         out, summary = [], {"strategies": 0, "with_events": 0,
                             "no_events": 0, "stale_imports": 0,
-                            "unresolved": 0}
+                            "unresolved": 0, "execution_failures": 0}
         for s in storage.list_strategies(limit=500):
             sid = s["id"]
             profs = profiles_by_sid.get(sid, [])
-            ev = events_by_sid.get(sid) or {
+            ev = dict(events_by_sid.get(sid) or {
                 "total": 0, "unresolved": 0, "by_type": {},
-                "last_event_ts": None}
+                "last_event_ts": None})
+            failed_attempts = failed_by_sid.get(sid, 0)
+            ev["failed_attempts"] = failed_attempts
             gaps, srcs = [], []
             unsupported_venues, supported_venues = _funding_venues(s)
             import_ts = None
@@ -2582,6 +2588,10 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                     gaps.append("unresolved_events")
                 if types.get("taker_attempt") or types.get("taker_csv_row"):
                     gaps.append("fee_missing")
+                if failed_attempts > 0:
+                    # M3a resolution no longer counts ok=false attempts as
+                    # unresolved; keep the execution-failure count visible.
+                    gaps.append("execution_failures")
                 if unsupported_venues:
                     # venue has no payment API — explicitly NOT missing data
                     # and NOT a 0 amount (T1/Chief's acceptance rule)
@@ -2594,6 +2604,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             summary["strategies"] += 1
             summary["with_events" if ev["total"] else "no_events"] += 1
             summary["unresolved"] += ev["unresolved"]
+            summary["execution_failures"] += failed_attempts
             summary["stale_imports"] += 1 if stale else 0
             out.append({
                 "strategy_id": sid, "name": s["name"],
@@ -2619,6 +2630,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 "funding_unsupported": "该场所没有资金费付款接口（按 venue "
                                        "列在 funding.unsupported_venues）"
                                        "—— 未计入，不是 0",
+                "execution_failures": "存在执行失败/未成交的 taker 尝试"
+                                      "（ok=false，计数见 events."
+                                      "failed_attempts）",
                 "manual_import_stale": "最近一次导入超过 24h 或从未导入",
                 "source_file_missing": "profile 声明的成交文件不存在",
             },

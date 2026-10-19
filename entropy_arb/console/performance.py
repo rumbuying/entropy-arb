@@ -83,21 +83,22 @@ def fills_from_events(events: List[Dict[str, Any]]) -> List[L.Fill]:
                 fill_id=(ev.get("dedupe_key") or fill_id),
                 leg=p.get("venue")))
         elif etype == "taker_attempt":
-            fee_currency = (_fee_of(p)[1])
             for leg in ("buy", "sell"):
                 qty = L.D(p.get(f"{leg}_fill"))
                 price = L.D(p.get(f"{leg}_avg_px"))
                 if qty is None or qty <= L.ZERO or price is None:
                     continue      # unfilled / no real avg price → no fill
-                fee = _fee_of(p, f"{leg}_amount")[0]
+                # §6.1: a CONFIGURED fee estimate is not an actual charge,
+                # so it never enters Fill.fee. The estimate stays in the
+                # event payload (fee.{leg}_amount, source=configured_estimate)
+                # for display; the ledger keeps the fee unknown → net null.
                 seq += 1
                 fills.append(L.Fill(
                     ts=ts, seq=seq, event_id=event_id,
                     account=(p.get(f"{leg}_venue")
                              or ev.get("venue") or "unknown"),
                     instrument=instrument, side=leg,
-                    qty=qty, price=price, fee=fee,
-                    fee_currency=fee_currency,
+                    qty=qty, price=price, fee=None, fee_currency=None,
                     fill_id=(f"{fill_id}:{leg}" if fill_id else None),
                     leg=leg))
         else:                                   # hedge_fill
@@ -107,14 +108,13 @@ def fills_from_events(events: List[Dict[str, Any]]) -> List[L.Fill]:
             if qty is None or qty <= L.ZERO or price is None \
                     or side not in ("buy", "sell"):
                 continue
-            fee, fee_currency = _fee_of(p)
+            # hedge fee is likewise configured_estimate → not a real fee
             seq += 1
             fills.append(L.Fill(
                 ts=ts, seq=seq, event_id=event_id,
                 account=p.get("venue") or ev.get("venue") or "unknown",
                 instrument=instrument, side=side, qty=qty, price=price,
-                fee=fee, fee_currency=fee_currency, fill_id=fill_id,
-                leg="hedge"))
+                fee=None, fee_currency=None, fill_id=fill_id, leg="hedge"))
     return fills
 
 
@@ -133,6 +133,24 @@ def performance_for_strategy(storage, *, strategy_id: str,
                     and (end_ts is None or f.ts < end_ts)]
     unresolved = sum(1 for ev in events if ev.get("unresolved")
                      and ev.get("event_type") != "maker_fill")
+    # M3a: Fill.fee is only populated by REAL venue fills (maker path). The
+    # taker/hedge fee is a configured_estimate, so the source must be
+    # derived, never defaulted — unknown fees keep net_pnl null.
+    fee_source = None
+    if fills_period and all(f.fee is not None for f in fills_period):
+        fee_source = "venue_fill"
+    # Execution failures no longer count as "unresolved" under the M3a
+    # resolution rules; keep them visible as an explicit coverage number.
+    execution_failures = 0
+    for ev in events:
+        if ev.get("event_type") != "taker_attempt":
+            continue
+        try:
+            _p = json.loads(ev.get("payload_json") or "{}")
+        except Exception:
+            continue
+        if _p.get("ok") is False:
+            execution_failures += 1
 
     # ---- boundary valuations (§6.5): CONTEMPORANEOUS snapshots recorded by
     # the console every ~5 min. Start boundary: a snapshot within ±15 min
@@ -211,7 +229,7 @@ def performance_for_strategy(storage, *, strategy_id: str,
         fills_have_ids=all(f.fill_id for f in fills_period) if fills_period
         else True,
         funding_source="venue_api" if funding_seen else None,
-        fee_source="venue_fill",
+        fee_source=fee_source,
         mark_source="valuation_snapshot" if unreal_start is not None
         or unreal_end is not None else None,
         unrealized_start=unreal_start, unrealized_end=unreal_end)
@@ -285,6 +303,9 @@ def performance_for_strategy(storage, *, strategy_id: str,
             "complete_fills": len(fills_period),
             "unmatched_records": unresolved,
             "fills_before_period": len(fills_start),
+            # M3a: resolved taker attempts with ok=false (execution failures)
+            # stay counted even though they are no longer "unresolved".
+            "execution_failures": execution_failures,
         },
         "missing": result["missing"],
         "reconciliation": {"id": rec_id, "residual": None,

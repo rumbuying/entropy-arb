@@ -68,13 +68,13 @@ def test_fills_from_m3a_events():
     buy, sell, hedge = fills
     assert (buy.account, buy.side, buy.qty, buy.price) == \
         ("ENTROPY", "buy", D("1"), D("100"))
-    assert buy.fill_id == "run-1:1:buy" and buy.fee == D("0.1")
+    assert buy.fill_id == "run-1:1:buy" and buy.fee is None
     assert (sell.account, sell.side, sell.qty, sell.price) == \
         ("RH", "sell", D("1"), D("101"))
-    assert sell.fill_id == "run-1:1:sell" and sell.fee == D("0.101")
+    assert sell.fill_id == "run-1:1:sell" and sell.fee is None
     assert (hedge.account, hedge.side, hedge.qty, hedge.price) == \
         ("RH", "buy", D("1"), D("100.5"))
-    assert hedge.fill_id == "run-1:2" and hedge.fee == D("0.1005")
+    assert hedge.fill_id == "run-1:2" and hedge.fee is None
 
 
 def test_fills_require_a_real_fill_and_price():
@@ -108,12 +108,16 @@ def test_replay_matches_hand_calculation():
         funding_net=L.ZERO, fees_period=None,
         unresolved_in_scope=0,
         fills_have_ids=all(f.fill_id for f in fills),
-        funding_source="venue_api", fee_source="venue_fill",
+        funding_source="venue_api", fee_source=None,
         mark_source=None,
         unrealized_start=L.ZERO, unrealized_end=D("0.5"))
     assert D(res["components"]["gross_realized"]) == D("0.5")
-    assert D(res["components"]["trading_fees"]) == D("0.3015")
-    assert abs(D(res["net_pnl"]) - D("0.6985")) < D("1e-6")
+    # configured_estimate fees are NOT actual charges → trading fees unknown
+    assert res["components"]["trading_fees"] is None
+    assert any(m["code"] == "fee_missing" for m in res["missing"])
+    # fee unknown means the net number must stay null even with funding known
+    assert res["net_pnl"] is None
+    assert res["status"] == "incomplete"
     # gate unchanged: funding missing → net must stay null
     res2 = L.compute_period(
         fills_start=[], fills_period=fills,
@@ -141,6 +145,15 @@ def _write_events_file(tmp, run_id="run-1", strategy_id="str-1"):
          "run_id": run_id, "strategy_id": strategy_id, "event_ts": 900.0,
          "side": "buy_entropy",
          "fee": {"amount": None, "source": "missing"}},
+        # M3a resolved attempt that FAILED (ok=false): not a fill, but the
+        # execution failure must stay counted in coverage.
+        {"schema_version": 2, "event_type": "taker_attempt",
+         "run_id": run_id, "strategy_id": strategy_id, "event_ts": 1002.0,
+         "fill_id": "run-1:3", "side": "buy_entropy", "symbol": "SNDK",
+         "buy_fill": 0.0, "sell_fill": 0.0, "ok": False,
+         "buy_avg_px": None, "sell_avg_px": None,
+         "fee": {"buy_amount": None, "sell_amount": None,
+                 "source": "configured_estimate"}},
     ]
     with open(path, "w") as fh:
         for ln in lines:
@@ -155,7 +168,7 @@ def test_importer_resolves_m3a_events_but_keeps_legacy_unresolved():
         path = _write_events_file(tmp)
         rep = import_events_jsonl(storage, path=path, run_id="run-1",
                                   strategy_id="str-1")
-        assert rep["imported"] == 3
+        assert rep["imported"] == 4
         rows = storage.events_for_strategy("str-1", limit=100)
         by_type = {}
         for r in rows:
@@ -195,11 +208,40 @@ def test_performance_replays_fills_but_net_stays_null_without_funding():
             timezone="Asia/Shanghai")
         # replay is wired in: the taker legs + hedge fill are real fills
         assert perf["coverage"]["complete_fills"] == 3
+        # M3a: ok=false attempts stay counted even though they are resolved
+        assert perf["coverage"]["execution_failures"] == 1
         assert D(perf["components"]["gross_realized"]) == D("0.5")
         # gates unchanged: no funding attribution → no net number
         assert perf["net_pnl"] is None
         assert perf["reconciliation_status"] == "incomplete"
         assert any(m["code"] == "funding_missing"
                    for m in perf["missing"])
+        assert any(m["code"] == "fee_missing"
+                   for m in perf["missing"])
+    finally:
+        storage.close()
+
+def test_importer_marks_fill_without_price_unresolved():
+    """A real fill (qty>0) with no avg price cannot be replayed — it must be
+    unresolved, never silently dropped by the fill stream."""
+    tmp = tempfile.mkdtemp(prefix="m3a-noprice-")
+    storage = Storage(os.path.join(tmp, "data", "console-v2.sqlite3"))
+    try:
+        path = os.path.join(tmp, "logs", "events", "run-p.jsonl")
+        os.makedirs(os.path.dirname(path))
+        payload = dict(TAKER_PAYLOAD)
+        payload.update({"fill_id": "run-p:1", "buy_fill": 0.5,
+                        "buy_avg_px": None})
+        with open(path, "w") as fh:
+            fh.write(json.dumps({
+                "schema_version": 2, "event_type": "taker_attempt",
+                "run_id": "run-p", "strategy_id": "str-p",
+                "event_ts": 1000.0, **payload}) + "\n")
+        import_events_jsonl(storage, path=path, run_id="run-p",
+                            strategy_id="str-p")
+        rows = storage.events_for_strategy("str-p", limit=10)
+        assert rows[0]["unresolved"] == 1
+        # the unpriced buy leg is NOT replayed (only the priced sell leg is)
+        assert [f.side for f in P.fills_from_events(rows)] == ["sell"]
     finally:
         storage.close()

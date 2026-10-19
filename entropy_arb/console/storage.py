@@ -646,6 +646,24 @@ class Storage:
             " MAX(event_ts) AS last_ts FROM normalized_events"
             " GROUP BY strategy_id, event_type, unresolved")]
 
+    def failed_attempt_counts(self) -> List[Dict[str, Any]]:
+        """taker_attempt events whose payload says ok=false, per strategy.
+
+        M3a resolution rules stop counting these as "unresolved" (a v2
+        attempt has a fill id), so the execution-failure count must stay
+        visible on its own. JSON1 is used when available; an exotic build
+        without json_extract degrades to an empty list rather than a 500."""
+        try:
+            rows = self.db.execute(
+                "SELECT strategy_id, COUNT(*) AS n FROM normalized_events"
+                " WHERE event_type='taker_attempt'"
+                " AND json_extract(payload_json,'$.ok') = 0"
+                " GROUP BY strategy_id").fetchall()
+        except Exception:
+            return []
+        return [dict(r) for r in rows]
+
+
     def save_valuation(self, *, strategy_id: str, boundary: str, ts: float,
                        mark_source: Optional[str], payload: dict) -> None:
         self.db.execute(

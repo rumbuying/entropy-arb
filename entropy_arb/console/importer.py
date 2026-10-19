@@ -248,6 +248,28 @@ def _parse_row(kind: str, header: List[str], row: List[str]) \
     }
 
 
+def _fill_has_no_price(event_type: str, ev: dict) -> bool:
+    """M3a: a real fill (qty > 0) whose average price is missing cannot be
+    replayed — it must surface as UNRESOLVED, never be silently dropped by
+    the ledger's fill stream."""
+    if event_type == "taker_attempt":
+        legs = ("buy", "sell")
+        qty_keys = ("buy_fill", "sell_fill")
+        px_keys = ("buy_avg_px", "sell_avg_px")
+    elif event_type == "hedge_fill":
+        legs, qty_keys, px_keys = ("",), ("qty",), ("avg_px",)
+    else:
+        return False
+    for qty_key, px_key in zip(qty_keys, px_keys):
+        try:
+            qty = float(ev.get(qty_key) or 0.0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        if qty > 0 and ev.get(px_key) is None:
+            return True
+    return False
+
+
 def import_events_jsonl(storage, *, path: str, run_id: str,
                         strategy_id: Optional[str],
                         batch: Optional[str] = None) -> ImportReport:
@@ -309,8 +331,9 @@ def import_events_jsonl(storage, *, path: str, run_id: str,
                 venue=ev.get("venue"),
                 instrument=ev.get("symbol") or ev.get("instrument"),
                 dedupe_key=dedupe_key,
-                unresolved=(not has_fill_id and event_type in
-                            ("maker_fill", "taker_attempt", "hedge_fill")),
+                unresolved=((not has_fill_id and event_type in
+                             ("maker_fill", "taker_attempt", "hedge_fill"))
+                            or _fill_has_no_price(event_type, ev)),
                 commit=False)
             if ok:
                 imported += 1

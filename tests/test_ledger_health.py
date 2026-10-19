@@ -76,6 +76,15 @@ def test_ledger_health_reports_gaps_without_500():
             source_id=src_id, source_line=i + 2, event_ts=now - 100 + i,
             payload={"direction": "buy_entropy"}, strategy_id=s1,
             unresolved=True)
+    # M3a: a RESOLVED attempt that failed (ok=false) — no longer counted as
+    # unresolved, so the health page keeps it as execution_failures.
+    storage.insert_event(
+        event_id=f"src:{src_id}:line:20", event_type="taker_attempt",
+        import_batch="test", source_id=src_id, source_line=20,
+        event_ts=now - 40,
+        payload={"ok": False, "fill_id": "run-x:1",
+                 "buy_fill": 0.0, "sell_fill": 0.0},
+        strategy_id=s1, unresolved=False)
     storage.insert_event(
         event_id=f"src:{src_id}:line:9", event_type="taker_csv_row",
         import_batch="test", source_id=src_id, source_line=9,
@@ -112,11 +121,12 @@ def test_ledger_health_reports_gaps_without_500():
     assert body["summary"]["with_events"] == 2
     assert body["summary"]["no_events"] == 1
     by_id = {s["strategy_id"]: s for s in body["strategies"]}
-    assert by_id[s1]["events"]["total"] == 2
+    assert by_id[s1]["events"]["total"] == 3
     assert by_id[s1]["events"]["unresolved"] == 2
     gaps1 = set(by_id[s1]["gaps"])
     assert {"unresolved_events", "fee_missing",
-            "funding_unsupported"} <= gaps1
+            "funding_unsupported", "execution_failures"} <= gaps1
+    assert by_id[s1]["events"]["failed_attempts"] == 1
     # unsupported venues are named and NEVER reported as missing/zero
     assert by_id[s1]["funding"]["unsupported_venues"] == ["arcus", "hl"]
     assert "funding_missing" not in gaps1
@@ -133,6 +143,7 @@ def test_ledger_health_reports_gaps_without_500():
     assert "funding_unsupported" not in gaps3
     assert by_id[s3]["funding"]["unsupported_venues"] == []
     assert "funding_unsupported" in body["gap_codes"]
+    assert body["summary"]["execution_failures"] == 1
     assert len(body["funding_coverage"]) == 1
     assert body["funding_coverage"][0]["venue"] == "arcus"
 
