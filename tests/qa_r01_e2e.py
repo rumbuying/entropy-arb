@@ -415,6 +415,68 @@ async def run_e2e():
         finally:
             await ctx10.close()
 
+        # ---------------- WEB-12 仅实盘线（R-01 上线回归） ----------------
+        rec = await BrowserEnv.create(minimal=True, with_record=True)
+        ctx12, page12, err12, cap12 = await open_pnl(browser, rec.base)
+        try:
+            rows12 = await table_rows(page12)
+            body12 = await page12.inner_text("body")
+            scope12 = await page12.inner_text(".v2-pnl-scope")
+            api_lines = cap12[-1]["lines"] if cap12 else []
+            live_lines = [l for l in api_lines if l.get("mode") == "live"]
+            check("WEB-12a API 默认响应全部为 live 线",
+                  bool(api_lines) and all(l.get("mode") == "live"
+                                          for l in api_lines), api_lines)
+            check("WEB-12b 页面行数等于实盘线数（4）",
+                  len(rows12) == 4 and len(rows12) == len(live_lines),
+                  f"rows={len(rows12)} live={len(live_lines)} "
+                  f"api={len(api_lines)}")
+            check("WEB-12c 观察线 MAKER/OBS 不在页面",
+                  "MAKER" not in body12 and "OBS" not in body12,
+                  [r[0] for r in rows12])
+            check("WEB-12d 口径说明含「仅实盘线」",
+                  "仅实盘线" in scope12, scope12)
+            check("WEB-12e 无未捕获 JS 错误", not err12, err12)
+        finally:
+            await ctx12.close()
+            await rec.close()
+
+        # 前端兜底：即使接口回归混入 record 线，页面也不展示
+        rec2 = await BrowserEnv.create(minimal=True, with_record=True)
+        ctx12b = await browser.new_context(viewport={"width": 1440,
+                                                    "height": 1000})
+        page12b = await ctx12b.new_page()
+        err12b = new_page_errors(page12b)
+
+        async def inject_record(route):
+            resp = await route.fetch()
+            data = await resp.json()
+            data["lines"].append({
+                "key": "worker:w99", "strategy_id": None,
+                "name": "OBSFAKE", "symbol": "OBSFAKE", "hedge": "lighter",
+                "base": "hl", "mode": "record", "status": "running",
+                "worker_id": "w99", "run_id": "run-fake",
+                "profile": "obs", "session": {"unrealized_usd": 1.0},
+                "state": None, "schema": "taker", "trades_exists": False,
+                "tail_truncated": False, "trades": [],
+            })
+            await route.fulfill(status=200, content_type="application/json",
+                                body=json.dumps(data))
+        await page12b.route("**/api/pnl/lines*", inject_record)
+        try:
+            await page12b.goto(f"{rec2.base}/console-v2?token={TOKEN}#/pnl",
+                               wait_until="domcontentloaded")
+            await wait_ready(page12b)
+            rows12b = await table_rows(page12b)
+            body12b = await page12b.inner_text("body")
+            check("WEB-12f 前端兜底过滤注入的 record 线",
+                  len(rows12b) == 4 and "OBSFAKE" not in body12b,
+                  f"rows={len(rows12b)}")
+            check("WEB-12g 无未捕获 JS 错误", not err12b, err12b)
+        finally:
+            await ctx12b.close()
+            await rec2.close()
+
         # ---------------- WEB-09 空态 ----------------
         empty = await BrowserEnv.create(empty=True)
         ctx9 = await browser.new_context(viewport={"width": 1200,

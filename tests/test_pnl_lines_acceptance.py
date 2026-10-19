@@ -150,11 +150,13 @@ def approx(a, b, tol=1e-6):
 class Env:
     """隔离环境：临时 DB/profiles/CSV + 直接注入的 worker。"""
 
-    def __init__(self, minimal=False, empty=False):
+    def __init__(self, minimal=False, empty=False, with_record=False):
         """minimal: 只留 SNDK/ANTH/HYPE/OLD/BTC 五条线（E2E 用）；
-        empty: 不造任何线（空态用）。"""
+        empty: 不造任何线（空态用）；
+        with_record: 即使 minimal 也造 record 观察线（live-only 回归用）。"""
         self.minimal = minimal
         self.empty = empty
+        self.with_record = with_record
         self.tmp = tempfile.mkdtemp(prefix="r01-qa-api-")
         self.profiles_dir = os.path.join(self.tmp, "profiles")
         self.root = os.path.join(self.tmp, "root")
@@ -223,8 +225,9 @@ class Env:
                                       fill_edge=0.2))
             write_csv(os.path.join(self.root, "logs", "trades-EOS-rh.csv"),
                       TAKER_HEADER, rows)
-        # L8 record(maker) 线：schema=maker，接口不 500（观测项）
-        if not getattr(self, "minimal", False):
+        # L8 record(maker) 线：schema=maker，默认不得出现在 live-only 看板
+        if not getattr(self, "minimal", False) or getattr(
+                self, "with_record", False):
             write_profile(self.profiles_dir, "maker1",
                           "logs/maker-trades.csv", maker=True)
             write_csv(os.path.join(self.root, "logs", "maker-trades.csv"),
@@ -266,6 +269,21 @@ class Env:
             w.adopted_pid = os.getpid()       # aliveness for w.running
             self.sup.workers[wid] = w
             self.rids[wid] = rid
+
+        # L9 record 观察线（已停止，无 worker）：默认不得出现，
+        # include_record=1 时才返回（live-only 回归覆盖 running+stopped 两类）
+        if not getattr(self, "minimal", False) or getattr(
+                self, "with_record", False):
+            write_profile(self.profiles_dir, "obs",
+                          "logs/trades-OBS-lighter.csv")
+            write_csv(os.path.join(self.root, "logs",
+                                   "trades-OBS-lighter.csv"),
+                      TAKER_HEADER, [taker_row(sh0 + 500, "buy_entropy",
+                                               1, 0, 2)])
+            self.rids["w9"] = run("obs", "OBS", "lighter", "w9",
+                                  mode="record",
+                                  started=self.now - 7200,
+                                  ended=self.now - 3600)
 
         # stopped worker 仍在 supervisor 中（stop 后记录保留的场景）
         self.rids["w3"] = run("hype", "HYPE", "lighter", "w3",
@@ -569,11 +587,43 @@ def test_no_client_supplied_path():
 
 def test_maker_line_schema():
     async def body(env):
-        data = await env.get("/api/pnl/lines")
+        # live-only：默认不返回 record 观察线
+        default = await env.get("/api/pnl/lines")
+        assert env.lines_by_symbol(default).get("MAKER") is None
+        # include_record=1 才返回，且 schema 正确
+        data = await env.get("/api/pnl/lines?include_record=1")
         maker = env.lines_by_symbol(data).get("MAKER")
-        assert maker is not None, "record/maker 线观测项：应返回或记录缺失"
+        assert maker is not None
         assert maker["schema"] == "maker"
         assert maker["status"] == "running"
+    run_test(body)
+
+
+def test_live_only_default_and_include_record():
+    """R-01 上线回归：盈亏看板默认只含 mode=live，观察线须显式 opt-in。"""
+    async def body(env):
+        default = await env.get("/api/pnl/lines")
+        assert default["lines"], "默认不应为空（live fixture 存在）"
+        assert all(ln["mode"] == "live" for ln in default["lines"]), \
+            f'默认混入观察线: {[ln["mode"] for ln in default["lines"]]}'
+        syms = env.lines_by_symbol(default)
+        assert "MAKER" not in syms and "OBS" not in syms, \
+            "record 观察线（running/stopped）默认不得出现"
+        assert {"SNDK", "HYPE"} <= set(syms), "live 线不应被误过滤"
+
+        inc = await env.get("/api/pnl/lines?include_record=1")
+        inc_syms = env.lines_by_symbol(inc)
+        assert inc_syms.get("MAKER", {}).get("mode") == "record"
+        assert inc_syms.get("MAKER", {}).get("status") == "running"
+        assert inc_syms.get("OBS", {}).get("mode") == "record"
+        assert inc_syms.get("OBS", {}).get("status") == "stopped"
+        # 加观察线是“追加”，不能把 live 线替换掉
+        assert {"SNDK", "ANTH", "BTC", "HYPE"} <= set(inc_syms)
+        # 显式 0/false 等同默认
+        for q in ("include_record=0", "include_record=false",
+                  "include_record="):
+            data = await env.get(f"/api/pnl/lines?{q}")
+            assert all(ln["mode"] == "live" for ln in data["lines"]), q
     run_test(body)
 
 
