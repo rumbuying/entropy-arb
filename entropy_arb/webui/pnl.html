@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>实盘盈亏看板 · entropy-arb</title>
+<title>实盘盈亏看板（估算） · entropy-arb</title>
 <style>
 :root{
   --bg:#0f1115; --panel:#161a21; --line:#232936; --text:#e6e9ef;
@@ -52,7 +52,7 @@ tr:hover td{background:#1b2029}
 </head>
 <body>
 <header>
-  <div class="brand">entropy-arb <span>实盘盈亏看板</span></div>
+  <div class="brand">entropy-arb <span>实盘盈亏看板（估算）</span></div>
   <span class="spacer"></span>
   <span class="meta" id="status">加载中…</span>
   <button id="refresh">刷新</button>
@@ -61,13 +61,21 @@ tr:hover td{background:#1b2029}
   <div class="summary" id="summary"></div>
   <div id="body"><div class="dim">加载中…</div></div>
   <div class="note">
-    口径：<b>今日成交</b> = 本地 0 点起 trades CSV 的逐笔记录，<b>完整</b> = 两腿都有成交。
-    <b>今日锁定盈利</b> = 今日<b>已平仓</b>部分的实际配对盈亏（FIFO：平仓量与当初开仓量按成交价差配对，
-    含入场+离场两腿，引擎估费口径）——这部分已经落袋，不再受行情影响。
-    <b>今日浮动</b> = 当前持仓按现价重估（引擎 session <code>unrealized_usd</code>）——未落袋，会随行情变化。
-    共用同一组交易所账户的多条线（如 ANTH 与 SNDK 共用 ENTROPY/RH）账户级流水无法拆线，锁定盈利为引擎成交口径估算，
-    精确到账以交易所流水为准（差异主要来自实际费率与滑点）。数据最多取最近 500 笔成交。
-    数据源：<code>/api/workers</code>、<code>/api/workers/&lt;id&gt;/state</code>、<code>/api/workers/&lt;id&gt;/trades</code>。自动刷新 20s。
+    <b>这是估算，不是账本。</b>本页所有金额来自引擎成交口径，未与交易所流水核对；净收益在 V2 复盘页仍为“待核对”。<br>
+    <b>本页不包含（5 项）</b><br>
+    · 资金费完全没有计入；<br>
+    · 手续费与滑点是引擎估算，不是实际支付金额；<br>
+    · 共用同一交易所账户的线（如 ANTH/SNDK）无法按账户流水拆线；<br>
+    · 每条线只取最近 500 笔成交，更早成交未计入；<br>
+    · “今日”固定为 Asia/Shanghai 0 点（由后端 day_start_ts 返回），不跟浏览器时区走。<br>
+    口径：<b>今日成交</b> = 今日 trades CSV 的逐笔记录，<b>完整</b> = 两腿都有成交。
+    <b>今日锁定盈利（估算）</b> = 今日<b>已平仓</b>部分的 FIFO 配对盈亏（入场+离场两腿，
+    引擎估费口径）——未落袋，不能当作已核对净收益。
+    <b>今日浮动（估算）</b> = 当前持仓按现价重估（引擎 session <code>unrealized_usd</code>）——未实现。
+    旧版页面只列运行中的线；要查最近停止的线请用 V2 盈亏看板。
+    数据源：<code>/api/workers</code>、<code>/api/workers/&lt;id&gt;/state</code>、
+    <code>/api/workers/&lt;id&gt;/trades</code>；今日起点取自 <code>/api/pnl/lines</code> 的
+    <code>day_start_ts</code>。自动刷新 20s。
   </div>
 </main>
 <script type="module">
@@ -85,9 +93,21 @@ const bps = (v) => (v == null || isNaN(v)) ? "—" : (v > 0 ? "+" : "") + Number
 const cls = (v) => v == null ? "" : (v > 0.005 ? "good" : v < -0.005 ? "bad" : "dim");
 const num = (v, d = 2) => (v == null || isNaN(v)) ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(d);
 
-function todayStartSec() {
-  const d = new Date(); d.setHours(0, 0, 0, 0);
-  return d.getTime() / 1000;
+// "今日"起点：优先用后端按 Asia/Shanghai 算好的 day_start_ts；
+// 接口不可用时退回固定 UTC+8 0 点（上海无夏令时，结果一致）。
+// 不用 new Date().setHours(0,0,0,0)，避免跟随浏览器时区漂移。
+function shanghaiMidnightSec() {
+  const day = 86400000, off = 8 * 3600000;
+  return (Math.floor((Date.now() + off) / day) * day - off) / 1000;
+}
+
+async function todayCutoff() {
+  try {
+    const d = await getJSON("/api/pnl/lines?days=1&limit=1");
+    const ts = d && Number(d.day_start_ts);
+    if (Number.isFinite(ts) && ts > 0) return ts;
+  } catch (e) {}
+  return shanghaiMidnightSec();
 }
 
 // 熵腿实际成交量（多头腿方向）——决定仓位路径
@@ -128,15 +148,17 @@ function lotStats(rows, cutoff) {
   return { realizedToday };
 }
 
-function lineRow(w, st, tr) {
+function lineRow(w, st, tr, cutoff) {
   const rows = (tr && tr.rows) || [];
-  const cutoff = todayStartSec();
   const today = rows.filter(r => r.ts && (+r.ts) >= cutoff);
   const complete = today.filter(r =>
     ("buy_fill" in r) ? (+r.buy_fill > 0 && +r.sell_fill > 0)
       : (r.ok === "1" || r.ok === true));
 
   const { realizedToday } = lotStats(rows, cutoff);
+  // 今日成交额：逐笔名义（两腿近似相等，取较大值以免单腿行漏算）
+  const volToday = today.reduce((s, r) => s + Math.max(
+    parseFloat(r.buy_notional) || 0, parseFloat(r.sell_notional) || 0), 0);
 
   const vE = st && st.venues ? st.venues.entropy : null;
   const vH = st && st.venues ? st.venues.hedge : null;
@@ -161,8 +183,9 @@ function lineRow(w, st, tr) {
     <td><b>${w.symbol}</b><div class="dim" style="font-size:11px">${vE && vH ? `${vE.name}↔${vH.name}` : "—"}</div></td>
     <td>${badges.join("")}</td>
     <td class="num">${complete.length}<span class="dim"> / ${today.length}</span></td>
-    <td class="num ${cls(realizedToday)}" style="font-size:15px">${usd(realizedToday)}<div class="dim" style="font-size:11px">已落袋</div></td>
-    <td class="num ${cls(float)}" style="font-size:15px">${usd(float)}<div class="dim" style="font-size:11px">持仓中</div></td>
+    <td class="num">$${volToday.toFixed(0)}<div class="dim" style="font-size:11px">累计 $${((vE && vE.volume_usd) || 0).toFixed(0)}</div></td>
+    <td class="num ${cls(realizedToday)}" style="font-size:15px">${usd(realizedToday)}<div class="dim" style="font-size:11px">估算，非账本</div></td>
+    <td class="num ${cls(float)}" style="font-size:15px">${usd(float)}<div class="dim" style="font-size:11px">未实现估算</div></td>
     <td class="num">${posE == null ? "—" : num(posE)} / ${posH == null ? "—" : num(posH)}</td>
     <td class="num">${bps(prem)}<div class="dim" style="font-size:11px">${band}</div></td>
     <td class="num">${vE ? usd(vE.equity) : "—"}<div class="dim" style="font-size:11px">${vH ? usd(vH.equity) : ""}</div></td>
@@ -183,8 +206,9 @@ async function refresh() {
       try { tr = await getJSON(`/api/workers/${w.id}/trades?limit=500`); } catch (e) {}
       out.push({ w, st, tr });
     }
-    const cutoff = todayStartSec();
+    const cutoff = await todayCutoff();
     let totalRealized = 0, totalFloat = 0, totalComplete = 0, totalToday = 0;
+    let totalVolume = 0;
     for (const { st, tr } of out) {
       const rows = (tr && tr.rows) || [];
       const today = rows.filter(r => r.ts && (+r.ts) >= cutoff);
@@ -193,29 +217,33 @@ async function refresh() {
         ? (+r.buy_fill > 0 && +r.sell_fill > 0)
         : (r.ok === "1" || r.ok === true)).length;
       totalRealized += lotStats(rows, cutoff).realizedToday;
+      totalVolume += today.reduce((acc, r) => acc + Math.max(
+        parseFloat(r.buy_notional) || 0, parseFloat(r.sell_notional) || 0), 0);
       const ses = (st && st.session) || {};
       totalFloat += Number(ses.unrealized_usd ?? ses.unrealized_pnl ?? 0) || 0;
     }
     document.getElementById("summary").innerHTML = `
       <div class="kpi"><div class="l">实盘线</div><div class="v">${out.length}</div></div>
       <div class="kpi"><div class="l">今日成交（完整/总）</div><div class="v">${totalComplete} <span class="dim" style="font-size:13px">/ ${totalToday}</span></div></div>
-      <div class="kpi"><div class="l">今日锁定盈利（已落袋）</div><div class="v ${cls(totalRealized)}">${usd(totalRealized)}</div></div>
-      <div class="kpi"><div class="l">今日浮动（持仓中）</div><div class="v ${cls(totalFloat)}">${usd(totalFloat)}</div></div>
+      <div class="kpi"><div class="l">今日成交额</div><div class="v">$${totalVolume.toFixed(0)}</div></div>
+      <div class="kpi"><div class="l">今日锁定盈利（估算）</div><div class="v ${cls(totalRealized)}">${usd(totalRealized)}</div></div>
+      <div class="kpi"><div class="l">今日浮动（估算）</div><div class="v ${cls(totalFloat)}">${usd(totalFloat)}</div></div>
     `;
     document.getElementById("body").innerHTML = out.length
       ? `<table>
           <thead><tr>
             <th>线 / 交易对</th><th>状态</th>
             <th class="num">今日成交</th>
-            <th class="num">今日锁定盈利</th>
-            <th class="num">今日浮动</th>
+            <th class="num">今日成交额</th>
+            <th class="num">今日锁定盈利（估算）</th>
+            <th class="num">今日浮动（估算）</th>
             <th class="num">仓位（E / H）</th>
             <th class="num">溢价 vs band (bp)</th>
             <th class="num">权益（两腿）</th>
           </tr></thead>
-          <tbody>${out.map(({ w, st, tr }) => lineRow(w, st, tr)).join("")}</tbody>
+          <tbody>${out.map(({ w, st, tr }) => lineRow(w, st, tr, cutoff)).join("")}</tbody>
         </table>`
-      : '<div class="dim">没有运行中的实盘 worker。</div>';
+      : '<div class="dim">没有运行中的实盘 worker（旧版页面只列运行线；最近停止的线见 V2 盈亏看板）。</div>';
     status.textContent = "更新于 " + new Date().toLocaleTimeString();
   } catch (e) {
     status.textContent = "接口错误";

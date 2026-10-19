@@ -122,3 +122,23 @@
 @media (max-width: 767px) {
   .v2-prof-layout { grid-template-columns: 1fr; }
 }
+
+/* ---------------- R-01 P&L honesty (estimate basis) ---------------- */
+.v2-pnl-scope { margin-bottom: 8px; }
+.v2-pnl-gaps {
+  border: 1px solid #3a301e; background: #241f12;
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 14px;
+}
+.v2-pnl-gaps-title {
+  color: var(--yellow); font-weight: 600; font-size: 13px;
+  margin-bottom: 3px;
+}
+.v2-pnl-gap { font-size: 12.5px; line-height: 1.65; }
+.v2-pnl-gaps-foot {
+  color: var(--yellow); font-size: 12.5px; margin-top: 6px;
+}
+
+@media (max-width: 767px) {
+  .v2-pnl-gap, .v2-pnl-gaps-foot { font-size: 14px; }
+  .v2-pnl-gaps { padding: 10px 12px; }
+}
