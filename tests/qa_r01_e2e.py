@@ -190,7 +190,7 @@ async def run_e2e():
                 ("资金费", "资金费" in gaps),
                 ("手续费+滑点", "手续费" in gaps and "滑点" in gaps),
                 ("共用/共享账户", "共用" in gaps or "共享" in gaps),
-                ("500 笔", "500 笔" in gaps),
+                ("2000 笔", "2000 笔" in gaps),
                 ("Asia/Shanghai", "Asia/Shanghai" in gaps),
                 ("不是账本/没有已核对账本",
                  "不是账本" in gaps or "已核对账本" in gaps
@@ -397,7 +397,7 @@ async def run_e2e():
                 ("fees+slippage", "fees" in lower and "slippage" in lower),
                 ("shared account cannot be split",
                  "sharing" in lower and "split" in lower),
-                ("500 fills", "500" in lower),
+                ("2000 fills", "2000" in lower),
                 ("Asia/Shanghai", "asia/shanghai" in lower),
                 ("not a ledger", "ledger" in lower),
             ]:

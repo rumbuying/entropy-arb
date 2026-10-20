@@ -113,7 +113,7 @@ class Env:
             scope="HL(io)", ts=ps + 120, equity=10000.0, free=5000.0,
             source="worker")
         self.storage.save_account_equity(
-            scope="HL(io)", ts=today0 + 600, equity=10000.0, free=5000.0,
+            scope="HL(io)", ts=today0 + 1, equity=10000.0, free=5000.0,
             source="worker")
         self.storage.save_account_equity(
             scope="HL(io)", ts=now - 120, equity=10100.0, free=5100.0,
@@ -122,7 +122,7 @@ class Env:
             scope="Lighter-RH", ts=ps + 180, equity=2000.0, free=1000.0,
             source="worker")
         self.storage.save_account_equity(
-            scope="Lighter-RH", ts=today0 + 600, equity=2000.0, free=1000.0,
+            scope="Lighter-RH", ts=today0 + 1, equity=2000.0, free=1000.0,
             source="worker")
         self.storage.save_account_equity(
             scope="Lighter-RH", ts=now - 60, equity=2010.0, free=1010.0,

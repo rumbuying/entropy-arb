@@ -78,7 +78,13 @@ def line(symbol, trades, started_ts, *, position, status="running",
 def build_payload():
     fx = load_fixture()
     t0 = today_cutoff()
+    # fixture 冻结于 2026-10-20；整段平移 delta 天，保证凌晨 00:0x 跑时
+    # “今日”窗口仍覆盖同样的成交（否则绝对时间戳会滚出今日 -> 全 0）
+    fx_day0 = datetime(2026, 10, 20, tzinfo=SH).timestamp()
+    delta = t0 - fx_day0
     anth_rows = list(reversed(fx["run_rows"]))      # API 新→旧
+    for r in anth_rows:
+        r["ts"] = r["ts"] + delta
     for r in anth_rows:
         r.setdefault("buy_venue", "ENTROPY")
         r.setdefault("sell_venue", "RH")
@@ -115,7 +121,8 @@ def build_payload():
     trunc_line["tail_truncated"] = True     # 500 行窗口被截断
     trunc_line["trades"][0]["ts"] = t0 + 150
     lines = [
-        line("ANTH", anth_rows, fx["started_ts"], position=-0.48),
+        line("ANTH", anth_rows, fx["started_ts"] + delta,
+             position=fx["current_position"]),
         line("PART", part, t0 + 50, position=0.0),
         line("INH", inh, t0 + 50, position=0.0),
         line("NORM", norm, t0 + 50, position=0.0),
