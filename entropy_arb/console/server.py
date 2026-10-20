@@ -96,6 +96,56 @@ def start_auto_import_loop(app):
     return task
 
 
+# venue key -> the exchange group a live snapshot reports for it
+# (venues.exchange_of on the registry label). Every venue the engine can
+# trade must be here: a stopped engine's balance is invisible to the
+# aggregation unless its group gets a console-side probe (§5.5).
+_PROBE_GROUPS = {
+    "katana": "Katana", "backpack": "Backpack", "bulk": "Bulk",
+    "lighter": "Lighter", "lighter-rh": "Lighter-RH",
+    "arcus": "ARCUS", "ondo": "ONDO", "perpl": "PERPL",
+}
+
+
+def _probe_legs(profile_raw: dict, base: str, hedge: str,
+                symbol: str) -> list:
+    """[(group, venue, role, dex, symbol)] the console must probe for one
+    worker record when no live snapshot covers its venue groups.
+
+    Mirrors what the engine builds (config.load_config / build_leg_conf):
+    ``entropy.dex`` defaults to "io", a kind-hl hedge leg is trade.xyz, and
+    the group name is what ``venues.exchange_of`` derives from the venue
+    label a live snapshot carries. A mismatch here is what made ARCUS
+    disappear from the total after the NEAR engine stopped."""
+    ent = profile_raw.get("entropy") or {}
+    hdg = profile_raw.get("hedge") or {}
+    # load_config defaults entropy.dex to "io"; the raw yaml usually omits
+    # it. The probe must use the SAME dex the engine uses, or an io-dex
+    # market is looked up on the main dex and comes back "not found".
+    dex = str(ent.get("dex") or "").strip() or "io"
+    sym = (symbol or "").upper()
+    base_sym = str(ent.get("symbol") or sym).strip().upper() or sym
+    hedge_sym = str(hdg.get("symbol") or sym).strip().upper() or sym
+    legs = []
+    if base == "hl":
+        gname = "HL(io)" if dex == "io" else f"HL({dex})"
+        legs.append((gname, "hl", "base", dex, base_sym))
+    elif base in _PROBE_GROUPS:
+        legs.append((_PROBE_GROUPS[base], base, "base", "", base_sym))
+    if hedge == "tradexyz":
+        # trade.xyz is a kind-hl market probed through the hl venue with
+        # role=hedge (diag_conf defaults dex xyz); a live snapshot labels
+        # it XYZ.
+        legs.append(("XYZ", "hl", "hedge", "", hedge_sym))
+    elif hedge == "hl":
+        # legacy profile spelling of trade.xyz: the engine still trades dex
+        # xyz, but the label a live snapshot reports is ENTROPY -> HL(io).
+        legs.append(("HL(io)", "hl", "hedge", "", hedge_sym))
+    elif hedge in _PROBE_GROUPS:
+        legs.append((_PROBE_GROUPS[hedge], hedge, "hedge", "", hedge_sym))
+    return legs
+
+
 def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                secrets: SecretsManager, *, token: Optional[str] = None,
                storage=None, ops_service: Optional[OperationService] = None,
@@ -2030,32 +2080,15 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             try:
                 st = supervisor.status(oid)
                 from .venues import load_profile_yaml
-                raw = load_profile_yaml(supervisor.profiles_dir, st["profile"])
-                dex = ((raw.get("entropy") or {}).get("dex") or "").strip()
-                base, hedge = st.get("base") or "hl", st.get("hedge") or ""
-                sym = (st.get("symbol") or "").upper()
-                for venue, role, group in (
-                        (base, "base", None),
-                        (("hl" if hedge == "tradexyz" else hedge),
-                         "hedge", None)):
-                    gname = None
-                    if venue == "hl":
-                        gname = "HL(io)" if (dex or "io") == "io" else \
-                            f"HL({dex or 'io'})"
-                    elif venue == "katana":
-                        gname = "Katana"
-                    elif venue == "backpack":
-                        gname = "Backpack"
-                    elif venue == "bulk":
-                        gname = "Bulk"
-                    elif venue == "lighter":
-                        gname = "Lighter"
-                    elif venue == "lighter-rh":
-                        gname = "Lighter-RH"
+                raw = load_profile_yaml(supervisor.profiles_dir,
+                                        st["profile"])
+                legs = _probe_legs(raw, st.get("base") or "hl",
+                                   st.get("hedge") or "",
+                                   st.get("symbol") or "")
+                for gname, venue, role, dex, sym in legs:
                     if gname and gname not in cands:
                         cands[gname] = {"venue": venue, "role": role,
-                                        "dex": dex if venue == "hl" else "",
-                                        "symbol": sym}
+                                        "dex": dex, "symbol": sym}
             except Exception:
                 continue
         return cands
