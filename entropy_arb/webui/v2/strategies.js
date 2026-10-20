@@ -10,7 +10,7 @@ import { t } from "/static/i18n.js";
 import { el, card, table, stateBox, pendingBadge, badge, netPnlCell,
          updatedStamp, seqGuard } from "./components.js";
 import { store } from "./store.js";
-import { estimateLine } from "./pnlcalc.js";
+import { estimateLineSeeded } from "./pnlcalc.js";
 import { shanghaiDate } from "./tz.js";
 
 function usd(v) {
@@ -124,8 +124,15 @@ export function mount(container, ctx) {
         tr.appendChild(cell(s.trading_fees, false));
         tr.appendChild(cell(s.funding_net));
         const est = estByStrategy.get(s.strategy_id);
-      tr.appendChild(el("td", { class: "num " + cls(est ? est.total : null) },
-        est ? usd(est.total) : el("span", { class: "muted" }, "—")));
+      if (est && !est.complete) {
+        tr.appendChild(el("td", { class: "num" },
+          el("span", { class: "muted",
+            title: t("v2.ov.est_unknown_title") }, "—")));
+      } else {
+        tr.appendChild(el("td", {
+          class: "num " + cls(est ? est.total : null) },
+          est ? usd(est.total) : el("span", { class: "muted" }, "—")));
+      }
       tr.appendChild(el("td", {}, netPnlCell(s.net_pnl)));
         tr.appendChild(el("td", {},
           badge(s.status, s.status === "estimated"
@@ -184,15 +191,21 @@ export function mount(container, ctx) {
     let estTotal = 0, estN = 0, estComplete = true;
     for (const l of ((pnl && pnl.lines) || [])
         .filter(x => x.mode === "live")) {
-      const e = estimateLine(l, cutoff);
+      // seeded FIFO：继承仓位无法反推时 realized=null，该策略标记“不可估”
+      const e = estimateLineSeeded(l, cutoff);
       estN++;
-      if (!e.hasData) { estComplete = false; continue; }
+      const sid = l.strategy_id || `_line:${l.key}`;
+      const cur = estByStrategy.get(sid) || { total: 0, n: 0, complete: true };
+      cur.n += 1;
+      if (!e.hasData || e.realized === null) {
+        estComplete = false;
+        cur.complete = false;
+        estByStrategy.set(sid, cur);
+        continue;
+      }
       const total = e.realized + (e.floatPnl || 0);
       estTotal += total;
-      const sid = l.strategy_id || `_line:${l.key}`;
-      const cur = estByStrategy.get(sid) || { total: 0, n: 0 };
       cur.total += total;
-      cur.n += 1;
       estByStrategy.set(sid, cur);
     }
     estV.replaceChildren(el("span", {
@@ -257,8 +270,15 @@ export function mount(container, ctx) {
           ? badge(s.live_workers.join(", "), "badge running")
           : badge(t("status.stopped"), "badge stopped")));
       const est = estByStrategy.get(s.strategy_id);
-      tr.appendChild(el("td", { class: "num " + cls(est ? est.total : null) },
-        est ? usd(est.total) : el("span", { class: "muted" }, "—")));
+      if (est && !est.complete) {
+        tr.appendChild(el("td", { class: "num" },
+          el("span", { class: "muted",
+            title: t("v2.ov.est_unknown_title") }, "—")));
+      } else {
+        tr.appendChild(el("td", {
+          class: "num " + cls(est ? est.total : null) },
+          est ? usd(est.total) : el("span", { class: "muted" }, "—")));
+      }
       tr.appendChild(el("td", {}, netPnlCell(s.net_pnl)));
       tr.appendChild(el("td", {},
         el("a", { href: `#/strategies/${s.strategy_id}` },

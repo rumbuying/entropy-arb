@@ -12,7 +12,7 @@ import { t } from "/static/i18n.js";
 import {
   el, card, table, stateBox, badge, updatedStamp, seqGuard,
 } from "./components.js";
-import { estimateLine } from "./pnlcalc.js";
+import { estimateLineSeeded } from "./pnlcalc.js";
 import { shanghaiDate, fmtTs } from "./tz.js";
 
 const SNAPSHOT_FRESH_SEC = 900;      // console writes equity every ~5 min
@@ -199,14 +199,16 @@ export function mount(container) {
     const lines = (Array.isArray(pnl.lines) ? pnl.lines : [])
       .filter(l => l.mode === "live");
     const est = lines.map(l => {
-      const e = estimateLine(l, cutoff);
+      // seeded FIFO（当前 run 起始库存），与盈亏看板同一套数字
+      const e = estimateLineSeeded(l, cutoff);
+      const estimable = e.hasData && e.realized !== null;
       return {
-        l, ...e,
+        l, ...e, estimable,
         scopes: Array.isArray(l.scopes) ? l.scopes : [],
-        total: e.hasData ? e.realized + (e.floatPnl || 0) : null,
+        total: estimable ? e.realized + (e.floatPnl || 0) : null,
       };
     });
-    const estComplete = est.every(x => x.hasData);
+    const estComplete = est.every(x => x.estimable);
     const estTotal = estComplete
       ? est.reduce((a, x) => a + (x.total || 0), 0) : null;
     const diff = (estTotal !== null && truthRows.length === changes.length)
@@ -263,8 +265,20 @@ export function mount(container) {
                                    "badge stale"));
       }
       tr.appendChild(scopeCell);
-      tr.appendChild(el("td", { class: "num" },
-        x.hasData ? usd(x.realized) : "—"));
+      const realizedCell = el("td", { class: "num" });
+      if (!x.hasData) realizedCell.textContent = "—";
+      else if (x.realized === null) {
+        realizedCell.textContent = "—";
+        realizedCell.appendChild(el("div", { class: "muted",
+          title: x.reason || "",
+          text: t("v2.acct.cmp.unknown") }));
+      } else {
+        realizedCell.textContent = usd(x.realized);
+        if (x.partial)
+          realizedCell.appendChild(el("div", { class: "muted",
+            text: t("v2.pnl.hint.partial") }));
+      }
+      tr.appendChild(realizedCell);
       tr.appendChild(el("td", { class: "num " + cls(x.floatPnl) },
         x.hasData ? usd(x.floatPnl) : "—"));
       tr.appendChild(el("td", { class: "num " + cls(x.total) },
