@@ -13,7 +13,7 @@ import { getJSON } from "/static/api.js";
 import { t } from "/static/i18n.js";
 import { el, card, table, stateBox, badge, updatedStamp, seqGuard }
   from "./components.js";
-import { fnum, lotStats } from "./pnlcalc.js";
+import { fnum, estimateLineSeeded } from "./pnlcalc.js";
 
 const REFRESH_MS = 15000;
 const API = "/api/pnl/lines?days=2&limit=500";
@@ -36,6 +36,25 @@ function signedQty(v) {
 function pnlCls(v) {
   if (v === null || !Number.isFinite(v)) return "zero";
   return v > 0.005 ? "pos" : v < -0.005 ? "neg" : "zero";
+}
+
+/* 锁定列展示：只有“可估的出数”才给数字；不可估一律 “—”，
+   绝不用 0 冒充（2026-10-20 ANTH 事故的核心教训）。 */
+function lockedDisplay(s) {
+  if (!s.hasData) return { value: null, hint: t("v2.pnl.hint.no_trades") };
+  if (!s.running) return { value: null, hint: t("v2.pnl.hint.stopped_locked") };
+  if (s.realized === null || s.realized === undefined) {
+    const hints = {
+      no_position: t("v2.pnl.hint.no_position"),
+      no_started_ts: t("v2.pnl.hint.no_started"),
+      inherited_unknown: t("v2.pnl.hint.inherited"),
+    };
+    return { value: null, hint: hints[s.reason] || t("v2.pnl.hint.inherited") };
+  }
+  return {
+    value: s.realized,
+    hint: s.partial ? t("v2.pnl.hint.partial") : t("v2.pnl.hint.realized"),
+  };
 }
 
 // 首屏口径说明：5 项缺失 + “估算不是账本”，每条一行
@@ -61,8 +80,10 @@ export function mount(container, ctx) {
     t("v2.pnl.scope"));
   const kpis = el("div", { class: "kpi-strip" });
   const tableCard = card(t("v2.pnl.title"));
-  const note = el("div", { class: "note", style: "margin-bottom:8px" },
+  const note = el("div", { class: "note", style: "margin-bottom:4px" },
     t("v2.pnl.note"));
+  const inheritNote = el("div", { class: "note", style: "margin-bottom:8px" },
+    t("v2.pnl.inherit_note"));
   const tbl = table([
     t("v2.pnl.col.line"), t("v2.pnl.col.state"),
     t("v2.pnl.col.fills"), t("v2.pnl.col.vol"),
@@ -72,12 +93,12 @@ export function mount(container, ctx) {
   // 9 列在窄屏/1440 下会超宽：横向滚动限制在卡片内，避免整页溢出
   const tblScroll = el("div", { class: "v2-pnl-tbl",
                                 style: "overflow-x:auto" }, tbl.node);
-  tableCard.append(note, tblScroll);
+  tableCard.append(note, inheritNote, tblScroll);
   container.append(scope, gapPanel(), kpis, tableCard);
 
   function showError(e) {
     kpis.replaceChildren();
-    tableCard.replaceChildren(note, stateBox({
+    tableCard.replaceChildren(note, inheritNote, stateBox({
       status: "error", message: String(e.message || e), onRetry: refresh,
     }));
   }
@@ -100,7 +121,7 @@ export function mount(container, ctx) {
     const cutoff = fnum(data.day_start_ts) || 0;
     if (!lines.length) {
       kpis.replaceChildren();
-      tableCard.replaceChildren(note, stateBox({
+      tableCard.replaceChildren(note, inheritNote, stateBox({
         status: "empty", message: t("v2.pnl.empty"),
       }));
       stamp.update(fnum(data.as_of));
@@ -108,40 +129,35 @@ export function mount(container, ctx) {
     }
 
     const stat = lines.map(l => {
-      const rows = Array.isArray(l.trades) ? l.trades : [];
-      const today = rows.filter(r => (fnum(r.ts) || 0) >= cutoff);
-      const complete = today.filter(r =>
-        ("buy_fill" in r) ? (fnum(r.buy_fill) || 0) > 0
-          && (fnum(r.sell_fill) || 0) > 0
-          : (r.ok === "1" || r.ok === true));
-      const realized = lotStats(rows, cutoff).realizedToday;
-      const volToday = today.reduce((acc, r) => acc + Math.max(
-        fnum(r.buy_notional) || 0, fnum(r.sell_notional) || 0), 0);
-      const ses = l.session || {};
-      const running = l.status === "running";
-      const floatPnl = running
-        ? fnum(ses.unrealized_usd ?? ses.unrealized_pnl) : null;
-      const hasData = l.trades_exists !== false;
+      // 带“当前 run 起始库存”的估算：继承仓位的成本未知，配对到它的部分
+      // 不计入锁定盈利；全不可估时 realized=null（展示 “—” 而不是 0）。
+      const e = estimateLineSeeded(l, cutoff);
       // state 白名单：只有 running 线有值，停止线为 null
-      const st = running ? (l.state || null) : null;
+      const st = e.running ? (l.state || null) : null;
       const venues = (st && st.venues) || {};
       const vE = venues.entropy || null;
       const vH = venues.hedge || null;
       const sig = (st && st.signal) || {};
-      return { l, today, complete, realized, volToday, running, floatPnl,
-               hasData, st, vE, vH, sig };
+      return { l, ...e, st, vE, vH, sig };
     });
 
     const runCount = stat.filter(s => s.running).length;
     const stopCount = stat.length - runCount;
     let totalRealized = 0, totalFloat = 0, totalComplete = 0, totalToday = 0;
     let totalVolume = 0, hasFloat = false;
+    let knownLockedLines = 0, unknownLockedLines = 0, partialLines = 0;
     for (const s of stat) {
       if (!s.hasData) continue;        // 缺 CSV 的线不计入合计，避免把缺失当 0
-      totalRealized += s.realized;
       totalComplete += s.complete.length;
       totalToday += s.today.length;
       totalVolume += s.volToday;
+      if (s.realized !== null && s.realized !== undefined) {
+        totalRealized += s.realized;
+        knownLockedLines++;
+        if (s.partial) partialLines++;
+      } else {
+        unknownLockedLines++;
+      }
       if (s.running && s.floatPnl !== null) { hasFloat = true; totalFloat += s.floatPnl; }
     }
 
@@ -161,9 +177,14 @@ export function mount(container, ctx) {
         el("div", { class: "value", text: usd(totalVolume) })),
       el("div", { class: "kpi" },
         el("div", { class: "label" }, t("v2.pnl.kpi.locked")),
-        el("div", { class: "value " + pnlCls(totalRealized) },
-          usd(totalRealized)),
-        el("div", { class: "sub" }, t("v2.pnl.hint.realized"))),
+        el("div", { class: "value " + pnlCls(knownLockedLines
+          ? totalRealized : null) },
+          usd(knownLockedLines ? totalRealized : null)),
+        el("div", { class: "sub" },
+          unknownLockedLines
+            ? t("v2.pnl.kpi.locked_partial")
+            : partialLines ? t("v2.pnl.hint.partial")
+                           : t("v2.pnl.hint.realized"))),
       el("div", { class: "kpi" },
         el("div", { class: "label" }, t("v2.pnl.kpi.float")),
         el("div", { class: "value " + pnlCls(hasFloat ? totalFloat : null) },
@@ -221,12 +242,10 @@ export function mount(container, ctx) {
       tr.appendChild(el("td", { class: "num" },
         s.hasData ? usd(s.volToday) : "—"));
 
-      tr.appendChild(el("td", { class: "num " + pnlCls(s.realized) },
-        el("div", { style: "font-size:15px" },
-          s.hasData ? usd(s.realized) : "—"),
-        el("div", { class: "muted",
-          text: s.hasData ? t("v2.pnl.hint.realized")
-                          : t("v2.pnl.hint.no_trades") })));
+      const locked = lockedDisplay(s);
+      tr.appendChild(el("td", { class: "num " + pnlCls(locked.value) },
+        el("div", { style: "font-size:15px" }, usd(locked.value)),
+        el("div", { class: "muted", text: locked.hint })));
 
       tr.appendChild(el("td", { class: "num " + pnlCls(s.floatPnl) },
         el("div", { style: "font-size:15px" }, usd(s.floatPnl)),
