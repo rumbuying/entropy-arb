@@ -278,6 +278,14 @@ def test_pnl_lines_running_and_stopped():
                                         "live")
                 # FIFO seed boundary: current-run start, not the window start
                 assert p1["started_ts"] == now - 600
+                # segments: previous run + current run, oldest first, only
+                # the running one has ended_ts=None (cross-run chaining)
+                assert [x["run_id"] for x in p1["segments"]] == \
+                    [f["rid_prev"], f["rid_run"]]
+                assert p1["segments"][0]["started_ts"] < \
+                    p1["segments"][1]["started_ts"]
+                assert p1["segments"][0]["ended_ts"] is not None
+                assert p1["segments"][1]["ended_ts"] is None
                 assert p1["session"] == {"unrealized_usd": 12.5}
                 # brief §3 whitelist: exactly the three UI columns, nothing
                 # large/unrelated leaks through from the snapshot
@@ -319,6 +327,9 @@ def test_pnl_lines_running_and_stopped():
                 assert p2["run_id"] == f["rid_stopped"]
                 assert p2["worker_id"] == "w2"
                 assert p2["started_ts"] == now - 4000   # run start
+                assert [x["run_id"] for x in p2["segments"]] == \
+                    [f["rid_stopped"]]
+                assert p2["segments"][0]["ended_ts"] is not None
                 assert len(p2["trades"]) == 2
 
                 # stopped worker still in memory, CSV missing → no 500
@@ -328,6 +339,7 @@ def test_pnl_lines_running_and_stopped():
                 assert p3["session"] is None
                 assert p3["state"] is None
                 assert p3["started_ts"] == now - 800     # worker start
+                assert p3["segments"] == []              # no run record
                 assert p3["trades_exists"] is False
                 assert p3["trades"] == []
 
@@ -338,6 +350,9 @@ def test_pnl_lines_running_and_stopped():
                 assert p5["session"] is None
                 assert p5["state"] is None
                 assert p5["started_ts"] == now - 900      # run start
+                assert [x["run_id"] for x in p5["segments"]] == \
+                    [f["rid_stale"]]
+                assert p5["segments"][0]["ended_ts"] is None
 
                 # running but snapshot unavailable: state is null, not fake 0s
                 # (session stays an object with null — contract §3)
@@ -346,11 +361,14 @@ def test_pnl_lines_running_and_stopped():
                 assert p6["session"] == {"unrealized_usd": None}
                 assert p6["state"] is None
                 assert p6["started_ts"] == now - 700
+                assert p6["segments"] == []
 
                 # worker without its own started_ts falls back to run start
                 p9 = lines["P9"]
                 assert p9["status"] == "running"
                 assert p9["started_ts"] == now - 1500
+                assert [x["run_id"] for x in p9["segments"]] == \
+                    [f["rid_fallback"]]
 
                 # outside default days=2 window
                 assert "P4" not in lines
@@ -369,6 +387,9 @@ def test_pnl_lines_running_and_stopped():
                 assert rec["P7"]["status"] == "running"
                 assert rec["P8"]["mode"] == "record"
                 assert rec["P8"]["status"] == "stopped"
+                assert [x["run_id"] for x in rec["P8"]["segments"]] == \
+                    [f["rid_rec"]]
+                assert rec["P7"]["segments"] == []
                 # record lines are additive, not a replacement
                 assert {"P1", "P2", "P3", "P5", "P6", "P7", "P8"} \
                     <= set(rec)
@@ -412,7 +433,10 @@ def test_pnl_lines_limit_validation_and_timezone():
                 async with http.get(url.with_query(
                         {"days": "7"})) as r:
                     assert r.status == 200
-                    assert "P4" in _by_profile(await r.json())
+                    week = _by_profile(await r.json())
+                    assert "P4" in week
+                    assert [x["run_id"] for x in
+                            week["P4"]["segments"]] == [f["rid_old"]]
 
                 # explicit timezone moves day_start_ts; the CSV data is the
                 # same but midnight is the requested zone's local midnight
@@ -472,3 +496,65 @@ def test_pnl_lines_trade_rows_match_worker_trades():
         finally:
             f["storage"].close()
     asyncio.run(run())
+
+def test_pnl_lines_limit_2000_while_worker_trades_stays_capped():
+    """Cross-run seed inference needs more than 500 rows on this endpoint
+    (SNDK's run has 1000+); /api/workers/{wid}/trades keeps its 500 cap."""
+    tmp = tempfile.mkdtemp(prefix="pnl-limit-")
+    now = time.time()
+    pdir = os.path.join(tmp, "profiles")
+    os.makedirs(pdir)
+    _write_profile(pdir, "P1", "logs/trades-BTC-katana.csv")
+    rows = [_row(now - 2000 + i,
+                 "buy_entropy" if i % 2 == 0 else "sell_entropy", 0.01)
+            for i in range(600)]
+    _write_csv(os.path.join(tmp, "logs", "trades-BTC-katana.csv"), rows)
+    storage = Storage(os.path.join(tmp, "data", "console-v2.sqlite3"))
+    profiles = ProfilesManager(pdir, env_file=os.path.join(tmp, ".env"))
+    secrets = SecretsManager(os.path.join(tmp, ".env"))
+    sup = Supervisor(tmp, pdir, storage=storage)
+    rid = new_run_id()
+    started = now - 5000
+    storage.create_run(run_id=rid, worker_id="w1", profile="P1",
+                       symbol="BTC", hedge="katana", base="hl",
+                       mode="live", pid=os.getpid(), cmdline_hash="h",
+                       started_ts=started)
+    w = Worker("w1", "P1", "BTC", "katana", "live", 0, base="hl")
+    w.adopted_pid = os.getpid()
+    w.run_id = rid
+    w.started_ts = started
+    sup.workers["w1"] = w
+
+    async def fake_snapshot(wid):
+        return None
+    sup.snapshot = fake_snapshot
+
+    async def run():
+        app = create_app(sup, profiles, secrets, storage=storage,
+                         start_background=False)
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            async with aiohttp.ClientSession() as http:
+                async with http.get(server.make_url(
+                        "/api/pnl/lines?limit=2000")) as r:
+                    assert r.status == 200, await r.text()
+                    body = await r.json()
+                async with http.get(server.make_url(
+                        "/api/workers/w1/trades?limit=2000")) as r:
+                    assert r.status == 200, await r.text()
+                    wt = await r.json()
+                return body, wt
+        finally:
+            await server.close()
+
+    try:
+        body, wt = asyncio.run(run())
+        line = body["lines"][0]
+        assert line["symbol"] == "BTC"
+        assert len(line["trades"]) == 600       # raised cap for the board
+        assert line["tail_truncated"] is False
+        assert len(wt["rows"]) == 500           # worker API unchanged
+        assert [x["run_id"] for x in line["segments"]] == [rid]
+    finally:
+        storage.close()

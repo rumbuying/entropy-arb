@@ -1658,7 +1658,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         }
 
     def _trades_payload(profile: str, symbol: str, hedge: str,
-                        limit: int) -> dict:
+                        limit: int, max_limit: int = 500) -> dict:
         """Recent trade rows for one line, read from the trades CSV that the
         profile declares (maker or taker schema) — a backend-managed path,
         never a client-supplied one. Shared by /api/workers/{wid}/trades and
@@ -1678,9 +1678,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         if not os.path.isabs(path):
             path = os.path.join(supervisor.root, path)
         try:
-            limit = max(0, min(int(limit), 500))
+            limit = max(0, min(int(limit), max_limit))
         except (TypeError, ValueError):
-            limit = 500
+            limit = max_limit
         rows, header, truncated = [], None, False
         if os.path.exists(path):
             with open(path, newline="", errors="replace") as fh:
@@ -1810,7 +1810,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
 
     def _line_payload(*, key, strategy_id, name, symbol, hedge, base, mode,
                       status, worker_id, run_id, profile, session, state,
-                      scopes, started_ts, data) -> dict:
+                      scopes, started_ts, segments, data) -> dict:
         return {
             "key": key, "strategy_id": strategy_id, "name": name,
             "symbol": symbol, "hedge": hedge, "base": base, "mode": mode,
@@ -1821,6 +1821,11 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             # assuming an empty book (ANTH: inherited -0.693 short → the
             # naive FIFO reported $0 for real closes).
             "started_ts": started_ts,
+            # every run of this line intersecting the `days` window, oldest
+            # first; running segment has ended_ts=null. The board chains
+            # run boundaries (position continues across a restart) so a
+            # mid-day restart no longer hides earlier closes.
+            "segments": segments,
             # venue-scope account labels for the "account truth vs strategy
             # estimate" panel (M2/T4); joins /api/accounts period changes
             "scopes": scopes,
@@ -1836,8 +1841,10 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         each with the same trade rows as /api/workers/{wid}/trades. Running
         lines also carry a whitelisted `state` view (session/signal/venues
         only, from the same snapshot — no extra HTTP call) and the current
-        run's `started_ts` (the FIFO seed boundary); stopped lines have
-        state=null. Read-only and explicitly NOT a reconciled ledger
+        run's `started_ts` and `segments` (every run of the line in the
+        lookback window, oldest first — the board chains them across a
+        mid-day restart); stopped lines have state=null. Read-only and
+        explicitly NOT a reconciled ledger
         (net_pnl stays a R-02 topic). 'Today' starts at local midnight in
         `tz` (default Asia/Shanghai), computed here so the browser's
         timezone cannot move it.
@@ -1868,7 +1875,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             limit = int(q.get("limit", "500"))
         except (TypeError, ValueError):
             limit = 500
-        limit = max(0, min(limit, 500))         # 0 is legal: rows only
+        limit = max(0, min(limit, 2000))        # 0 is legal: rows only
         tzname = (q.get("tz") or "Asia/Shanghai").strip() or "Asia/Shanghai"
         tz = _tz_or_400(tzname)
         now = time.time()
@@ -1879,6 +1886,25 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         all_runs = storage.list_runs(limit=500)
         runs_by_id = {r["run_id"]: r for r in all_runs}
         strat_cache: dict = {}
+
+        # Cross-run segments (brief §1): all runs of a line intersecting the
+        # lookback window, sorted oldest→newest. An ongoing run counts as
+        # intersecting because its effective end is now. No run records →
+        # empty list (the board then cannot infer a seed).
+        segments_by_line: dict = {}
+        for r in all_runs:
+            eff_end = r["ended_ts"] if r["ended_ts"] is not None else now
+            if eff_end < window_start:
+                continue
+            ident = _line_identity(r["profile"], r["symbol"], r["hedge"],
+                                   r["base"], r["mode"])
+            segments_by_line.setdefault(ident, []).append({
+                "run_id": r["run_id"],
+                "started_ts": r["started_ts"],
+                "ended_ts": r["ended_ts"],
+            })
+        for segs in segments_by_line.values():
+            segs.sort(key=lambda x: x["started_ts"])
 
         def side_info(sid):
             if not sid:
@@ -1912,7 +1938,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             if run is not None:
                 seen_run_ids.add(run["run_id"])
             sid, name = side_info((run or {}).get("strategy_id"))
-            data = _trades_payload(w.profile, w.symbol, w.hedge, limit)
+            data = _trades_payload(w.profile, w.symbol, w.hedge, limit,
+                                   max_limit=2000)
             running = w.running
             snap = snaps.get(wid) if running else None
             upl = None
@@ -1927,6 +1954,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 if snap is not None:
                     state = _line_state_view(snap)
             started = w.started_ts or (run or {}).get("started_ts") or 0.0
+            ident = _line_identity(w.profile, w.symbol, w.hedge, w.base,
+                                   w.mode)
             payload = _line_payload(
                 key=f"worker:{wid}", strategy_id=sid, name=name,
                 symbol=w.symbol, hedge=w.hedge, base=w.base, mode=w.mode,
@@ -1937,9 +1966,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 state=state,
                 scopes=_scopes_for_line(w.profile, w.base, w.hedge),
                 started_ts=started if started else None,
+                segments=segments_by_line.get(ident, []),
                 data=data)
-            candidates.append((started, _line_identity(
-                w.profile, w.symbol, w.hedge, w.base, w.mode), payload))
+            candidates.append((started, ident, payload))
 
         # stopped lines: latest persisted run per line active in the window.
         # Runs owned by a live/known worker are already covered above.
@@ -1954,7 +1983,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 continue
             sid, name = side_info(r.get("strategy_id"))
             data = _trades_payload(r["profile"], r["symbol"], r["hedge"],
-                                   limit)
+                                   limit, max_limit=2000)
+            ident = _line_identity(r["profile"], r["symbol"], r["hedge"],
+                                   r["base"], r["mode"])
             payload = _line_payload(
                 key=f"run:{r['run_id']}", strategy_id=sid, name=name,
                 symbol=r["symbol"], hedge=r["hedge"], base=r["base"],
@@ -1963,10 +1994,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 state=None,
                 scopes=_scopes_for_line(r["profile"], r["base"], r["hedge"]),
                 started_ts=r["started_ts"],
+                segments=segments_by_line.get(ident, []),
                 data=data)
-            candidates.append((r["started_ts"], _line_identity(
-                r["profile"], r["symbol"], r["hedge"], r["base"], r["mode"]),
-                payload))
+            candidates.append((r["started_ts"], ident, payload))
 
         # one row per line: running wins, otherwise the most recent run
         best: dict = {}
