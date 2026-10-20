@@ -441,12 +441,28 @@ def test_trades_rows_match_worker_trades():
 
 def test_limit_bounds():
     async def body(env):
+        # 跨 run 修复把 /api/pnl/lines 的 limit 上限从 500 提到 2000
+        # （brief §1，前端按 limit=2000 请求）。EOS 基线 600 行，先补到
+        # 2100 行，才能同时观测“>500 不再封顶”和“2000 封顶”。
+        path = os.path.join(env.root, "logs", "trades-EOS-rh.csv")
+        with open(path, "a", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=TAKER_HEADER)
+            for i in range(1500):
+                d = "buy_entropy" if i % 2 == 0 else "sell_entropy"
+                w.writerow(taker_row(env.sh0 + 9000 + i, d,
+                                     buy_fill=1 if d == "buy_entropy" else 0,
+                                     sell_fill=1 if d == "sell_entropy" else 0,
+                                     fill_edge=0.1))
         eos = env.lines_by_symbol(await env.get("/api/pnl/lines"))["EOS"]
         assert len(eos["trades"]) == 500, "默认 limit 应为 500"
 
         eos = env.lines_by_symbol(
             await env.get("/api/pnl/lines?limit=1000"))["EOS"]
-        assert len(eos["trades"]) == 500, "limit>500 应封顶 500"
+        assert len(eos["trades"]) == 1000, "limit=1000 应返回 1000（旧上限 500 已放开）"
+
+        eos = env.lines_by_symbol(
+            await env.get("/api/pnl/lines?limit=5000"))["EOS"]
+        assert len(eos["trades"]) == 2000, "limit>2000 应封顶 2000"
 
         eos = env.lines_by_symbol(
             await env.get("/api/pnl/lines?limit=37"))["EOS"]
