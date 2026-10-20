@@ -76,6 +76,10 @@ export function estimateLine(line, cutoff) {
    - 今日配对到种子 lot 的数量记为 unknownQty，不计入 realized；
    - 全部不可估时 realized=null（调用方显示 “—”，禁止用 0 冒充）。 */
 
+/* /api/pnl/lines 每线返回的成交行上限（与 pnl.js 的 limit=500 保持一致）。
+   达到上限且最早一行仍晚于 started_ts ⇒ 窗口没覆盖 run 起点，不能反推库存。 */
+const API_ROW_LIMIT = 500;
+
 export function lotStatsSeeded(rows, cutoff, startPos) {
   const chrono = (rows || []).slice().reverse();   // API 新→旧，反转成时间正序
   const lots = [];
@@ -143,6 +147,16 @@ export function estimateLineSeeded(line, cutoff) {
   if (posE === null) { out.reason = "no_position"; return out; }
   const started = fnum(line.started_ts);
   if (started === null) { out.reason = "no_started_ts"; return out; }
+  // 500 行窗口 / tail 截断：如果最早返回的一行仍晚于 run 起点，说明
+  // 本 run 的成交没被完整覆盖，净变化不可知 ⇒ 不能反推起始库存。
+  // 宁可显示 “—” 也不给出错误数字（Chief/Backend 2026-10-20 要求）。
+  const oldest = rows.length ? fnum(rows[rows.length - 1].ts) : null;
+  const windowTruncated = rows.length >= API_ROW_LIMIT
+    || line.tail_truncated === true;
+  if (windowTruncated && oldest !== null && oldest > started + 1e-6) {
+    out.reason = "truncated";
+    return out;
+  }
   const runRows = rows.filter(r => (fnum(r.ts) || 0) >= started);
   let net = 0;
   for (const r of runRows) {

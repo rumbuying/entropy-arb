@@ -48,6 +48,7 @@ function lockedDisplay(s) {
       no_position: t("v2.pnl.hint.no_position"),
       no_started_ts: t("v2.pnl.hint.no_started"),
       inherited_unknown: t("v2.pnl.hint.inherited"),
+      truncated: t("v2.pnl.hint.truncated"),
     };
     return { value: null, hint: hints[s.reason] || t("v2.pnl.hint.inherited") };
   }
