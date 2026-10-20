@@ -175,6 +175,13 @@ def _fixture():
     # running record-only observer (must stay out of the default board)
     _make_worker(sup, "w7", "P7", "OBS", "arcus", mode="record",
                  running=True, started_ts=now - 50)
+    # running worker whose own started_ts is unavailable → fall back to the
+    # persisted run start (FIFO seed boundary must still be correct)
+    rid_fallback = add_run(profile="P9", symbol="FB", hedge="arcus",
+                           worker_id="w9", started_ts=now - 1500,
+                           mode="live")
+    _make_worker(sup, "w9", "P9", "FB", "arcus", mode="live",
+                 running=True, started_ts=0.0, run_id=rid_fallback)
 
     async def fake_snapshot(wid):
         if wid == "w1":
@@ -208,7 +215,8 @@ def _fixture():
             "profiles": profiles, "secrets": secrets, "now": now,
             "sid": sid, "rid_run": rid_run, "rid_prev": rid_prev,
             "rid_stopped": rid_stopped, "rid_old": rid_old,
-            "rid_stale": rid_stale, "rid_rec": rid_rec}
+            "rid_stale": rid_stale, "rid_rec": rid_rec,
+            "rid_fallback": rid_fallback}
 
 
 @contextlib.asynccontextmanager
@@ -268,6 +276,8 @@ def test_pnl_lines_running_and_stopped():
                 assert (p1["symbol"], p1["hedge"], p1["base"],
                         p1["mode"]) == ("SNDK", "lighter-rh", "hl",
                                         "live")
+                # FIFO seed boundary: current-run start, not the window start
+                assert p1["started_ts"] == now - 600
                 assert p1["session"] == {"unrealized_usd": 12.5}
                 # brief §3 whitelist: exactly the three UI columns, nothing
                 # large/unrelated leaks through from the snapshot
@@ -308,6 +318,7 @@ def test_pnl_lines_running_and_stopped():
                 assert p2["state"] is None
                 assert p2["run_id"] == f["rid_stopped"]
                 assert p2["worker_id"] == "w2"
+                assert p2["started_ts"] == now - 4000   # run start
                 assert len(p2["trades"]) == 2
 
                 # stopped worker still in memory, CSV missing → no 500
@@ -316,6 +327,7 @@ def test_pnl_lines_running_and_stopped():
                 assert p3["worker_id"] == "w3"
                 assert p3["session"] is None
                 assert p3["state"] is None
+                assert p3["started_ts"] == now - 800     # worker start
                 assert p3["trades_exists"] is False
                 assert p3["trades"] == []
 
@@ -325,6 +337,7 @@ def test_pnl_lines_running_and_stopped():
                 assert p5["run_id"] == f["rid_stale"]
                 assert p5["session"] is None
                 assert p5["state"] is None
+                assert p5["started_ts"] == now - 900      # run start
 
                 # running but snapshot unavailable: state is null, not fake 0s
                 # (session stays an object with null — contract §3)
@@ -332,6 +345,12 @@ def test_pnl_lines_running_and_stopped():
                 assert p6["status"] == "running"
                 assert p6["session"] == {"unrealized_usd": None}
                 assert p6["state"] is None
+                assert p6["started_ts"] == now - 700
+
+                # worker without its own started_ts falls back to run start
+                p9 = lines["P9"]
+                assert p9["status"] == "running"
+                assert p9["started_ts"] == now - 1500
 
                 # outside default days=2 window
                 assert "P4" not in lines

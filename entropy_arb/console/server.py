@@ -1810,12 +1810,17 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
 
     def _line_payload(*, key, strategy_id, name, symbol, hedge, base, mode,
                       status, worker_id, run_id, profile, session, state,
-                      scopes, data) -> dict:
+                      scopes, started_ts, data) -> dict:
         return {
             "key": key, "strategy_id": strategy_id, "name": name,
             "symbol": symbol, "hedge": hedge, "base": base, "mode": mode,
             "status": status, "worker_id": worker_id, "run_id": run_id,
             "profile": profile, "session": session, "state": state,
+            # current-run start (unix seconds): the P&L board seeds its FIFO
+            # lot from the inherited position at this boundary instead of
+            # assuming an empty book (ANTH: inherited -0.693 short → the
+            # naive FIFO reported $0 for real closes).
+            "started_ts": started_ts,
             # venue-scope account labels for the "account truth vs strategy
             # estimate" panel (M2/T4); joins /api/accounts period changes
             "scopes": scopes,
@@ -1830,8 +1835,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         most recent run of lines that stopped inside the lookback window —
         each with the same trade rows as /api/workers/{wid}/trades. Running
         lines also carry a whitelisted `state` view (session/signal/venues
-        only, from the same snapshot — no extra HTTP call); stopped lines
-        have state=null. Read-only and explicitly NOT a reconciled ledger
+        only, from the same snapshot — no extra HTTP call) and the current
+        run's `started_ts` (the FIFO seed boundary); stopped lines have
+        state=null. Read-only and explicitly NOT a reconciled ledger
         (net_pnl stays a R-02 topic). 'Today' starts at local midnight in
         `tz` (default Asia/Shanghai), computed here so the browser's
         timezone cannot move it.
@@ -1920,6 +1926,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                     upl = None
                 if snap is not None:
                     state = _line_state_view(snap)
+            started = w.started_ts or (run or {}).get("started_ts") or 0.0
             payload = _line_payload(
                 key=f"worker:{wid}", strategy_id=sid, name=name,
                 symbol=w.symbol, hedge=w.hedge, base=w.base, mode=w.mode,
@@ -1929,8 +1936,8 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 session={"unrealized_usd": upl} if running else None,
                 state=state,
                 scopes=_scopes_for_line(w.profile, w.base, w.hedge),
+                started_ts=started if started else None,
                 data=data)
-            started = w.started_ts or (run or {}).get("started_ts") or 0.0
             candidates.append((started, _line_identity(
                 w.profile, w.symbol, w.hedge, w.base, w.mode), payload))
 
@@ -1955,6 +1962,7 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                 run_id=r["run_id"], profile=r["profile"], session=None,
                 state=None,
                 scopes=_scopes_for_line(r["profile"], r["base"], r["hedge"]),
+                started_ts=r["started_ts"],
                 data=data)
             candidates.append((r["started_ts"], _line_identity(
                 r["profile"], r["symbol"], r["hedge"], r["base"], r["mode"]),
