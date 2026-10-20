@@ -745,7 +745,13 @@ def test_t4_accounts_period_truth():
         env = Env()
         env.make_app(start_background=False)
         now = time.time()
-        ps = datetime(2026, 10, 17, tzinfo=SH).timestamp()
+        # 日期必须相对“今天”，不能硬编码——否则日历滚过后 eff_end 会落到
+        # 过去，now-120 的快照被排除（2026-10-20 曾因此红）。
+        today = datetime.now(SH).date()
+        start_date = today - timedelta(days=2)
+        start_s, end_s = start_date.isoformat(), today.isoformat()
+        ps = datetime.combine(start_date,
+                              datetime.min.time(), SH).timestamp()
         # HL(io)：区间两端齐全，delta 精确 100
         env.storage.save_account_equity(scope="HL(io)", ts=ps + 120,
                                         equity=10000.0, free=5000.0,
@@ -770,7 +776,7 @@ def test_t4_accounts_period_truth():
                                         source="console_probe")
         srv = await env.server()
         try:
-            q = ("?start=2026-10-17&end=2026-10-19&timezone=Asia/Shanghai")
+            q = f"?start={start_s}&end={end_s}&timezone=Asia/Shanghai"
             data = await get_json(srv, "/api/accounts" + q)
             per = data["period"]
             assert per["identity_status"] == "venue_scope"
@@ -808,10 +814,10 @@ def test_t4_accounts_period_truth():
             assert env.storage.db.execute(
                 "SELECT COUNT(*) FROM account_equity").fetchone()[0] == n
             # 非法 range → 400
-            await get_json(srv, "/api/accounts?start=2026-10-17",
+            await get_json(srv, f"/api/accounts?start={start_s}",
                            expect=400)
             await get_json(srv,
-                           "/api/accounts?start=2026-10-17&end=2026-10-19"
+                           f"/api/accounts?start={start_s}&end={end_s}"
                            "&timezone=Mars/Base", expect=400)
         finally:
             await srv.close()

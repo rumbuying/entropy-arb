@@ -108,12 +108,19 @@ def build_payload():
          "buy_notional": 100, "sell_notional": 100},
     ]
     stop_rows = [dict(norm[1], ts=t0 - 1000)]
+    trunc = [{"ts": t0 + 150, "direction": "sell_entropy", "buy_fill": 0,
+              "sell_fill": 0.5, "fill_edge_usd": 1.0, "ok": 1,
+              "buy_notional": 100, "sell_notional": 100}]
+    trunc_line = line("TRUNC", trunc, t0 - 86400, position=0.0)
+    trunc_line["tail_truncated"] = True     # 500 行窗口被截断
+    trunc_line["trades"][0]["ts"] = t0 + 150
     lines = [
         line("ANTH", anth_rows, fx["started_ts"], position=-0.48),
         line("PART", part, t0 + 50, position=0.0),
         line("INH", inh, t0 + 50, position=0.0),
         line("NORM", norm, t0 + 50, position=0.0),
         line("STOP", stop_rows, t0 - 1000, position=0.0, status="stopped"),
+        trunc_line,
     ]
     return {"schema_version": 1, "as_of": datetime.now(SH).timestamp(),
             "timezone": "Asia/Shanghai", "day_start_ts": t0, "lines": lines}
@@ -159,7 +166,7 @@ async def open_page(browser, base, tz, lang="zh"):
                     wait_until="domcontentloaded")
     await page.wait_for_selector(".kpi-strip .kpi", timeout=20000)
     await page.wait_for_function(
-        "() => document.querySelectorAll('table.data tbody tr').length >= 5",
+        "() => document.querySelectorAll('table.data tbody tr').length >= 6",
         timeout=20000)
     await asyncio.sleep(0.4)
     return ctx, page, errs
@@ -211,6 +218,10 @@ async def run_e2e():
               locked_kpi)
         check("E-08 页面仍标「估算」、无「已落袋」",
               "估算" in body and "已落袋" not in body)
+        trunc = find_row(rows, "TRUNC")
+        check("E-15 TRUNC（窗口截断）显示 — + 不可反推说明",
+              trunc and cell(trunc[4]) == "—"
+              and "成交窗口被截断" in " ".join(trunc), trunc)
         check("E-09 无未捕获 JS 错误", not errs, errs)
         # 总览/账户页也改用 seeded FIFO（50409c1）：导航不报错且口径仍在
         await page.goto(f"{base}/console-v2?token={TOKEN}#/strategies",
