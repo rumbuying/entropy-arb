@@ -174,7 +174,7 @@ export function mount(container) {
     try {
       [acc, pnl] = await Promise.all([
         getJSON(`/api/accounts?${q}`),
-        getJSON("/api/pnl/lines?days=2&limit=500"),
+        getJSON("/api/pnl/lines?days=2&limit=2000"),
       ]);
     } catch (e) {
       cmpOut.replaceChildren(stateBox({

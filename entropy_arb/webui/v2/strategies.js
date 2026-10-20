@@ -160,7 +160,7 @@ export function mount(container, ctx) {
       seq.run(my, () => getJSON("/api/workers")),
       seq.run(my, () => getJSON("/api/secrets")),
       seq.run(my, () => getJSON("/api/venues")),
-      seq.run(my, () => getJSON("/api/pnl/lines?days=2&limit=500")),
+      seq.run(my, () => getJSON("/api/pnl/lines?days=2&limit=2000")),
     ]);
     const strategies = results[0].status === "fulfilled"
       ? (results[0].value.strategies || []) : null;

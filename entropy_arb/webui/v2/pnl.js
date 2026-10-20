@@ -16,7 +16,7 @@ import { el, card, table, stateBox, badge, updatedStamp, seqGuard }
 import { fnum, estimateLineSeeded } from "./pnlcalc.js";
 
 const REFRESH_MS = 15000;
-const API = "/api/pnl/lines?days=2&limit=500";
+const API = "/api/pnl/lines?days=2&limit=2000";
 
 function usd(v) {
   if (v === null || !Number.isFinite(v)) return "—";
