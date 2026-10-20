@@ -104,12 +104,14 @@ class Env:
 
     def _seed(self):
         now = time.time()
-        ps = datetime(2026, 10, 17, tzinfo=SH).timestamp()
+        # 日期相对今天，避免日历滚过后快照落到区间外（与 R-02 单测同一修法）
+        today0 = datetime.now(SH).replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp()
+        ps = today0 - 2 * 86400
         # 账户快照：HL(io) 3 天区间 delta 100
         self.storage.save_account_equity(
             scope="HL(io)", ts=ps + 120, equity=10000.0, free=5000.0,
             source="worker")
-        today0 = datetime(2026, 10, 19, tzinfo=SH).timestamp()
         self.storage.save_account_equity(
             scope="HL(io)", ts=today0 + 600, equity=10000.0, free=5000.0,
             source="worker")
@@ -153,10 +155,10 @@ class Env:
                                "band_low_bps": -3.0,
                                "band_high_bps": 3.0},
                     "venues": {
-                        "entropy": {"name": "ENTROPY", "position": 1.5,
+                        "entropy": {"name": "ENTROPY", "position": 0.0,
                                     "equity": 500, "volume_usd": 100,
                                     "down": False, "fresh": True},
-                        "hedge": {"name": "RH", "position": -1.5,
+                        "hedge": {"name": "RH", "position": -0.0,
                                   "equity": 500, "volume_usd": 100,
                                   "down": False, "fresh": True}}}
         self.sup.snapshot = snap
@@ -255,10 +257,11 @@ async def run_e2e():
               else False, f"{url1} vs {url2}")
         if resp1 and resp2:
             p1 = resp1["period"]
-            expect_start = datetime(2026, 10, 19, tzinfo=SH).timestamp()
+            expect_start = datetime.now(SH).replace(
+                hour=0, minute=0, second=0, microsecond=0).timestamp()
             check("U-01c 今日起点固定 Asia/Shanghai（tz 参数）",
                   p1["timezone"] == "Asia/Shanghai"
-                  and abs(p1["start"] - expect_start) < 86400,
+                  and abs(p1["start"] - expect_start) < 120,
                   f'tz={p1["timezone"]} start={p1["start"]}')
             d1 = {c["scope"]: c["delta"] for c in p1["changes"]}
             d2 = {c["scope"]: c["delta"] for c in resp2["period"]["changes"]}

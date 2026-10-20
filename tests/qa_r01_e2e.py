@@ -148,6 +148,32 @@ async def run_e2e():
     # ---------------------------------------------------------- 主 fixture
     benv = await BrowserEnv.create(minimal=True)
     sh0 = benv.env.sh0
+    # 2026-10-20 seeded-FIFO 契约：running 线需要 started_ts 与
+    # state.venues.entropy.position。把 run 起点放到全部 fixture 行之前，
+    # 并让当前仓位等于本 run 净变化（种子=0），旧数字口径才能直接对比。
+    env = benv.env
+    anchor = sh0 - 7200
+    for wid in ("w1", "w2", "w6"):
+        w = env.sup.workers[wid]
+        w.started_ts = anchor
+        env.storage.db.execute(
+            "UPDATE runs SET started_ts=? WHERE run_id=?",
+            (anchor, w.run_id))
+    env.storage.db.commit()
+
+    async def seeded_snap(wid):
+        pos = {"w1": 2.0, "w6": 0.0}.get(wid, 0.0)
+        return {"session": {"unrealized_usd": -5.5 if wid == "w1" else 0.0},
+                "signal": {"mid_premium_bps": 2.5, "band_low_bps": -3.0,
+                           "band_high_bps": 3.0},
+                "venues": {
+                    "entropy": {"name": "HL", "position": pos,
+                                "equity": 500.0, "volume_usd": 0.0,
+                                "down": False, "fresh": True},
+                    "hedge": {"name": "RH", "position": -pos,
+                              "equity": 500.0, "volume_usd": 0.0,
+                              "down": False, "fresh": True}}}
+    env.sup.snapshot = seeded_snap
     pw = await async_playwright().start()
     browser = await pw.chromium.launch(args=["--no-sandbox"])
     try:
@@ -189,6 +215,8 @@ async def run_e2e():
                     rows_ = ln.get("trades") or []
                     if ln.get("trades_exists") is False:
                         continue
+                    if ln.get("status") != "running":
+                        continue      # stopped 线无法反推起始库存 → 不计入合计
                     expect[sym] = frozen_lot_stats(rows_, sh0)["realizedToday"]
                 for sym in ("SNDK", "BTC"):
                     row = find_row(rows, sym)
@@ -197,14 +225,15 @@ async def run_e2e():
                     check(f"WEB-04b {sym} 今日锁定=基线 {want}", got == want,
                           f"row={row}")
                 hype = find_row(rows, "HYPE")
-                check("WEB-04c HYPE 今日锁定=$3.00",
-                      bool(hype) and cell(hype[4]) == "$3.00", hype)
+                check("WEB-04c 停止线 HYPE 锁定=—（无法反推起始库存）",
+                      bool(hype) and cell(hype[4]) == "—"
+                      and "无法反推起始库存" in " ".join(hype), hype)
                 sndk = find_row(rows, "SNDK")
                 check("WEB-04d SNDK 浮动=-$5.50",
                       bool(sndk) and cell(sndk[5]) == "-$5.50", sndk)
                 total = sum(expect.values())
                 locked_kpi = [v for k, v in kpis.items() if "锁定" in k]
-                check("WEB-04e 顶部今日锁定=各线合计（含停止线）",
+                check("WEB-04e 顶部今日锁定=running 可估线合计",
                       bool(locked_kpi) and locked_kpi[0] == usd_str(total),
                       f"kpis={kpis} total={total}")
                 float_kpi = [v for k, v in kpis.items()
@@ -218,8 +247,8 @@ async def run_e2e():
                 check(f"WEB-11a 表头含「{h}」", h in headers, headers)
             sndk = find_row(rows, "SNDK")
             if sndk:
-                check("WEB-11b SNDK 仓位=+1.50 / -1.50",
-                      "+1.50 / -1.50" in sndk[6], sndk)
+                check("WEB-11b SNDK 仓位=+2.00 / -2.00（seeded fixture）",
+                      "+2.00 / -2.00" in sndk[6], sndk)
                 check("WEB-11c SNDK 溢价=+2.5 / [-3.0 .. +3.0]",
                       "+2.5" in sndk[7] and "-3.0" in sndk[7]
                       and "+3.0" in sndk[7], sndk)
@@ -282,7 +311,7 @@ async def run_e2e():
             check("WEB-02c 两个浏览器时区表格数字相同", rows_u == rows_n,
                   "table rows differ")
             check("WEB-02d 今日锁定仍等于基线（未被本地 0 点吞掉）",
-                  any("锁定" in k and v == usd_str(31.0)
+                  any("锁定" in k and v == usd_str(28.0)
                       for k, v in kpi_u.items()), kpi_u)
             check("WEB-02e 无未捕获 JS 错误",
                   not (err_u + err_n), err_u + err_n)

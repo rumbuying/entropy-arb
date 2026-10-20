@@ -146,6 +146,15 @@ def find_row(rows, sym):
     return None
 
 
+def kpi_values(kpis):
+    out = {}
+    for block in kpis:
+        lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+        if lines:
+            out[lines[0]] = lines[1] if len(lines) > 1 else ""
+    return out
+
+
 def cell(v):
     return (v or "").splitlines()[0].strip()
 
@@ -223,19 +232,34 @@ async def run_e2e():
               trunc and cell(trunc[4]) == "—"
               and "成交窗口被截断" in " ".join(trunc), trunc)
         check("E-09 无未捕获 JS 错误", not errs, errs)
-        # 总览/账户页也改用 seeded FIFO（50409c1）：导航不报错且口径仍在
+        # 总览/账户页也改用 seeded FIFO（50409c1）：同一份 ANTH 数据在
+        # 三个页面都不能再出现错误的 0。
         await page.goto(f"{base}/console-v2?token={TOKEN}#/strategies",
                         wait_until="domcontentloaded")
-        await page.wait_for_timeout(1500)
+        await page.wait_for_timeout(2000)
         body_s = await page.inner_text("body")
-        check("E-12 总览页可用且保留账户真值/策略估算两栏",
-              "账户真值" in body_s and "策略估算" in body_s, body_s[:300])
+        kpis_s = kpi_values(await page.eval_on_selector_all(
+            ".kpi-strip .kpi", "els => els.map(e => e.innerText)"))
+        est = [v for k, v in kpis_s.items() if "策略估算" in k]
+        # ANTH(-2.544) + PART(4) + NORM(5) = 6.456 → $6.46
+        check("E-12 总览页策略估算=seeded 合计 $6.46（非 $0）",
+              bool(est) and est[0] in ("$6.46", "+$6.46")
+              and "部分线不可估" in body_s,
+              f"kpis={kpis_s} body={body_s[:300]}")
+        check("E-12b 总览页保留账户真值/策略估算两栏",
+              "账户真值" in body_s and "策略估算" in body_s)
         await page.goto(f"{base}/console-v2?token={TOKEN}#/accounts",
                         wait_until="domcontentloaded")
-        await page.wait_for_timeout(1500)
+        await page.wait_for_timeout(2500)
         body_a = await page.inner_text("body")
-        check("E-13 账户页可用且保留场所级口径",
-              "场所级" in body_a, body_a[:300])
+        rows_a = await table_rows(page)
+        anth_rows = [r for r in rows_a if "ANTH" in r[0]]
+        joined = " ".join(" ".join(r) for r in anth_rows)
+        check("E-13 账户页 ANTH 策略估算=-$3.54（非 $0）",
+              bool(anth_rows) and "-$3.54" in joined
+              and "$0.00" not in joined, anth_rows)
+        check("E-13b 账户页保留场所级口径", "场所级" in body_a,
+              body_a[:300])
         check("E-14 导航过程无未捕获 JS 错误", not errs, errs)
         await ctx.close()
 
