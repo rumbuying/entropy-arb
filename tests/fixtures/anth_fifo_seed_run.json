@@ -1,0 +1,417 @@
+{
+ "source": "production logs/trades-ANTH-lighter-rh.csv (read-only snapshot 2026-10-20 19:0x)",
+ "profile": "anth-anthropic",
+ "symbol": "ANTH",
+ "hedge": "rh",
+ "started_ts": 1792127280.0,
+ "current_position": -0.48,
+ "run_rows": [
+  {
+   "ts": 1792127779.438,
+   "direction": "sell_entropy",
+   "buy_fill": 0.006,
+   "sell_fill": 0.006,
+   "fill_edge_usd": -0.2927,
+   "ok": "1"
+  },
+  {
+   "ts": 1792132094.479,
+   "direction": "sell_entropy",
+   "buy_fill": 0.009,
+   "sell_fill": 0.0,
+   "fill_edge_usd": 0.0,
+   "ok": "1"
+  },
+  {
+   "ts": 1792132098.516,
+   "direction": "sell_entropy",
+   "buy_fill": 0.011,
+   "sell_fill": 0.011,
+   "fill_edge_usd": -0.4969,
+   "ok": "1"
+  },
+  {
+   "ts": 1792136391.163,
+   "direction": "sell_entropy",
+   "buy_fill": 0.006,
+   "sell_fill": 0.006,
+   "fill_edge_usd": -0.277,
+   "ok": "1"
+  },
+  {
+   "ts": 1792139574.821,
+   "direction": "buy_entropy",
+   "buy_fill": 0.0,
+   "sell_fill": 0.102,
+   "fill_edge_usd": 0.0,
+   "ok": "1"
+  },
+  {
+   "ts": 1792139578.554,
+   "direction": "buy_entropy",
+   "buy_fill": 0.022,
+   "sell_fill": 0.022,
+   "fill_edge_usd": 1.1753,
+   "ok": "1"
+  },
+  {
+   "ts": 1792139773.186,
+   "direction": "buy_entropy",
+   "buy_fill": 0.0,
+   "sell_fill": 0.102,
+   "fill_edge_usd": 0.0,
+   "ok": "1"
+  },
+  {
+   "ts": 1792139849.902,
+   "direction": "buy_entropy",
+   "buy_fill": 0.0,
+   "sell_fill": 0.0,
+   "fill_edge_usd": 0.0,
+   "ok": "1"
+  },
+  {
+   "ts": 1792139851.263,
+   "direction": "buy_entropy",
+   "buy_fill": 0.101,
+   "sell_fill": 0.101,
+   "fill_edge_usd": 5.6483,
+   "ok": "1"
+  },
+  {
+   "ts": 1792139863.432,
+   "direction": "buy_entropy",
+   "buy_fill": 0.0,
+   "sell_fill": 0.101,
+   "fill_edge_usd": 0.0,
+   "ok": "1"
+  },
+  {
+   "ts": 1792140975.653,
+   "direction": "sell_entropy",
+   "buy_fill": 0.099,
+   "sell_fill": 0.099,
+   "fill_edge_usd": -4.621,
+   "ok": "1"
+  },
+  {
+   "ts": 1792141115.95,
+   "direction": "sell_entropy",
+   "buy_fill": 0.099,
+   "sell_fill": 0.099,
+   "fill_edge_usd": -4.7397,
+   "ok": "1"
+  },
+  {
+   "ts": 1792147803.519,
+   "direction": "sell_entropy",
+   "buy_fill": 0.099,
+   "sell_fill": 0.099,
+   "fill_edge_usd": -4.5913,
+   "ok": "1"
+  },
+  {
+   "ts": 1792147819.608,
+   "direction": "sell_entropy",
+   "buy_fill": 0.099,
+   "sell_fill": 0.099,
+   "fill_edge_usd": -4.621,
+   "ok": "1"
+  },
+  {
+   "ts": 1792148481.018,
+   "direction": "sell_entropy",
+   "buy_fill": 0.019,
+   "sell_fill": 0.019,
+   "fill_edge_usd": -0.8603,
+   "ok": "1"
+  },
+  {
+   "ts": 1792157743.672,
+   "direction": "sell_entropy",
+   "buy_fill": 0.007,
+   "sell_fill": 0.007,
+   "fill_edge_usd": -0.2728,
+   "ok": "1"
+  },
+  {
+   "ts": 1792161695.962,
+   "direction": "sell_entropy",
+   "buy_fill": 0.006,
+   "sell_fill": 0.006,
+   "fill_edge_usd": -0.2536,
+   "ok": "1"
+  },
+  {
+   "ts": 1792172854.086,
+   "direction": "sell_entropy",
+   "buy_fill": 0.007,
+   "sell_fill": 0.007,
+   "fill_edge_usd": -0.2525,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330255.409,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 5.0365,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330256.653,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 5.0469,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330258.14,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 5.0612,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330259.283,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 5.0547,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330260.391,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 5.0677,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330261.458,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 5.034,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330262.719,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 5.0157,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330264.114,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 4.9741,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330265.557,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 4.9897,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330266.564,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 5.0157,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330267.55,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 4.9989,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330268.647,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 5.0068,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330269.647,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 4.9993,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330271.997,
+   "direction": "buy_entropy",
+   "buy_fill": 0.025,
+   "sell_fill": 0.025,
+   "fill_edge_usd": 1.2057,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330283.472,
+   "direction": "buy_entropy",
+   "buy_fill": 0.104,
+   "sell_fill": 0.104,
+   "fill_edge_usd": 5.0261,
+   "ok": "1"
+  },
+  {
+   "ts": 1792330539.929,
+   "direction": "buy_entropy",
+   "buy_fill": 0.051,
+   "sell_fill": 0.0,
+   "fill_edge_usd": 0.0,
+   "ok": "1"
+  },
+  {
+   "ts": 1792331139.131,
+   "direction": "buy_entropy",
+   "buy_fill": 0.072,
+   "sell_fill": 0.0,
+   "fill_edge_usd": 0.0,
+   "ok": "1"
+  },
+  {
+   "ts": 1792331471.019,
+   "direction": "buy_entropy",
+   "buy_fill": 0.071,
+   "sell_fill": 0.0,
+   "fill_edge_usd": 0.0,
+   "ok": "1"
+  },
+  {
+   "ts": 1792332228.871,
+   "direction": "buy_entropy",
+   "buy_fill": 0.071,
+   "sell_fill": 0.0,
+   "fill_edge_usd": 0.0,
+   "ok": "1"
+  },
+  {
+   "ts": 1792490595.822,
+   "direction": "sell_entropy",
+   "buy_fill": 0.1,
+   "sell_fill": 0.1,
+   "fill_edge_usd": -3.6234,
+   "ok": "1"
+  },
+  {
+   "ts": 1792490880.334,
+   "direction": "sell_entropy",
+   "buy_fill": 0.1,
+   "sell_fill": 0.1,
+   "fill_edge_usd": -3.5976,
+   "ok": "1"
+  },
+  {
+   "ts": 1792490917.89,
+   "direction": "sell_entropy",
+   "buy_fill": 0.1,
+   "sell_fill": 0.1,
+   "fill_edge_usd": -3.5276,
+   "ok": "1"
+  },
+  {
+   "ts": 1792490991.137,
+   "direction": "sell_entropy",
+   "buy_fill": 0.1,
+   "sell_fill": 0.1,
+   "fill_edge_usd": -3.5745,
+   "ok": "1"
+  },
+  {
+   "ts": 1792490997.669,
+   "direction": "sell_entropy",
+   "buy_fill": 0.1,
+   "sell_fill": 0.1,
+   "fill_edge_usd": -3.4975,
+   "ok": "1"
+  },
+  {
+   "ts": 1792491001.901,
+   "direction": "sell_entropy",
+   "buy_fill": 0.1,
+   "sell_fill": 0.1,
+   "fill_edge_usd": -3.4575,
+   "ok": "1"
+  },
+  {
+   "ts": 1792491003.493,
+   "direction": "sell_entropy",
+   "buy_fill": 0.1,
+   "sell_fill": 0.1,
+   "fill_edge_usd": -3.4575,
+   "ok": "1"
+  },
+  {
+   "ts": 1792491008.151,
+   "direction": "sell_entropy",
+   "buy_fill": 0.1,
+   "sell_fill": 0.1,
+   "fill_edge_usd": -3.4675,
+   "ok": "1"
+  },
+  {
+   "ts": 1792491009.027,
+   "direction": "sell_entropy",
+   "buy_fill": 0.1,
+   "sell_fill": 0.1,
+   "fill_edge_usd": -3.4275,
+   "ok": "1"
+  },
+  {
+   "ts": 1792491009.823,
+   "direction": "sell_entropy",
+   "buy_fill": 0.1,
+   "sell_fill": 0.1,
+   "fill_edge_usd": -3.4475,
+   "ok": "1"
+  },
+  {
+   "ts": 1792491010.862,
+   "direction": "sell_entropy",
+   "buy_fill": 0.1,
+   "sell_fill": 0.1,
+   "fill_edge_usd": -3.4575,
+   "ok": "1"
+  },
+  {
+   "ts": 1792491011.751,
+   "direction": "sell_entropy",
+   "buy_fill": 0.091,
+   "sell_fill": 0.091,
+   "fill_edge_usd": -3.1548,
+   "ok": "1"
+  },
+  {
+   "ts": 1792491015.687,
+   "direction": "sell_entropy",
+   "buy_fill": 0.007,
+   "sell_fill": 0.007,
+   "fill_edge_usd": -0.2392,
+   "ok": "1"
+  }
+ ],
+ "expected": {
+  "seed_start_pos": -0.693,
+  "today_sell_qty": 1.198,
+  "today_realized_estimate_usd": -3.544215,
+  "today_known_cost_qty": 0.718,
+  "today_unknown_cost_qty": 0.0
+ }
+}
