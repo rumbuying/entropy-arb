@@ -10,7 +10,7 @@ import { t } from "/static/i18n.js";
 import { el, card, table, stateBox, pendingBadge, badge, netPnlCell,
          updatedStamp, seqGuard } from "./components.js";
 import { store } from "./store.js";
-import { estimateLineSeeded } from "./pnlcalc.js";
+import { estimateLineSeeded, ledgerToday } from "./pnlcalc.js";
 import { shanghaiDate } from "./tz.js";
 
 function usd(v) {
@@ -189,23 +189,36 @@ export function mount(container, ctx) {
     const cutoff = Number(pnl && pnl.day_start_ts) || 0;
     const estByStrategy = new Map();
     let estTotal = 0, estN = 0, estComplete = true;
+    let ledgerLines = 0, estimateLines = 0;
     for (const l of ((pnl && pnl.lines) || [])
         .filter(x => x.mode === "live")) {
-      // seeded FIFO：继承仓位无法反推时 realized=null，该策略标记“不可估”
       const e = estimateLineSeeded(l, cutoff);
+      // R-07：账本口径优先，账本不可用才回退 seeded 估算
+      const led = ledgerToday(l);
       estN++;
+      let value = null, basis = null;
+      if (led.available) {
+        if (!led.unusable) { value = led.value; basis = led.basis; }
+        else basis = "ledger_unusable";
+      } else if (e.hasData && e.realized !== null) {
+        value = e.realized;
+        basis = e.partial ? "estimate_partial" : "estimate";
+      }
       const sid = l.strategy_id || `_line:${l.key}`;
       const cur = estByStrategy.get(sid) || { total: 0, n: 0, complete: true };
       cur.n += 1;
-      if (!e.hasData || e.realized === null) {
+      if (value === null) {
         estComplete = false;
         cur.complete = false;
         estByStrategy.set(sid, cur);
         continue;
       }
-      const total = e.realized + (e.floatPnl || 0);
+      if (basis === "ledger" || basis === "ledger_partial") ledgerLines++;
+      else estimateLines++;
+      const total = value + (e.floatPnl || 0);
       estTotal += total;
       cur.total += total;
+      if (basis === "ledger_partial") cur.partial = true;
       estByStrategy.set(sid, cur);
     }
     estV.replaceChildren(el("span", {
@@ -213,8 +226,10 @@ export function mount(container, ctx) {
       text: estN ? usd(estTotal) : "—",
     }));
     estSub.textContent = estN
-      ? t("v2.ov.est_sub", { n: String(estN) })
-        + (estComplete ? "" : " " + t("v2.ov.est_partial"))
+      ? (estimateLines === 0 && estComplete
+          ? t("v2.ov.est_ledger_sub", { n: String(estN) })
+          : t("v2.ov.est_sub", { n: String(estN) })
+            + (estComplete ? "" : " " + t("v2.ov.est_partial")))
       : t("v2.ov.est_none");
 
     equityV.replaceChildren(

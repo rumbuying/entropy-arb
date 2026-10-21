@@ -281,3 +281,53 @@ export function estimateLineSeeded(line, cutoff) {
   }
   return out;
 }
+
+/* ---- R-07：成交账本口径（后端 /api/pnl/lines 的 ledger 字段） --------------
+   看板/总览/账户页共用：优先用账本数字（标注“账本口径”），账本不可信时
+   才回退 seeded 估算。返回：
+   available=false → 接口没给 ledger 字段，调用方回退估算；
+   unusable=true   → 账本给了但不可信（chain_mismatch/no_anchor/…），显示 “—”；
+   value           → 可展示数字（0 合法）；basis=ledger|ledger_partial。 */
+const LEDGER_UNUSABLE = new Set([
+  "chain_mismatch", "no_anchor", "no_ledger", "no_strategy", "error",
+]);
+
+export function ledgerToday(line) {
+  const none = { available: false, value: null, basis: null,
+                 reason: null, unusable: false, fee: null, feeStatus: null };
+  const lg = line && line.ledger;
+  if (!lg || typeof lg !== "object") return none;
+
+  // 兼容契约补充：by_venue 存在时合计用各 venue 的 net 之和
+  let fromVenues = null;
+  const byVenue = lg.by_venue && typeof lg.by_venue === "object"
+    ? lg.by_venue : null;
+  if (byVenue) {
+    let sum = 0, seen = false;
+    for (const v of Object.values(byVenue)) {
+      const net = fnum(v && (v.realized_net ?? v.realized_today));
+      if (net !== null) { sum += net; seen = true; }
+    }
+    if (seen) fromVenues = sum;
+  }
+  const raw = fnum(lg.realized_today);
+  const value = raw !== null ? raw : fromVenues;
+  const reason = lg.reason || null;
+  const fee = fnum(lg.fee_total ?? lg.fee);
+  const feeStatus = lg.fee_status || null;
+  const feesIncluded = typeof lg.fees_included === "boolean"
+    ? lg.fees_included : null;
+
+  if (LEDGER_UNUSABLE.has(reason)) {
+    return { available: true, value: null, basis: null, reason,
+             unusable: true, fee, feeStatus, feesIncluded };
+  }
+  if (value === null) {
+    return { available: true, value: null, basis: null,
+             reason: reason || "no_value", unusable: true, fee, feeStatus,
+             feesIncluded };
+  }
+  const partial = reason === "partial_unknown" || reason === "inherited_unknown";
+  return { available: true, value, basis: partial ? "ledger_partial" : "ledger",
+           reason, unusable: false, fee, feeStatus, feesIncluded };
+}

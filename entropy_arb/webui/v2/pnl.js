@@ -13,7 +13,7 @@ import { getJSON } from "/static/api.js";
 import { t } from "/static/i18n.js";
 import { el, card, table, stateBox, badge, updatedStamp, seqGuard }
   from "./components.js";
-import { fnum, estimateLineSeeded } from "./pnlcalc.js";
+import { fnum, estimateLineSeeded, ledgerToday } from "./pnlcalc.js";
 
 const REFRESH_MS = 15000;
 const API = "/api/pnl/lines?days=2&limit=2000";
@@ -40,7 +40,31 @@ function pnlCls(v) {
 
 /* 锁定列展示：只有“可估的出数”才给数字；不可估一律 “—”，
    绝不用 0 冒充（2026-10-20 ANTH 事故的核心教训）。 */
+function ledgerReasonHint(reason) {
+  const known = {
+    chain_mismatch: t("v2.pnl.ledger.chain_mismatch"),
+    no_anchor: t("v2.pnl.ledger.no_anchor"),
+    no_ledger: t("v2.pnl.ledger.no_ledger"),
+    no_strategy: t("v2.pnl.ledger.no_ledger"),
+    error: t("v2.pnl.ledger.no_ledger"),
+  };
+  return known[reason] || t("v2.pnl.ledger.no_ledger");
+}
+
 function lockedDisplay(s) {
+  // R-07：先看成交账本（后端 ledger）。账本可信 → 数字 + “账本口径”；
+  // 账本明确不可信（chain_mismatch/no_anchor…）→ “—”，不回退估算。
+  const led = s.led;
+  if (led && led.available) {
+    if (led.unusable) return { value: null, hint: ledgerReasonHint(led.reason) };
+    return {
+      value: led.value,
+      hint: led.basis === "ledger_partial"
+        ? t("v2.pnl.hint.ledger_partial")
+        : t("v2.pnl.hint.ledger"),
+    };
+  }
+  // 接口没给 ledger 字段（旧后端）→ 回退 seeded 估算
   if (!s.hasData) return { value: null, hint: t("v2.pnl.hint.no_trades") };
   if (!s.running) return { value: null, hint: t("v2.pnl.hint.stopped_locked") };
   if (s.realized === null || s.realized === undefined) {
@@ -133,13 +157,14 @@ export function mount(container, ctx) {
       // 带“当前 run 起始库存”的估算：继承仓位的成本未知，配对到它的部分
       // 不计入锁定盈利；全不可估时 realized=null（展示 “—” 而不是 0）。
       const e = estimateLineSeeded(l, cutoff);
+      const led = ledgerToday(l);
       // state 白名单：只有 running 线有值，停止线为 null
       const st = e.running ? (l.state || null) : null;
       const venues = (st && st.venues) || {};
       const vE = venues.entropy || null;
       const vH = venues.hedge || null;
       const sig = (st && st.signal) || {};
-      return { l, ...e, st, vE, vH, sig };
+      return { l, ...e, led, st, vE, vH, sig };
     });
 
     const runCount = stat.filter(s => s.running).length;
@@ -147,15 +172,21 @@ export function mount(container, ctx) {
     let totalRealized = 0, totalFloat = 0, totalComplete = 0, totalToday = 0;
     let totalVolume = 0, hasFloat = false;
     let knownLockedLines = 0, unknownLockedLines = 0, partialLines = 0;
+    let ledgerLines = 0, estimateLines = 0;
     for (const s of stat) {
-      if (!s.hasData) continue;        // 缺 CSV 的线不计入合计，避免把缺失当 0
+      if (!s.hasData) continue;        // 缺 CSV 的线不计入成交统计
       totalComplete += s.complete.length;
       totalToday += s.today.length;
       totalVolume += s.volToday;
-      if (s.realized !== null && s.realized !== undefined) {
-        totalRealized += s.realized;
+      const locked = lockedDisplay(s);
+      if (locked.value !== null && locked.value !== undefined) {
+        totalRealized += locked.value;
         knownLockedLines++;
-        if (s.partial) partialLines++;
+        if (s.led && s.led.available && s.led.basis === "ledger_partial") {
+          partialLines++;
+        }
+        if (s.led && s.led.available && !s.led.unusable) ledgerLines++;
+        else estimateLines++;
       } else {
         unknownLockedLines++;
       }
@@ -184,8 +215,9 @@ export function mount(container, ctx) {
         el("div", { class: "sub" },
           unknownLockedLines
             ? t("v2.pnl.kpi.locked_partial")
-            : partialLines ? t("v2.pnl.hint.partial")
-                           : t("v2.pnl.hint.realized"))),
+            : partialLines ? t("v2.pnl.hint.ledger_partial")
+            : estimateLines ? t("v2.pnl.kpi.mixed")
+                            : t("v2.pnl.kpi.ledger"))),
       el("div", { class: "kpi" },
         el("div", { class: "label" }, t("v2.pnl.kpi.float")),
         el("div", { class: "value " + pnlCls(hasFloat ? totalFloat : null) },

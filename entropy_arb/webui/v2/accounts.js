@@ -12,7 +12,7 @@ import { t } from "/static/i18n.js";
 import {
   el, card, table, stateBox, badge, updatedStamp, seqGuard,
 } from "./components.js";
-import { estimateLineSeeded } from "./pnlcalc.js";
+import { estimateLineSeeded, ledgerToday } from "./pnlcalc.js";
 import { shanghaiDate, fmtTs } from "./tz.js";
 
 const SNAPSHOT_FRESH_SEC = 900;      // console writes equity every ~5 min
@@ -27,6 +27,12 @@ function cls(v) {
   if (v === null || v === undefined || !Number.isFinite(Number(v))) return "muted";
   const n = Number(v);
   return n > 0 ? "pos" : n < 0 ? "neg" : "muted";
+}
+
+function ledgerReasonLabel(reason) {
+  const key = "v2.pnl.ledger." + (reason || "no_ledger");
+  const raw = t(key);
+  return raw.startsWith("v2.pnl.ledger.") ? t("v2.pnl.ledger.no_ledger") : raw;
 }
 
 function tag(text, klass, title) {
@@ -199,13 +205,27 @@ export function mount(container) {
     const lines = (Array.isArray(pnl.lines) ? pnl.lines : [])
       .filter(l => l.mode === "live");
     const est = lines.map(l => {
-      // seeded FIFO（当前 run 起始库存），与盈亏看板同一套数字
       const e = estimateLineSeeded(l, cutoff);
-      const estimable = e.hasData && e.realized !== null;
+      // R-07：账本口径优先，账本不可用才回退 seeded 估算（与看板同源）
+      const led = ledgerToday(l);
+      let basis = null, realizedValue = null, noteKey = null;
+      if (led.available) {
+        if (led.unusable) {
+          basis = "ledger_unusable";
+          noteKey = "ledger_reason";
+        } else {
+          basis = led.basis;                    // ledger | ledger_partial
+          realizedValue = led.value;
+        }
+      } else if (e.hasData && e.realized !== null) {
+        basis = e.partial ? "estimate_partial" : "estimate";
+        realizedValue = e.realized;
+      }
+      const estimable = realizedValue !== null;
       return {
-        l, ...e, estimable,
+        l, ...e, led, estimable, basis, realizedValue, noteKey,
         scopes: Array.isArray(l.scopes) ? l.scopes : [],
-        total: estimable ? e.realized + (e.floatPnl || 0) : null,
+        total: estimable ? realizedValue + (e.floatPnl || 0) : null,
       };
     });
     const estComplete = est.every(x => x.estimable);
@@ -266,17 +286,20 @@ export function mount(container) {
       }
       tr.appendChild(scopeCell);
       const realizedCell = el("td", { class: "num" });
-      if (!x.hasData) realizedCell.textContent = "—";
-      else if (x.realized === null) {
+      if (x.realizedValue !== null && x.realizedValue !== undefined) {
+        realizedCell.textContent = usd(x.realizedValue);
+        const hint = x.basis === "ledger" ? t("v2.pnl.hint.ledger")
+          : x.basis === "ledger_partial" ? t("v2.pnl.hint.ledger_partial")
+          : x.basis === "estimate_partial" ? t("v2.pnl.hint.partial")
+          : null;
+        if (hint) realizedCell.appendChild(el("div", { class: "muted",
+          text: hint }));
+      } else {
         realizedCell.textContent = "—";
         realizedCell.appendChild(el("div", { class: "muted",
-          title: x.reason || "",
-          text: t("v2.acct.cmp.unknown") }));
-      } else {
-        realizedCell.textContent = usd(x.realized);
-        if (x.partial)
-          realizedCell.appendChild(el("div", { class: "muted",
-            text: t("v2.pnl.hint.partial") }));
+          text: x.basis === "ledger_unusable"
+            ? ledgerReasonLabel((x.led || {}).reason)
+            : (x.hasData ? t("v2.acct.cmp.unknown") : t("v2.pnl.hint.no_trades")) }));
       }
       tr.appendChild(realizedCell);
       tr.appendChild(el("td", { class: "num " + cls(x.floatPnl) },
