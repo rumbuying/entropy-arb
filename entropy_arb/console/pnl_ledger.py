@@ -570,7 +570,8 @@ def compute(*, fills: Dict[str, list], anchors: Dict[str, dict],
         leg_fee = (_fee_amount(res["fee_actual"], res["fee_actual_fills"],
                                res["fee_estimate"],
                                res["fee_estimate_fills"]))
-        if res["realized"] is not None:
+        if res["realized"] is not None and not (
+                res["known_qty"] == ZERO and res["unknown_qty"] > ZERO):
             net_total += res["realized"] - leg_fee
             any_net = True
         if res["fills"]:
@@ -586,7 +587,8 @@ def compute(*, fills: Dict[str, list], anchors: Dict[str, dict],
         v = by_venue.setdefault(scope, {
             "realized_gross": ZERO, "known_qty": ZERO,
             "unknown_qty": ZERO, "reason": None})
-        if res["realized"] is not None:
+        if res["realized"] is not None and not (
+                res["known_qty"] == ZERO and res["unknown_qty"] > ZERO):
             v["realized_gross"] += res["realized"]
         else:
             v["realized_gross"] = None

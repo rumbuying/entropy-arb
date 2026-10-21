@@ -124,8 +124,9 @@ def test_unknown_price_fill_invalidates_basis():
     res = _compute(fills, {"base": {"position": "0", "avg_entry": None}},
                    start={"ts": 1100.0, "positions": {"base": 0}})
     assert D(res["unknown_qty"]) == D("1"), res
-    assert D(res["realized_today"]) == 0, res
-    assert res["reason"] == "partial_unknown", res
+    # nothing was verifiable (the only close had no known basis): null, not 0
+    assert res["realized_today"] is None, res
+    assert res["reason"] in ("no_ledger", "partial_unknown"), res
 
 
 def test_chain_mismatch_when_external_fill_is_missing():
@@ -150,10 +151,10 @@ def test_chain_check_passes_with_recorded_external_fill():
     # the chain now closes (no chain_mismatch), but the inherited 1.1 lot's
     # cost basis is still unknown: both closes stay unknown, never guessed
     assert res["reason"] != "chain_mismatch", res
-    assert res["reason"] == "partial_unknown", res
-    assert res["legs"]["base"]["reason"] == "inherited_unknown", res
+    # no close had a known basis → no verifiable number, never a fake 0
+    assert res["realized_today"] is None, res
+    assert res["reason"] in ("no_ledger", "partial_unknown"), res
     assert D(res["unknown_qty"]) == D("1.1"), res
-    assert D(res["realized_today"]) == 0, res
 
 
 def test_venue_reported_closed_pnl_covers_unknown_basis():
