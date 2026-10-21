@@ -172,6 +172,56 @@ def test_arcus_truth_semantics_and_breakdown():
     assert near[0]["fee_source"] == "venue_actual"
 
 
+# ---- 各场所 closedPnl 语义映射（验收断言用，brief 契约补充 2） ----------
+VENUE_SEMANTICS = {
+    "HL(IO)": "gross",      # closedPnl 毛额，fee 另计
+    "ARCUS": "net",         # closedPnl 已扣该笔 fee（开仓 fill = -fee）
+    "LIGHTER-RH": "unknown",  # 无成交历史接口
+    "LIGHTER": "unknown",
+}
+
+
+def expected_venue_realized(venue, symbol):
+    """返回 {realized_gross, realized_net, fee, fee_source}（venue 真值）。
+
+    LIGHTER/LIGHTER-RH 无公开成交历史 -> 返回 None（只允许 unknown_qty）。
+    """
+    fx = load()
+    key = (venue or "").upper()
+    if key == "HL(IO)":
+        truth = fx["hl_truth"]
+        closed = truth["closed_pnl_today"][symbol]
+        fee = truth["fee_today"][symbol]
+        return {"realized_gross": round(closed, 6),
+                "realized_net": round(closed - fee, 6),
+                "fee": round(fee, 6), "fee_source": "venue_actual"}
+    if key == "ARCUS":
+        truth = fx["arcus_truth"]
+        closed = truth["closed_pnl_today"]
+        fee = truth["fee_today"]
+        return {"realized_gross": round(closed + fee, 6),
+                "realized_net": round(closed, 6),
+                "fee": round(fee, 6), "fee_source": "venue_actual"}
+    return None
+
+
+def test_venue_semantics_mapping():
+    """HL 毛额=closedPnl、ARCUS 净额=closedPnl；两套口径禁止合并处理。"""
+    hl_sndk = expected_venue_realized("HL(io)", "SNDK")
+    hl_anth = expected_venue_realized("HL(io)", "ANTH")
+    assert abs(hl_sndk["realized_gross"] - 14.110337) < 1e-6
+    assert abs(hl_sndk["realized_net"] - (14.110337 - 0.030361)) < 1e-6
+    assert abs(hl_anth["realized_gross"] - 10.375582) < 1e-6
+    assert abs(hl_anth["realized_net"] - (10.375582 - 0.224831)) < 1e-6
+    arcus = expected_venue_realized("ARCUS", "NEAR")
+    assert abs(arcus["realized_net"] - 11.642589) < 1e-6
+    assert abs(arcus["realized_gross"] - 11.866952) < 1e-6
+    assert abs(arcus["realized_gross"] - arcus["realized_net"]
+               - arcus["fee"]) < 1e-6
+    assert expected_venue_realized("Lighter-RH", "SNDK") is None
+    assert expected_venue_realized("LIGHTER", "NEAR") is None
+
+
 def test_event_chain_complete_enough_for_replay():
     """今天三条实盘线的 M3a 事件都在；fill_id 唯一；费来源标注清楚。"""
     fx = load()
