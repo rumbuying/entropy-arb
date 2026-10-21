@@ -72,6 +72,58 @@ def test_hl_positions_are_the_anchor():
     assert set(fx["hl_truth"]["positions"]) >= {"SNDK", "ANTH"}
 
 
+def test_manual_fills_reconcile_with_exchange():
+    """Chief 给的 SNDK 11:21 / ANTH 11:26 补录必须与交易所逐笔完全对上。"""
+    fx = load()
+    fills = fx["hl_truth"]["fills_today"]
+    man = {m["symbol"]: m for m in fx["manual_fills"]
+           if m["venue"] == "HL(io)"}
+
+    def grp(coin, hh, mm):
+        import datetime
+        tz = datetime.timezone(datetime.timedelta(hours=8))
+        return [f for f in fills if f["coin"] == coin
+                and datetime.datetime.fromtimestamp(
+                    f["time"] / 1000, tz).strftime("%H:%M") ==
+                f"{hh:02d}:{mm:02d}"]
+
+    checks = {"SNDK": (grp("io:SNDK", 11, 21), (0.1261, 7.115823, 0.015996)),
+              "ANTH": (grp("io:ANTH", 11, 26), (0.456, 3.24462, 0.079351))}
+    for sym, (rows, (qty, cp, fee)) in checks.items():
+        assert rows, sym
+        gq = sum(float(f["sz"]) for f in rows)
+        gcp = sum(float(f["closedPnl"]) for f in rows)
+        gfee = sum(float(f["fee"]) for f in rows)
+        assert abs(gq - qty) < 1e-9, (sym, gq, qty)
+        assert abs(gcp - cp) < 1e-6, (sym, gcp, cp)
+        assert abs(gfee - fee) < 1e-6, (sym, gfee, fee)
+        m = man[sym]
+        assert abs(m["qty"] - qty) < 1e-9 and abs(m["fee"] - fee) < 1e-6
+        assert m["fee_source"] == "venue_actual"
+        assert abs(m["closed_pnl_expected"] - cp) < 1e-6
+        # 对冲腿是另一家（Lighter），费未知必须显式 unknown，不能填 0
+        rh = [x for x in fx["manual_fills"]
+              if x["symbol"] == sym and x["venue"] == "Lighter-RH"]
+        assert rh and rh[0]["fee"] is None and rh[0]["fee_source"] == "unknown"
+        assert abs(rh[0]["qty"] - qty) < 1e-9
+
+
+def test_expected_breakdown_consistent():
+    """交易所真值 = 外部补录 + 引擎事件部分（HL 腿拆分自洽）。"""
+    fx = load()
+    exp = fx["expected"]
+    for sym in ("SNDK", "ANTH"):
+        assert abs(exp["hl_total_closed_pnl"][sym]
+                   - (exp["hl_manual_closed_pnl"][sym]
+                      + exp["hl_engine_closed_pnl"][sym])) < 1e-6, sym
+        assert abs(exp["hl_total_fee"][sym]
+                   - (exp["hl_manual_fee"][sym]
+                      + exp["hl_engine_fee"][sym])) < 1e-6, sym
+        assert abs(exp["hl_total_closed_pnl"][sym]
+                   - EXPECTED_CLOSED_PNL[sym]) < 1e-6, sym
+    assert exp["tolerance_usd"] == 0.05
+
+
 def test_event_chain_complete_enough_for_replay():
     """今天三条实盘线的 M3a 事件都在；fill_id 唯一；费来源标注清楚。"""
     fx = load()
