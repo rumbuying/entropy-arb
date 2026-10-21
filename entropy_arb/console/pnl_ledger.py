@@ -643,6 +643,10 @@ def compute(*, fills: Dict[str, list], anchors: Dict[str, dict],
         "realized_today": realized_today,
         "by_venue": by_venue,
         "fee_total": fee_tot,
+        # flat aliases for the board (fee is the best-known amount; the
+        # source enum says whether it is actual or an estimate)
+        "fee": fee_tot["amount"],
+        "fee_status": fee_tot["source"],
         "fee_source": fee_tot["source"],
         "known_qty": _s(known),
         "unknown_qty": _s(unknown),
