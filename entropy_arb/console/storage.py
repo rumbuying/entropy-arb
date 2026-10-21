@@ -267,6 +267,9 @@ CREATE TABLE IF NOT EXISTS manual_fills (
   avg_px        TEXT NOT NULL,          -- Decimal string
   fee           TEXT,                   -- Decimal string, NULL = unknown
   fee_currency  TEXT,
+  fee_source    TEXT,                   -- venue_actual | unknown
+  closed_pnl    TEXT,                   -- venue-reported realized (optional)
+  closed_pnl_semantics TEXT,            -- gross (HL) | net (ARCUS)
   fill_ts       REAL NOT NULL,
   note          TEXT,
   created_by    TEXT,
@@ -751,6 +754,8 @@ class Storage:
     def insert_manual_fill(self, *, fill_key: str, scope: str, venue: str,
                            symbol: str, side: str, qty: str, avg_px: str,
                            fee: Optional[str], fee_currency: Optional[str],
+                           fee_source: Optional[str], closed_pnl: Optional[str],
+                           closed_pnl_semantics: Optional[str],
                            fill_ts: float, note: Optional[str],
                            created_by: Optional[str]) \
             -> Tuple[bool, Dict[str, Any]]:
@@ -760,11 +765,13 @@ class Storage:
         no-op, so an operator retry cannot double-count the position."""
         cur = self.db.execute(
             "INSERT OR IGNORE INTO manual_fills(fill_key, scope, venue,"
-            " symbol, side, qty, avg_px, fee, fee_currency, fill_ts, note,"
-            " created_by, created_ts)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " symbol, side, qty, avg_px, fee, fee_currency, fee_source,"
+            " closed_pnl, closed_pnl_semantics, fill_ts, note, created_by,"
+            " created_ts)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (fill_key, scope, venue, symbol, side, qty, avg_px, fee,
-             fee_currency, fill_ts, note, created_by, time.time()))
+             fee_currency, fee_source, closed_pnl, closed_pnl_semantics,
+             fill_ts, note, created_by, time.time()))
         self.db.commit()
         row = self.db.execute(
             "SELECT * FROM manual_fills WHERE fill_key=?",

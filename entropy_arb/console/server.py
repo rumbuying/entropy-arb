@@ -1804,29 +1804,25 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         return (profile or "", (symbol or "").upper(), hedge or "",
                 base or "", mode or "")
 
-    def _leg_scope(venue_kind: str, dex: str = "") -> str:
-        """Account scope label for one leg. This is a VENUE scope, not a
-        real account id: HL's main dex and hl:io are merged upstream, so
-        the label matches what account_equity / /api/accounts record."""
+    def _leg_scope(venue_kind: str, role: str = "base") -> str:
+        """Account scope label for one leg — the EXACT string `/api/accounts`
+        and `account_equity` record, so the account page cross-reference and
+        `ledger.by_venue` can join on it (R-07 hard contract)."""
+        from .venues import exchange_of
         vk = (venue_kind or "").strip().lower()
-        if vk == "hl":
-            d = (dex or "io").strip() or "io"
-            return "HL(io)" if d == "io" else f"HL({d})"
         if vk == "tradexyz":
-            return "HL(xyz)"
+            vk, role = "hl", "hedge"
         try:
-            return venue_registry.spec(vk).display
+            spec = venue_registry.spec(vk)
+            return exchange_of(spec.label_for(role))
         except Exception:
             return venue_kind or "?"
 
     def _scopes_for_line(profile: str, base: str, hedge: str) -> list:
         """Account scopes a line's two legs report into (venue scope)."""
-        from .venues import load_profile_yaml
-        raw = load_profile_yaml(supervisor.profiles_dir, profile)
-        dex = ((raw.get("entropy") or {}).get("dex") or "").strip()
-        h = "hl" if hedge == "tradexyz" else (hedge or "")
-        hdex = "xyz" if hedge == "tradexyz" else (dex or "io")
-        out = [_leg_scope(base or "hl", dex), _leg_scope(h, hdex)]
+        out = [_leg_scope(base or "hl", "base")]
+        if hedge:
+            out.append(_leg_scope(hedge, "hedge"))
         return list(dict.fromkeys(out))
 
     def _line_state_view(snap: dict) -> dict:
@@ -1956,9 +1952,12 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
                     }
             except Exception:
                 start_snapshot = None
+            leg_scopes = {leg: (specs.get(leg) or {}).get("scope")
+                          for leg in ("base", "hedge")}
             return compute(fills=fills, anchors=anchors,
                            day_start_ts=day_start, now_ts=now,
-                           start_snapshot=start_snapshot)
+                           start_snapshot=start_snapshot,
+                           leg_scopes=leg_scopes)
         except Exception:
             log.exception("pnl ledger failed for %s", strategy_id)
             return {**empty, "reason": "error"}
@@ -2186,6 +2185,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             "symbol": row.get("symbol"), "side": row.get("side"),
             "qty": row.get("qty"), "avg_px": row.get("avg_px"),
             "fee": row.get("fee"), "fee_currency": row.get("fee_currency"),
+            "fee_source": row.get("fee_source"),
+            "closed_pnl": row.get("closed_pnl"),
+            "closed_pnl_semantics": row.get("closed_pnl_semantics"),
             "fill_ts": row.get("fill_ts"), "note": row.get("note"),
             "created_by": row.get("created_by"),
             "created_ts": row.get("created_ts"),
@@ -2258,6 +2260,26 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         if fee is not None and fee < 0:
             return _bad("fee must be >= 0 when provided")
         fee_currency = str(payload.get("fee_currency") or "USD")
+        fee_source = str(payload.get("fee_source") or
+                         ("venue_actual" if fee is not None else "unknown"))
+        if fee_source not in ("venue_actual", "unknown"):
+            return _bad("fee_source must be venue_actual or unknown")
+        # optional venue-reported realized for this fill: needed when our
+        # replay has no cost basis left (position flattened to zero). The
+        # venue's closedPnl semantics differ (brief contract 2): explicit,
+        # defaulted by scope for the two known conventions.
+        closed_pnl = D(payload.get("closed_pnl")) \
+            if payload.get("closed_pnl") not in (None, "") else None
+        closed_pnl_semantics = str(
+            payload.get("closed_pnl_semantics") or "").strip().lower() or None
+        if closed_pnl is not None:
+            if closed_pnl_semantics is None:
+                closed_pnl_semantics = {"HL(IO)": "gross",
+                                        "ARCUS": "net"}.get(
+                                            scope.upper())
+            if closed_pnl_semantics not in ("gross", "net"):
+                return _bad("closed_pnl_semantics must be gross or net "
+                            "(required for this venue)")
         try:
             fill_ts = float(payload.get("ts"))
         except (TypeError, ValueError):
@@ -2279,8 +2301,11 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             side=side, qty=format(qty.normalize(), "f"),
             avg_px=format(avg_px.normalize(), "f"),
             fee=(format(fee.normalize(), "f") if fee is not None else None),
-            fee_currency=fee_currency, fill_ts=fill_ts, note=note,
-            created_by=created_by)
+            fee_currency=fee_currency, fee_source=fee_source,
+            closed_pnl=(format(closed_pnl.normalize(), "f")
+                        if closed_pnl is not None else None),
+            closed_pnl_semantics=closed_pnl_semantics,
+            fill_ts=fill_ts, note=note, created_by=created_by)
         audit(f"manual fill {'recorded' if inserted else 'duplicate'}: "
               f"scope={scope} {symbol}/{side} qty={format(qty.normalize(), 'f')} "
               f"px={format(avg_px.normalize(), 'f')} ts={fill_ts:.0f} "

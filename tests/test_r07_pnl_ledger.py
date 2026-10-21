@@ -47,10 +47,12 @@ def D(x):
     return Decimal(str(x))
 
 
-def _fill(ts, side, qty, price, fee=None):
+def _fill(ts, side, qty, price, fee=None, pnl_gross=None):
     return {"ts": ts, "seq": 1, "side": side, "qty": D(qty),
             "price": None if price is None else D(price),
-            "fee": None if fee is None else D(fee)}
+            "fee": None if fee is None else D(fee),
+            "fee_est": None,
+            "pnl_gross": None if pnl_gross is None else D(pnl_gross)}
 
 
 def _compute(fills, anchors, start=None):
@@ -94,7 +96,8 @@ def test_one_known_anchor_is_enough_when_the_other_leg_has_no_fills():
 def test_no_anchor_is_null_not_zero():
     res = _compute({"base": [_fill(1500, "sell", "0.5", "110")]}, {})
     assert res["realized_today"] is None, res
-    assert res["reason"] == "no_anchor", res
+    assert res["reason"] == "no_ledger", res
+    assert res["legs"]["base"]["reason"] == "no_anchor", res
     assert D(res["unknown_qty"]) == D("0.5"), res
 
 
@@ -122,6 +125,7 @@ def test_unknown_price_fill_invalidates_basis():
                    start={"ts": 1100.0, "positions": {"base": 0}})
     assert D(res["unknown_qty"]) == D("1"), res
     assert D(res["realized_today"]) == 0, res
+    assert res["reason"] == "partial_unknown", res
 
 
 def test_chain_mismatch_when_external_fill_is_missing():
@@ -146,9 +150,21 @@ def test_chain_check_passes_with_recorded_external_fill():
     # the chain now closes (no chain_mismatch), but the inherited 1.1 lot's
     # cost basis is still unknown: both closes stay unknown, never guessed
     assert res["reason"] != "chain_mismatch", res
-    assert res["reason"] == "inherited_unknown", res
+    assert res["reason"] == "partial_unknown", res
+    assert res["legs"]["base"]["reason"] == "inherited_unknown", res
     assert D(res["unknown_qty"]) == D("1.1"), res
     assert D(res["realized_today"]) == 0, res
+
+
+def test_venue_reported_closed_pnl_covers_unknown_basis():
+    """A flattened position leaves no avg entry to replay from; the venue's
+    own closedPnl on the recorded manual fill is the authoritative figure."""
+    fills = {"base": [_fill(1200, "sell", "1", "110", pnl_gross="5")]}
+    res = _compute(fills, {"base": {"position": "0", "avg_entry": None}},
+                   start={"ts": 1100.0, "positions": {"base": 1}})
+    assert res["reason"] != "chain_mismatch", res
+    assert D(res["realized_today"]) == D("5"), res
+    assert D(res["unknown_qty"]) == 0, res
 
 
 # --------------------------------------------------------------- endpoints
@@ -275,12 +291,14 @@ def test_pnl_lines_ledger_and_manual_fill_backfill():
         # 2) record the operator's external fill → chain closes
         payload = {"venue": "hl", "symbol": "SNDK", "side": "buy",
                    "qty": "0.1", "avg_px": "1008", "ts": day + 4000,
-                   "note": "operator backfill"}
+                   "note": "operator backfill", "closed_pnl": "0.2",
+                   "closed_pnl_semantics": "gross"}
         status, created = asyncio.run(_req(env.app(), "POST",
                                            "/api/manual-fills", payload))
         assert status == 201, created
         assert created["inserted"] is True, created
         assert created["fill"]["scope"] == "HL(io)", created
+        assert created["fill"]["closed_pnl"] == "0.2", created
         # the hedge leg was closed by the same operator action
         status, other = asyncio.run(_req(env.app(), "POST",
                                          "/api/manual-fills", {
@@ -306,11 +324,18 @@ def test_pnl_lines_ledger_and_manual_fill_backfill():
         ledger = body["lines"][0]["ledger"]
         assert ledger["reason"] is None, ledger
         assert D(ledger["unknown_qty"]) == 0, ledger
-        # base: sold 0.1 @1010 (short, basis 1010), bought back @1008
-        # → +0.2; hedge: bought @1010, sold @1008 → −0.2 (hedged pair)
-        assert D(ledger["legs"]["base"]["realized"]) == D("0.2"), ledger
-        assert D(ledger["legs"]["hedge"]["realized"]) == D("-0.2"), ledger
+        # by_venue keys must line up with the line's account scopes
+        assert set(ledger["by_venue"]) == set(line["scopes"]), ledger
+        hv = ledger["by_venue"]["HL(io)"]
+        lv = ledger["by_venue"]["Lighter-RH"]
+        assert D(hv["realized_gross"]) == D("0.2"), ledger
+        assert D(lv["realized_gross"]) == D("-0.2"), ledger
+        # no fee was recorded on the manual fills; engine events only carry
+        # configured estimates → never labeled as actual charges
+        assert hv["fee_source"] in ("configured_estimate", "unknown"), hv
         assert D(ledger["realized_today"]) == 0, ledger
+        assert ledger["fee_total"]["source"] in (
+            "configured_estimate", "unknown"), ledger["fee_total"]
     finally:
         env.close()
 
@@ -331,6 +356,9 @@ def test_manual_fill_validation():
                  "qty": "1", "avg_px": "2", "ts": time.time() + 3600},
                 {"venue": "", "symbol": "SNDK", "side": "buy",
                  "qty": "1", "avg_px": "2", "ts": time.time()},
+                {"venue": "katana", "symbol": "HYPE", "side": "buy",
+                 "qty": "1", "avg_px": "2", "ts": time.time(),
+                 "closed_pnl": "1"},
         ):
             status, out = asyncio.run(_req(env.app(), "POST",
                                            "/api/manual-fills", bad))
