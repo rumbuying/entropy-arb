@@ -124,6 +124,54 @@ def test_expected_breakdown_consistent():
     assert exp["tolerance_usd"] == 0.05
 
 
+def test_arcus_manual_fill_matches_public_fills():
+    """NEAR 00:20 外部平仓 ARCUS 腿：tradeId 21752182 必须在公开成交里对上。"""
+    fx = load()
+    truth = fx["arcus_truth"]
+    manual = truth["manual_fill"]
+    rows = [f for f in truth["fills_today"]
+            if f["tradeId"] == manual["tradeId"]]
+    assert len(rows) == 1, "tradeId 21752182 未在 Arcus 公开成交中找到"
+    r = rows[0]
+    assert r["marketDisplayName"] == "NEAR-USD"
+    assert r["side"].upper() == "BUY"
+    assert abs(float(r["size"]) - 53.0) < 1e-9
+    assert abs(float(r["price"]) - 4.811) < 1e-9
+    assert abs(float(r["closedPnl"]) - manual["closedPnl"]) < 1e-6
+    assert abs(float(r["fee"]) - manual["fee"]) < 1e-6
+    assert abs(r["createdAt"] / 1e6 - manual["ts"]) < 0.01
+    assert manual["fee_source"] == "venue_actual"
+
+
+def test_arcus_truth_semantics_and_breakdown():
+    """ARCUS closedPnl 是「扣该笔 fee 的净额」，与 HL 的毛额口径不同。"""
+    fx = load()
+    truth, exp = fx["arcus_truth"], fx["expected"]["arcus_leg"]
+    assert abs(truth["closed_pnl_today"] - 11.642589) < 1e-6
+    assert abs(truth["fee_today"] - 0.224363) < 1e-6
+    assert abs(truth["gross_pnl_today"] - 11.866952) < 1e-6
+    # NET + fee = GROSS（内部自洽，证明"closedPnl 已含费"）
+    assert abs(truth["closed_pnl_today"] + truth["fee_today"]
+               - truth["gross_pnl_today"]) < 1e-6
+    # 与 HL 对比：HL 的 closedPnl 是毛额（fee 另计），不能用同一套口径
+    assert abs(fx["hl_truth"]["closed_pnl_today"]["SNDK"]
+               + fx["hl_truth"]["fee_today"]["SNDK"]
+               - fx["hl_truth"]["closed_pnl_today"]["SNDK"]
+               - fx["hl_truth"]["fee_today"]["SNDK"]) < 1e-12
+    # 补录 + 引擎事件部分自洽
+    for k in ("manual_net_realized", "manual_fee", "engine_net_realized",
+              "engine_fee"):
+        assert k in exp, k
+    assert abs(exp["manual_net_realized"] + exp["engine_net_realized"]
+               - truth["closed_pnl_today"]) < 1e-6
+    assert abs(exp["manual_fee"] + exp["engine_fee"]
+               - truth["fee_today"]) < 1e-6
+    # NEAR 的 LIGHTER 腿没有成交历史接口 -> manual_fills 里只允许 ARCUS 半腿
+    near = [m for m in fx["manual_fills"] if m["symbol"] == "NEAR"]
+    assert [m["venue"] for m in near] == ["ARCUS"], near
+    assert near[0]["fee_source"] == "venue_actual"
+
+
 def test_event_chain_complete_enough_for_replay():
     """今天三条实盘线的 M3a 事件都在；fill_id 唯一；费来源标注清楚。"""
     fx = load()
