@@ -157,6 +157,20 @@ def test_chain_check_passes_with_recorded_external_fill():
     assert D(res["unknown_qty"]) == D("1.1"), res
 
 
+def test_unpriced_fill_gap_is_chain_mismatch():
+    """Legacy no-price fills do not excuse an unexplained start-of-day gap:
+    a missing recorded fill makes the chain untrusted (Chief/QA ruling that
+    NEAR must show — rather than a partial number)."""
+    fills = {"base": [_fill(1200, "buy", "1", None),
+                      _fill(1400, "sell", "0.5", "105")]}
+    res = _compute(fills, {"base": {"position": "0", "avg_entry": None}},
+                   start={"ts": 1100.0, "positions": {"base": 0}})
+    # snapshot says flat, the known fills imply the day started short 0.5 →
+    # one quantity-changing fill is missing → chain_mismatch, not partial
+    assert res["reason"] == "chain_mismatch", res
+    assert res["realized_today"] is None, res
+
+
 def test_venue_reported_closed_pnl_covers_unknown_basis():
     """A flattened position leaves no avg entry to replay from; the venue's
     own closedPnl on the recorded manual fill is the authoritative figure."""

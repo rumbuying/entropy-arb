@@ -455,24 +455,19 @@ def _leg_ledger(fills: list, anchor: Dict[str, Any],
             out["realized"] = None
             out["reason"] = "chain_mismatch"
             return out
-    # 4) independent start-of-day position cross-check (valuation snapshot)
-    has_unpriced = any(f["price"] is None for f in fills)
+    # 4) independent start-of-day position cross-check (valuation snapshot).
+    # Any unexplained gap means a fill record is missing (typically an
+    # external trade not yet backfilled) → the chain is not trusted, so the
+    # realized number is withheld instead of silently under/overstated.
     if start_expected is not None and pos != start_expected:
         gap = abs(pos - start_expected)
         out["start_position_expected"] = start_expected
         tol = max(POS_TOL_ABS, abs(start_expected) * POS_TOL_REL)
         if gap > tol:
-            if has_unpriced:
-                # the leg already carries untrusted quantity (legacy fills
-                # without a price) — the gap is one more unknown, not proof
-                # that a *priced* external trade is missing.
-                out["unknown_qty"] += gap
-                out["reason"] = "partial_unknown"
-            else:
-                out["chain_mismatch"] = True
-                out["realized"] = None
-                out["reason"] = "chain_mismatch"
-                return out
+            out["chain_mismatch"] = True
+            out["realized"] = None
+            out["reason"] = "chain_mismatch"
+            return out
     if out["unknown_qty"] > ZERO:
         out["reason"] = ("inherited_unknown" if lost_basis
                          else "partial_unknown")
