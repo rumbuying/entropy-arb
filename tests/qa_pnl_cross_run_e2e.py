@@ -207,9 +207,8 @@ async def run_e2e():
               near and cell(near[4]) == "$0.00", near)
         check("C-04 RESTART（今日成交全在旧 run）=$4.00，非 0",
               restart and cell(restart[4]) == "$4.00", restart)
-        check("C-05 页面说明含“跨 run / 分段 / 逐段倒推”口径",
-              "跨 run" in body or "所有 run" in body or "分段" in body,
-              body[:400])
+        check("C-05 页面说明含账本优先口径（R-07 后文案）",
+              "账本口径" in body or "成交账本" in body, body[:400])
         check("C-06 TRUNC 全不可估 -> — + 成交窗口被截断",
               trunc and cell(trunc[4]) == "—"
               and "成交窗口被截断" in " ".join(trunc), trunc)
@@ -240,9 +239,10 @@ async def run_e2e():
         body_s = await page.inner_text("body")
         kpis_s = await page.eval_on_selector_all(
             ".kpi-strip .kpi", "els => els.map(e => e.innerText)")
-        est = [b for b in kpis_s if "策略估算" in b]
+        est = [b for b in kpis_s if "策略" in b
+               and ("估算" in b or "锁定" in b)]
         # ANTH(-3.584874)+SNDK(0.601774)+NEAR(0)+RESTART(4)+TRUNCPART(4)
-        check("C-10 总览策略估算=跨 run 合计 +$5.02（非 $0）",
+        check("C-10 总览策略锁定=跨 run 合计 +$5.02（非 $0）",
               bool(est) and "+$5.02" in est[0]
               and "部分线不可估" in body_s,
               f"kpis={kpis_s}")

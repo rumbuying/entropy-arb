@@ -247,14 +247,16 @@ async def run_e2e():
         body_s = await page.inner_text("body")
         kpis_s = kpi_values(await page.eval_on_selector_all(
             ".kpi-strip .kpi", "els => els.map(e => e.innerText)"))
-        est = [v for k, v in kpis_s.items() if "策略估算" in k]
+        est = [v for k, v in kpis_s.items() if "策略" in k
+               and ("估算" in k or "锁定" in k)]
         # ANTH(-2.544) + PART(4) + NORM(5) = 6.456 → $6.46
         check("E-12 总览页策略估算=seeded 合计 $6.46（非 $0）",
               bool(est) and est[0] in ("$6.46", "+$6.46")
               and "部分线不可估" in body_s,
               f"kpis={kpis_s} body={body_s[:300]}")
-        check("E-12b 总览页保留账户真值/策略估算两栏",
-              "账户真值" in body_s and "策略估算" in body_s)
+        check("E-12b 总览页保留账户真值/策略锁定两栏",
+              "账户真值" in body_s
+              and ("策略估算" in body_s or "策略锁定" in body_s))
         await page.goto(f"{base}/console-v2?token={TOKEN}#/accounts",
                         wait_until="domcontentloaded")
         await page.wait_for_timeout(2500)

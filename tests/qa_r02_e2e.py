@@ -323,8 +323,9 @@ async def run_e2e():
         page = await ctx.new_page()
         await goto(page, base, "strategies", "text=策略")
         body = await page.inner_text("body")
-        check("U-06a 总览含账户真值/策略估算两栏",
-              "账户真值" in body and "策略估算" in body, body[:400])
+        check("U-06a 总览含账户真值/策略锁定（账本优先）两栏",
+              "账户真值" in body
+              and ("策略估算" in body or "策略锁定" in body), body[:400])
         check("U-06b 净收益仍标待核对", "待核对" in body, body[:400])
         await ctx.close()
 
