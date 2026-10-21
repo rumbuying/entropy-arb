@@ -1885,6 +1885,84 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             "trades": data["rows"],
         }
 
+    # ---------------------------------------------------- R-07 today ledger
+
+    async def _line_anchors(profile, base, hedge, symbol):
+        """Exchange truth for one line: current position + avg entry per leg.
+
+        This is the cost anchor of the fill-ledger replay (brief R-07a): a
+        position inherited from before today has no cost basis in our own
+        records, so the venue is the only authority. Read-only REST probe
+        (60s cached) — never an order."""
+        from .pnl_ledger import leg_specs
+        from . import ops as ops_mod
+        from .venues import load_profile_yaml
+        raw = load_profile_yaml(supervisor.profiles_dir, profile)
+        specs = leg_specs(raw, base, hedge, symbol)
+
+        async def _one(spec):
+            if not spec:
+                return {}
+            try:
+                d = await ops_mod.probe_account_cached(
+                    spec["probe_venue"], spec["symbol"],
+                    env_file=secrets.env_path, role=spec["probe_role"],
+                    dex=spec["probe_dex"])
+            except Exception as e:             # probe must never stall the board
+                return {"position": None, "avg_entry": None,
+                        "error": repr(e)}
+            return {"position": d.get("position"),
+                    "avg_entry": d.get("entry_px"),
+                    "error": d.get("error"),
+                    "source": "venue_probe"}
+
+        base_a, hedge_a = await asyncio.gather(
+            _one(specs.get("base")), _one(specs.get("hedge")))
+        return specs, {"base": base_a or {}, "hedge": hedge_a or {}}
+
+    async def _line_ledger(profile, base, hedge, symbol, strategy_id,
+                           day_start, now):
+        """R-07a ledger-method realized-today for ONE line (read-only)."""
+        from .pnl_ledger import collect_fills, compute
+        empty = {"method": "ledger-replay-v1", "realized_today": None,
+                 "known_qty": None, "unknown_qty": None, "reason": None,
+                 "legs": {}, "fees_included": False, "fee_status": None,
+                 "day_start_ts": day_start, "as_of": now}
+        if not strategy_id:
+            return {**empty, "reason": "no_strategy"}
+        try:
+            specs, anchors = await _line_anchors(profile, base, hedge,
+                                                 symbol)
+            events = storage.events_for_strategy(
+                strategy_id, start_ts=day_start, end_ts=now + 1.0,
+                limit=100000)
+            manual = storage.manual_fills(start_ts=day_start,
+                                          end_ts=now + 1.0)
+            fills = collect_fills(events, manual, specs,
+                                  line_symbol=symbol)
+            # independent position record near midnight (valuation series)
+            # for the chain cross-check: derive the expected start-of-day
+            # position for both legs, adjusting across fills already known
+            start_snapshot = None
+            try:
+                v = storage.first_valuation_after(strategy_id, day_start)
+                if v is not None and v["ts"] - day_start <= 1800.0:
+                    pos = json.loads(v["payload_json"] or "{}").get(
+                        "positions") or {}
+                    start_snapshot = {
+                        "ts": v["ts"],
+                        "positions": {"base": pos.get("entropy"),
+                                      "hedge": pos.get("hedge")},
+                    }
+            except Exception:
+                start_snapshot = None
+            return compute(fills=fills, anchors=anchors,
+                           day_start_ts=day_start, now_ts=now,
+                           start_snapshot=start_snapshot)
+        except Exception:
+            log.exception("pnl ledger failed for %s", strategy_id)
+            return {**empty, "reason": "error"}
+
     async def api_pnl_lines(request):
         """Estimator-only P&L lines (R-01): every running worker plus the
         most recent run of lines that stopped inside the lookback window —
@@ -2066,10 +2144,151 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
             best.values(),
             key=lambda c: (0 if c[1]["status"] == "running" else 1,
                            -float(c[0] or 0.0)))]
+        # R-07a: attach the fill-ledger realized-today per LIVE line. The
+        # board shows it ahead of the old seeded estimate (which cannot see
+        # hedge fills / external trades and produced the all-"—" incident).
+        ledger_lines = [p for p in lines if p.get("mode") == "live"]
+        if ledger_lines:
+            results = await asyncio.gather(*(
+                _line_ledger(p["profile"], p["base"], p["hedge"],
+                             p["symbol"], p.get("strategy_id"),
+                             day_start, now)
+                for p in ledger_lines), return_exceptions=True)
+            for p, res in zip(ledger_lines, results):
+                if isinstance(res, dict):
+                    p["ledger"] = res
+                else:
+                    p["ledger"] = None
+        for p in lines:
+            p.setdefault("ledger", None)
         return web.json_response({
             "schema_version": 1, "as_of": now, "timezone": tzname,
             "day_start_ts": day_start, "lines": lines,
         })
+
+    # ------------------------------------------------- manual fill backfill
+
+    def _norm_scope(raw: str) -> str:
+        """Venue key or label → the account scope label used by events."""
+        from .venues import exchange_of
+        v = (raw or "").strip()
+        low = v.lower()
+        try:
+            return exchange_of(venue_registry.spec(low).label_for("base"))
+        except Exception:
+            pass
+        return exchange_of(v.upper())
+
+    def _manual_fill_view(row: dict) -> dict:
+        return {
+            "id": row.get("id"), "fill_key": row.get("fill_key"),
+            "scope": row.get("scope"), "venue": row.get("venue"),
+            "symbol": row.get("symbol"), "side": row.get("side"),
+            "qty": row.get("qty"), "avg_px": row.get("avg_px"),
+            "fee": row.get("fee"), "fee_currency": row.get("fee_currency"),
+            "fill_ts": row.get("fill_ts"), "note": row.get("note"),
+            "created_by": row.get("created_by"),
+            "created_ts": row.get("created_ts"),
+        }
+
+    async def api_manual_fills(request):
+        """GET /api/manual-fills — operator-executed fills recorded today
+        (read-only; the ledger consumes the same rows)."""
+        from .pnl_ledger import D
+        q = request.query
+        try:
+            start = float(q["start"]) if q.get("start") else None
+        except ValueError:
+            return web.json_response(
+                {"error": "invalid_range", "message": "bad start"},
+                status=400)
+        try:
+            end = float(q["end"]) if q.get("end") else None
+        except ValueError:
+            return web.json_response(
+                {"error": "invalid_range", "message": "bad end"}, status=400)
+        try:
+            lim = int(q.get("limit", "200"))
+        except ValueError:
+            lim = 200
+        lim = max(1, min(lim, 1000))
+        rows = storage.manual_fills(start_ts=start, end_ts=end, limit=lim)
+        return web.json_response({
+            "schema_version": 1, "count": len(rows),
+            "fills": [_manual_fill_view(r) for r in rows],
+        })
+
+    async def manual_fill_create(request):
+        """POST /api/manual-fills — record an externally executed fill.
+
+        Engine hedge fills / taker fills are already in imported events;
+        this is ONLY for trades the engine did not execute (operator
+        reduce-only / flatten). Idempotent by fill_key so a retry cannot
+        double-count; append-only (corrections are compensating fills).
+        """
+        from .pnl_ledger import D
+        payload = await body(request)
+        if not isinstance(payload, dict):
+            return web.json_response(
+                {"error": "invalid_payload", "message": "JSON object needed"},
+                status=400)
+
+        def _bad(msg):
+            return web.json_response(
+                {"error": "invalid_payload", "message": msg}, status=400)
+
+        venue = str(payload.get("venue") or "").strip()
+        if not venue:
+            return _bad("venue is required")
+        scope = _norm_scope(venue)
+        symbol = str(payload.get("symbol") or "").strip().upper()
+        if not symbol:
+            return _bad("symbol is required")
+        side = str(payload.get("side") or "").strip().lower()
+        if side not in ("buy", "sell"):
+            return _bad("side must be buy or sell")
+        qty = D(payload.get("qty"))
+        if qty is None or qty <= 0:
+            return _bad("qty must be > 0")
+        avg_px = D(payload.get("avg_px"))
+        if avg_px is None or avg_px <= 0:
+            return _bad("avg_px must be > 0")
+        fee = D(payload.get("fee")) if payload.get("fee") not in (None, "") \
+            else None
+        if fee is not None and fee < 0:
+            return _bad("fee must be >= 0 when provided")
+        fee_currency = str(payload.get("fee_currency") or "USD")
+        try:
+            fill_ts = float(payload.get("ts"))
+        except (TypeError, ValueError):
+            return _bad("ts (unix seconds) is required")
+        now_ts = time.time()
+        if fill_ts > now_ts + 300 or fill_ts < now_ts - 60 * 86400:
+            return _bad("ts must be within the last 60 days and not future")
+        note = str(payload.get("note") or "")[:500]
+        created_by = str(payload.get("created_by") or "console")[:80]
+        fill_key = str(payload.get("fill_key") or "").strip()[:128]
+        if not fill_key:
+            import hashlib
+            key_src = (f"{scope}|{symbol}|{side}|{qty}|{avg_px}|"
+                       f"{fill_ts:.3f}")
+            fill_key = "mf-" + hashlib.sha256(
+                key_src.encode()).hexdigest()[:32]
+        inserted, row = storage.insert_manual_fill(
+            fill_key=fill_key, scope=scope, venue=venue, symbol=symbol,
+            side=side, qty=format(qty.normalize(), "f"),
+            avg_px=format(avg_px.normalize(), "f"),
+            fee=(format(fee.normalize(), "f") if fee is not None else None),
+            fee_currency=fee_currency, fill_ts=fill_ts, note=note,
+            created_by=created_by)
+        audit(f"manual fill {'recorded' if inserted else 'duplicate'}: "
+              f"scope={scope} {symbol}/{side} qty={format(qty.normalize(), 'f')} "
+              f"px={format(avg_px.normalize(), 'f')} ts={fill_ts:.0f} "
+              f"key={fill_key}")
+        return web.json_response(
+            {"schema_version": 1, "inserted": inserted,
+             "fill": _manual_fill_view(row) if row else None},
+            status=201 if inserted else 200)
 
     def _probe_candidates() -> dict:
         """group -> probe params, derived from every known worker record
@@ -2746,6 +2965,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
     app.router.add_get("/api/workers/{wid}/logs", worker_logs)
     app.router.add_get("/api/workers/{wid}/trades", worker_trades)
     app.router.add_get("/api/pnl/lines", api_pnl_lines)
+    # R-07: operator-recorded external fills (ledger position chain)
+    app.router.add_get("/api/manual-fills", api_manual_fills)
+    app.router.add_post("/api/manual-fills", manual_fill_create)
     app.router.add_post("/api/workers/{wid}/stop", worker_stop)
     app.router.add_post("/api/workers/{wid}/restart", worker_restart)
     app.router.add_delete("/api/workers/{wid}", worker_delete)

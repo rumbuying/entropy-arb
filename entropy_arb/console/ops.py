@@ -103,7 +103,10 @@ async def probe_account(venue: str, symbol: str, *, env_file: str,
     signer, fetch_equity, fetch_position; never sends orders."""
     _load_dotenv(env_file)
     out: dict = {"equity": None, "free": None, "position": None,
-                 "error": None, "symbol": (symbol or "").upper()}
+                 # R-07 cost anchor: the venue's avg entry price for this
+                 # market (None when flat / adapter has no entry price).
+                 "entry_px": None, "error": None,
+                 "symbol": (symbol or "").upper()}
     session = aiohttp.ClientSession()
     try:
         v = _make_venue(_diag_conf(venue, symbol, role, dex, env_file),
@@ -115,6 +118,8 @@ async def probe_account(venue: str, symbol: str, *, env_file: str,
             out["equity"] = eq[0]
             out["free"] = eq[1]
         out["position"] = await asyncio.wait_for(v.fetch_position(), 15)
+        entry = getattr(v, "entry_px", None)
+        out["entry_px"] = float(entry) if entry is not None else None
         return out
     except Exception as e:
         out["error"] = repr(e)

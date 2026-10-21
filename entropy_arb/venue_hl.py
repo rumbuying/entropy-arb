@@ -366,9 +366,13 @@ class HLVenue:
             if pos.get("coin") == self.coin:
                 self.liq_px = _num(pos.get("liquidationPx"))
                 self.unrealized = _num(pos.get("unrealizedPnl"))
+                # R-07 read-only telemetry: avg entry of the open position,
+                # used as the cost anchor when replaying the fill ledger.
+                self.entry_px = _num(pos.get("entryPx"))
                 return float(pos.get("szi") or 0.0)
         self.liq_px = None
         self.unrealized = None
+        self.entry_px = None
         return 0.0
 
     async def close(self) -> None:

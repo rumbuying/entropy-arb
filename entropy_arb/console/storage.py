@@ -22,7 +22,7 @@ import os
 import sqlite3
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Migration 1: phase-A ops tables. Later phases append to MIGRATIONS; the
 # highest applied version lives in PRAGMA user_version (and _migrations).
@@ -247,6 +247,33 @@ CREATE TABLE IF NOT EXISTS account_equity (
 );
 CREATE INDEX IF NOT EXISTS idx_account_equity
   ON account_equity(scope, ts);
+"""),
+    # Migration 7 (R-07): fills executed OUTSIDE the engine (operator
+    # reduce-only / flatten via venue tools). The engine's own event log
+    # never sees them, so the today-PnL ledger cannot rebuild the position
+    # chain without an operator recording them here. Append-only, deduped
+    # by fill_key (idempotent re-posts), never editable — a wrong row is
+    # corrected by recording the compensating fill, so the history stays
+    # auditable.
+    (7, """
+CREATE TABLE IF NOT EXISTS manual_fills (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  fill_key      TEXT NOT NULL UNIQUE,   -- idempotency key
+  scope         TEXT NOT NULL,          -- account scope (venue group label)
+  venue         TEXT NOT NULL,          -- venue key or label as recorded
+  symbol        TEXT NOT NULL,
+  side          TEXT NOT NULL,          -- buy | sell
+  qty           TEXT NOT NULL,          -- Decimal string
+  avg_px        TEXT NOT NULL,          -- Decimal string
+  fee           TEXT,                   -- Decimal string, NULL = unknown
+  fee_currency  TEXT,
+  fill_ts       REAL NOT NULL,
+  note          TEXT,
+  created_by    TEXT,
+  created_ts    REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_manual_fills_scope_ts
+  ON manual_fills(scope, symbol, fill_ts);
 """),
 ]
 
@@ -718,6 +745,46 @@ class Storage:
             "SELECT * FROM account_equity WHERE scope=? AND ts >= ?"
             " ORDER BY ts LIMIT 1", (scope, ts)).fetchone()
         return dict(r) if r else None
+
+    # -------------------------------------------------------- manual fills
+
+    def insert_manual_fill(self, *, fill_key: str, scope: str, venue: str,
+                           symbol: str, side: str, qty: str, avg_px: str,
+                           fee: Optional[str], fee_currency: Optional[str],
+                           fill_ts: float, note: Optional[str],
+                           created_by: Optional[str]) \
+            -> Tuple[bool, Dict[str, Any]]:
+        """Record one externally executed fill, idempotent by fill_key.
+
+        Returns (inserted, row). A re-post of the same logical fill is a
+        no-op, so an operator retry cannot double-count the position."""
+        cur = self.db.execute(
+            "INSERT OR IGNORE INTO manual_fills(fill_key, scope, venue,"
+            " symbol, side, qty, avg_px, fee, fee_currency, fill_ts, note,"
+            " created_by, created_ts)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (fill_key, scope, venue, symbol, side, qty, avg_px, fee,
+             fee_currency, fill_ts, note, created_by, time.time()))
+        self.db.commit()
+        row = self.db.execute(
+            "SELECT * FROM manual_fills WHERE fill_key=?",
+            (fill_key,)).fetchone()
+        return cur.rowcount > 0, (dict(row) if row else {})
+
+    def manual_fills(self, *, start_ts: Optional[float] = None,
+                     end_ts: Optional[float] = None,
+                     limit: int = 1000) -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM manual_fills WHERE 1=1"
+        args: list = []
+        if start_ts is not None:
+            sql += " AND fill_ts >= ?"
+            args.append(start_ts)
+        if end_ts is not None:
+            sql += " AND fill_ts < ?"
+            args.append(end_ts)
+        sql += " ORDER BY fill_ts, id LIMIT ?"
+        args.append(limit)
+        return [dict(r) for r in self.db.execute(sql, args)]
 
     def latest_valuation_before(self, strategy_id: str, ts: float) \
             -> Optional[Dict[str, Any]]:

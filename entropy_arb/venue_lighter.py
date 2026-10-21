@@ -431,9 +431,13 @@ class LighterVenue:
             if int(p.get("market_id", -1)) == self.market_id:
                 self.liq_px = _num(p.get("liquidation_price"))
                 self.unrealized = _num(p.get("unrealized_pnl"))
+                # R-07 read-only telemetry: avg entry of the open position
+                # (Lighter account positions expose avg_entry_price).
+                self.entry_px = _num(p.get("avg_entry_price"))
                 return float(p.get("sign") or 1.0) * float(p.get("position") or 0.0)
         self.liq_px = None
         self.unrealized = None
+        self.entry_px = None
         return 0.0
 
     async def close(self) -> None:
