@@ -5,23 +5,45 @@ feature remains gated until rearming and independent failure handling exist.
 """
 import asyncio
 import json
+import time
 from decimal import Decimal, localcontext
 
 from . import models, store
 from .adapters.base import AdapterError
 from .hl_rate import critical_market_snapshot,critical_position_snapshot
 
+# Operator availability decision (2026-11-03): a momentary guardian blind
+# spot used to protective-close live grids immediately. A blind guardian
+# does not remove protection — the native stop rests on the venue
+# independently and the send gates (bulk_protection_manager.final_gate,
+# operator_trial) still refuse new risk while blind — so brief blindness
+# now keeps the grid running. Only blindness persisting the full grace
+# window counts as lost oversight and exits. Pair with GUARDIAN_FRESHNESS_S
+# in watchdog.py, which widens the underlying freshness race.
+GUARDIAN_EXIT_GRACE_S=60
+
 
 class ServiceCoverageManager:
     def __init__(self, runtime):
         self.rt = runtime
+        self.guardian_blind_since = {}
 
     def policy(self, grid_id):
         protection = self.rt.config(grid_id).protection
         return protection.service_coverage if protection else None
 
+    def guardian_blind(self, grid_id):
+        """True only once the guardian has been unhealthy for the whole grace."""
+        status = self.rt.service_guardian_status()
+        if isinstance(status, dict) and status.get('healthy'):
+            self.guardian_blind_since.pop(grid_id, None)
+            return False
+        now = time.monotonic()
+        first = self.guardian_blind_since.setdefault(grid_id, now)
+        return (now - first) >= GUARDIAN_EXIT_GRACE_S
+
     def guardian_code(self, grid_id):
-        if self.policy(grid_id) is not None and not self.rt.service_guardian_status().get('healthy'):
+        if self.policy(grid_id) is not None and self.guardian_blind(grid_id):
             return 'PROTECTION_SERVICE_WATCHDOG_UNAVAILABLE'
         return None
 

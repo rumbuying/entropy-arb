@@ -356,8 +356,11 @@ class BulkProtectionManager:
 
     def check_lease(self,gid,*,now_ms,pending=None):
         if pending is None and not self.rt.protection_lease.required(gid):return None
-        guardian=self.rt.service_guardian_status()
-        if not isinstance(guardian,dict) or guardian.get('healthy') is not True:
+        if self.rt.service_coverage.guardian_blind(gid):
+            # Persistent guardian blindness only (GUARDIAN_EXIT_GRACE_S): a
+            # short blind spot keeps the grid running — the native stop is
+            # resting on the venue and the opening-order gate still refuses
+            # new risk while blind.
             return 'PROTECTION_SERVICE_WATCHDOG_UNAVAILABLE'
         return self.rt.store.read(lambda c:self._lease_code(c,gid,now_ms=now_ms,pending=pending))
 

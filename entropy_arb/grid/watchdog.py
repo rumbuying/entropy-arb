@@ -70,6 +70,17 @@ def valid_identity(value,db):
         and value.get('db')==str(Path(db).resolve()))
 
 
+# Operator availability decision (2026-11-03): the previous 3-second
+# freshness race declared the guardian unhealthy the moment a busy event
+# loop or a slow check let either stamp lag, and the protection watch then
+# protective-closed a live, fully protected grid (protection_gap_exit_
+# requested, PROTECTION_SERVICE_WATCHDOG_UNAVAILABLE). Both writers publish
+# every ~1s, so 15s still detects a dead worker or watchdog quickly while
+# tolerating load stalls. See GUARDIAN_EXIT_GRACE_S in service_coverage.py
+# for the second half of the relaxation.
+GUARDIAN_FRESHNESS_S=15
+
+
 def guardian_health(heartbeat_file,db,*,now=None):
     """Small runtime-facing projection; never exposes paths or credentials."""
     def unavailable(reason,**details):
@@ -93,7 +104,7 @@ def guardian_health(heartbeat_file,db,*,now=None):
             if type(stamp) not in (int,float) or not math.isfinite(stamp):return unavailable('INVALID_TIMESTAMP')
             age=now-stamp;ages[name+'_age_ms']=round(age*1000,3)
             if age<0:return unavailable(name.upper()+'_IN_FUTURE',**ages)
-            if age>=3:return unavailable(name.upper()+'_STALE',**ages)
+            if age>=GUARDIAN_FRESHNESS_S:return unavailable(name.upper()+'_STALE',**ages)
         stamps=state.get('restarts',[])
         if not isinstance(stamps,list) or any(type(s) not in (int,float) or not math.isfinite(s) for s in stamps):return unavailable('INVALID_RESTART_HISTORY')
         remaining=3-sum(0<=now-stamp<3600 for stamp in stamps)

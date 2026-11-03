@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from dataclasses import replace
 from decimal import Decimal
 
@@ -8,6 +9,7 @@ import pytest
 from entropy_arb.grid import models
 from entropy_arb.grid.adapters.base import AdapterError, LookupResult
 from entropy_arb.grid.runtime import GridRuntime
+from entropy_arb.grid.service_coverage import GUARDIAN_EXIT_GRACE_S
 from test_grid_position_protection import setup
 from test_grid_config import base_config
 
@@ -88,6 +90,12 @@ def test_guardian_loss_blocks_signed_orders_and_queues_exit_without_waiting_for_
                     'reduce_only':False,'epoch':epoch,'qty_base':qty,'price':'100000'}
             rt.live_risk.permits[intent['intent_id']]={'started':rt.live_risk.clock()}
             rt.service_guardian_status=lambda:{'healthy':False,'code':'WATCHDOG_UNAVAILABLE'}
+            # Grace (GUARDIAN_EXIT_GRACE_S): a fresh guardian blind spot must
+            # NOT block signed orders or queue an exit — the native stop rests
+            # on the venue and the opening gates own the send refusal.
+            assert rt.service_coverage.guardian_code(gid) is None
+            # Persistent blindness restores the protective behavior unchanged:
+            rt.service_coverage.guardian_blind_since[gid]=time.monotonic()-GUARDIAN_EXIT_GRACE_S-1
             async def unavailable():raise AssertionError('guardian loss must not wait for native reads')
             venue.market_snapshot=unavailable
             expected='PROTECTION_SERVICE_WATCHDOG_UNAVAILABLE'

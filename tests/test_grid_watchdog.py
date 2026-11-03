@@ -15,12 +15,12 @@ from test_grid_service_coverage import configured
 
 @pytest.mark.parametrize('failure',[None,'stale','instance','phase','budget','cooldown','future','permissions'])
 def test_runtime_guardian_health_requires_fresh_same_instance_and_available_restart_budget(tmp_path,failure):
-    from entropy_arb.grid.watchdog import guardian_health
+    from entropy_arb.grid.watchdog import guardian_health,GUARDIAN_FRESHNESS_S
     path=tmp_path/'private'/'grid-runtime-heartbeat.json'
     value=heartbeat(tmp_path,pid=os.getpid(),monotonic=100)
     state={'status':'healthy','instance':value['instance'],'pid':os.getpid(),
            'checked_monotonic':100,'restarts':[]}
-    if failure=='stale':state['checked_monotonic']=97
+    if failure=='stale':state['checked_monotonic']=100-GUARDIAN_FRESHNESS_S
     if failure=='instance':state['instance']='b'*32
     if failure=='phase':value['phase']='starting'
     if failure=='budget':state['restarts']=[10,20,30]

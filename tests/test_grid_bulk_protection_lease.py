@@ -1,8 +1,9 @@
 """Independent deadlines: no stalled Native read or restart can renew proof."""
-import asyncio,copy,json
+import asyncio,copy,json,time
 import pytest
 from entropy_arb.grid.adapters.base import AdapterError
 from entropy_arb.grid.adapters.bulk_protection import VERIFY_WINDOW_MS
+from entropy_arb.grid.service_coverage import GUARDIAN_EXIT_GRACE_S
 from entropy_arb.grid.protection_watch import ProtectionWatchScheduler
 from entropy_arb.grid.runtime import GridRuntime
 from test_grid_bulk_protection_manager import setup,planned_entry
@@ -264,6 +265,10 @@ def test_lost_independent_guardian_requests_exit_without_waiting_for_native_read
         watcher=ProtectionWatchScheduler(rt)
         try:
             before=snapshot(rt,gid);rt.service_guardian_status=lambda:dict(healthy=False)
+            # Brief blindness stays inside GUARDIAN_EXIT_GRACE_S and must NOT exit:
+            assert rt.protection_lease.check(gid,now_ms=clock[0]) is None
+            # Persistent blindness (past the grace window) exits without I/O:
+            rt.service_coverage.guardian_blind_since[gid]=time.monotonic()-GUARDIAN_EXIT_GRACE_S-1
             async def forbidden(*a,**kw):raise AssertionError('guardian failure must not wait for I/O')
             native.account=forbidden
             assert rt.protection_lease.check(gid,now_ms=clock[0])=='PROTECTION_SERVICE_WATCHDOG_UNAVAILABLE'
