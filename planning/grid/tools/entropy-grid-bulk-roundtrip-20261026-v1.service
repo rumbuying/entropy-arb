@@ -1,0 +1,19 @@
+[Unit]
+Description=One separately approved Bulk BTC protocol diagnostic
+After=network-online.target
+ConditionPathExists=/root/code/entropy-grid-workers/bulk/data/run/bulk-roundtrip-20261026-v1.grant.json
+
+[Service]
+Type=exec
+User=root
+WorkingDirectory=/root/code/entropy-grid/data/staging/bulk-roundtrip-v1/source
+Environment=GRID_REAL_DISPATCH=0
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/root/code/entropy-grid/data/staging/bulk-roundtrip-v1/source
+ExecStart=/root/code/entropy-grid/.venv/bin/python /root/code/entropy-grid/data/staging/bulk-roundtrip-v1/run_bulk_roundtrip_v2.py --grant /root/code/entropy-grid-workers/bulk/data/run/bulk-roundtrip-20261026-v1.grant.json
+ExecStopPost=/bin/systemctl start entropy-grid-worker@bulk.service
+RuntimeMaxSec=1050
+TimeoutStopSec=30
+KillMode=control-group
+Restart=no
+UMask=0077

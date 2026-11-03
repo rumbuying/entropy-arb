@@ -1,0 +1,169 @@
+<style>
+#eg-grid-proposal .eg-app{--eg-bg:light-dark(#f3f6f9,#0b0f14);--eg-surface:light-dark(#fff,#111820);--eg-chrome:light-dark(#eaf0f5,#0e141b);--eg-text:light-dark(#172b3e,#d7e2ec);--eg-dim:light-dark(#526476,#92a5b7);--eg-border:light-dark(#d4dfe8,#283747);--eg-accent:light-dark(#087e96,#35c4dc);--eg-soft:light-dark(#e0f4f7,#12313a);--eg-green:light-dark(#08764e,#4fd6a1);--eg-red:light-dark(#ba3939,#ff8282);--eg-warn:light-dark(#8f6100,#f0cc7a);background:var(--eg-bg);color:var(--eg-text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;min-height:730px;border-radius:10px;overflow:clip}
+#eg-grid-proposal .eg-app *{box-sizing:border-box}
+#eg-grid-proposal .eg-head{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:16px 112px 16px 20px;background:var(--eg-chrome);border-bottom:1px solid var(--eg-border)}
+#eg-grid-proposal .eg-brand{font-size:17px;font-weight:600;letter-spacing:-.3px}
+#eg-grid-proposal .eg-tag{color:var(--eg-dim);font-size:12px}
+#eg-grid-proposal .eg-shell{display:grid;grid-template-columns:132px minmax(0,1fr)}
+#eg-grid-proposal .eg-side{padding:16px 10px;background:var(--eg-chrome);border-right:1px solid var(--eg-border)}
+#eg-grid-proposal .eg-side div{padding:10px 9px;color:var(--eg-dim);font-size:13px}
+#eg-grid-proposal .eg-side .eg-active{background:var(--eg-soft);color:var(--eg-accent);border-radius:6px}
+#eg-grid-proposal .eg-main{min-width:0;padding:16px}
+#eg-grid-proposal .eg-tabs{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+#eg-grid-proposal button{font:inherit;border:1px solid var(--eg-border);border-radius:6px;background:var(--eg-surface);color:var(--eg-text);padding:7px 12px}
+#eg-grid-proposal button[aria-pressed="true"]{border-color:var(--eg-accent);background:var(--eg-soft);color:var(--eg-accent)}
+#eg-grid-proposal button.eg-primary{background:var(--eg-accent);border-color:var(--eg-accent);color:light-dark(#fff,#071419);font-weight:600}
+#eg-grid-proposal button.eg-danger{color:var(--eg-red)}
+#eg-grid-proposal button:disabled{opacity:.55}
+#eg-grid-proposal .eg-market{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 14px}
+#eg-grid-proposal .eg-symbol{font-size:20px;font-weight:600}
+#eg-grid-proposal .eg-meta{color:var(--eg-dim);font-size:12px}
+#eg-grid-proposal .eg-price{font-size:20px;font-variant-numeric:tabular-nums}
+#eg-grid-proposal .eg-create-layout{display:grid;grid-template-columns:minmax(0,1fr) 286px;gap:12px}
+#eg-grid-proposal .eg-panel{background:var(--eg-surface);border:1px solid var(--eg-border);border-radius:8px;padding:14px;min-width:0}
+#eg-grid-proposal .eg-panel-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-weight:600;margin-bottom:10px}
+#eg-grid-proposal .eg-mini{font-size:12px;color:var(--eg-dim);font-weight:400}
+#eg-grid-proposal .eg-chart{width:100%;height:296px;display:block}
+#eg-grid-proposal .eg-chart text{fill:var(--eg-dim);font-size:11px;font-family:inherit}
+#eg-grid-proposal .eg-legend{display:flex;gap:12px;flex-wrap:wrap;color:var(--eg-dim);font-size:12px}
+#eg-grid-proposal .eg-buy{color:var(--eg-green)}
+#eg-grid-proposal .eg-sell{color:var(--eg-red)}
+#eg-grid-proposal .eg-form label{display:block;color:var(--eg-dim);font-size:12px;margin:12px 0 5px}
+#eg-grid-proposal input,#eg-grid-proposal select{font:inherit;width:100%;min-width:0;border:1px solid var(--eg-border);border-radius:5px;padding:8px;background:var(--eg-bg);color:var(--eg-text)}
+#eg-grid-proposal input[type="checkbox"],#eg-grid-proposal input[type="radio"]{width:auto;accent-color:var(--eg-accent)}
+#eg-grid-proposal .eg-two{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+#eg-grid-proposal .eg-direction{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:12px}
+#eg-grid-proposal .eg-direction button{padding:7px 4px;font-size:13px}
+#eg-grid-proposal .eg-form .eg-check{display:flex;align-items:center;gap:7px;margin:12px 0;color:var(--eg-text)}
+#eg-grid-proposal .eg-kv{display:grid;grid-template-columns:1fr auto;gap:7px 10px;font-size:12px;margin-top:14px;border-top:1px solid var(--eg-border);padding-top:12px}
+#eg-grid-proposal .eg-kv dt{color:var(--eg-dim)}
+#eg-grid-proposal .eg-kv dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
+#eg-grid-proposal .eg-full{width:100%;margin-top:14px}
+#eg-grid-proposal details{margin-top:12px;border-top:1px solid var(--eg-border);padding-top:12px}
+#eg-grid-proposal summary{color:var(--eg-text);font-size:13px}
+#eg-grid-proposal .eg-note{margin-top:10px;font-size:12px;color:var(--eg-dim)}
+#eg-grid-proposal .eg-validation{color:var(--eg-red);font-size:12px;margin-top:8px}
+#eg-grid-proposal .eg-preview{margin-top:14px;background:var(--eg-chrome);border:1px solid var(--eg-border);padding:14px;border-radius:8px}
+#eg-grid-proposal .eg-action-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+#eg-grid-proposal .eg-status{font-size:12px;color:var(--eg-green)}
+#eg-grid-proposal .eg-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}
+#eg-grid-proposal .eg-stat{padding:12px;background:var(--eg-surface);border:1px solid var(--eg-border);border-radius:7px}
+#eg-grid-proposal .eg-stat span{display:block;color:var(--eg-dim);font-size:12px}
+#eg-grid-proposal .eg-stat strong{font-size:22px;font-weight:500;font-variant-numeric:tabular-nums}
+#eg-grid-proposal .eg-grid-row{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:12px;align-items:center;margin-top:14px}
+#eg-grid-proposal .eg-row-amount{font-size:19px;font-variant-numeric:tabular-nums}
+#eg-grid-proposal .eg-order{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--eg-border);font-size:12px;flex-wrap:wrap}
+#eg-grid-proposal .eg-order:last-child{border-bottom:0}
+#eg-grid-proposal .eg-guide{padding:22px;max-width:890px;margin:auto}
+#eg-grid-proposal .eg-steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0 24px}
+#eg-grid-proposal .eg-steps button{border:0;border-bottom:2px solid var(--eg-border);border-radius:0;background:transparent}
+#eg-grid-proposal .eg-steps button[aria-pressed="true"]{border-bottom-color:var(--eg-accent)}
+#eg-grid-proposal .eg-guide-layout{display:grid;grid-template-columns:minmax(0,1fr) 270px;gap:18px}
+#eg-grid-proposal h3{font-size:17px;font-weight:600;margin:0 0 12px;color:var(--eg-text)}
+#eg-grid-proposal .eg-guide-options{display:grid;gap:10px;margin:16px 0}
+#eg-grid-proposal .eg-guide-options button{text-align:left;padding:12px}
+#eg-grid-proposal .eg-guide-options small{display:block;color:var(--eg-dim);font-size:12px}
+#eg-grid-proposal .eg-app [hidden]{display:none!important}
+#eg-grid-proposal .eg-app[data-roomy="true"] .eg-panel{padding:19px}
+@media(max-width:900px){#eg-grid-proposal .eg-shell{grid-template-columns:1fr}#eg-grid-proposal .eg-side{display:flex;gap:10px;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--eg-border);padding:5px 12px}#eg-grid-proposal .eg-side .eg-side-label{display:none}}
+@media(max-width:650px){#eg-grid-proposal .eg-create-layout,#eg-grid-proposal .eg-guide-layout{grid-template-columns:1fr}#eg-grid-proposal .eg-main,#eg-grid-proposal .eg-guide{padding:12px}#eg-grid-proposal .eg-stats{grid-template-columns:1fr}#eg-grid-proposal .eg-grid-row{grid-template-columns:1fr}#eg-grid-proposal .eg-steps{gap:0}#eg-grid-proposal .eg-steps button{padding:8px 2px;font-size:12px}#eg-grid-proposal .eg-head{padding:14px 104px 14px 12px}#eg-grid-proposal .eg-app{min-height:1180px}#eg-grid-proposal .eg-guide-summary{order:2}}
+@media(pointer:coarse){#eg-grid-proposal button{min-height:44px}#eg-grid-proposal input,#eg-grid-proposal select{font-size:16px;min-height:44px}}
+</style>
+<div id="eg-grid-proposal" class="viz-carousel" aria-label="网格工作台界面方案" data-previous-label="上一方案" data-next-label="下一方案">
+  <section data-variant="专业终端" aria-label="专业终端方案">
+    <div class="eg-app" id="eg-terminal" aria-label="专业终端信息密度">
+      <header class="eg-head"><span class="eg-brand">entropy <span style="color:var(--eg-accent)">/ 网格工作台</span></span><span class="eg-tag">规划原型 · 演示数据</span></header>
+      <div class="eg-shell">
+        <aside class="eg-side" aria-label="网站导航"><div class="eg-side-label">交易与策略</div><div>策略总览</div><div class="eg-active">网格交易</div><div>账户与风险</div><div>交易所接入</div><div>运行管理</div></aside>
+        <main class="eg-main">
+          <div class="eg-tabs"><button type="button" class="cursor-interaction" data-view="create" aria-pressed="true">创建网格</button><button type="button" class="cursor-interaction" data-view="manage" aria-pressed="false">我的网格 · 1</button></div>
+          <div data-page="create">
+            <div class="eg-market"><div><div class="eg-symbol">BTC / USDC <span class="eg-mini">永续</span></div><div class="eg-meta">Hyperliquid · 主网 · 网格专用账户</div></div><div><div class="eg-price">105,800.00</div><div class="eg-meta">标记价 105,790 · 价格示例</div></div></div>
+            <div class="eg-create-layout">
+              <section class="eg-panel"><div class="eg-panel-head"><span>价格与网格</span><span class="eg-mini">15 分钟 · 示意 K 线</span></div><svg class="eg-chart" id="eg-chart" role="img" aria-label="演示 K 线与可调整的网格价格线"></svg><div class="eg-legend"><span class="eg-buy">━━ 买入档位</span><span class="eg-sell">━━ 卖出档位</span><span>┄┄ 启动中心空档</span></div><dl class="eg-kv"><dt>逻辑网格</dt><dd id="eg-level-count">20 格 / 21 条线</dd><dt>示例单格净价差</dt><dd id="eg-grid-return">—</dd><dt>首次挂单与初始仓位</dt><dd>真实账户校验后确定</dd><dt>最坏方向库存 / 强平情景</dt><dd>创建预览时核验</dd></dl><div class="eg-note">示例费率 0.01% / 边；资金费另计</div></section>
+              <section class="eg-panel eg-form" aria-label="网格创建参数"><div class="eg-panel-head"><span>手动创建</span><span class="eg-mini">推荐参数需历史样本</span></div><label for="eg-exchange">交易所</label><select id="eg-exchange" class="cursor-interaction"><option>Hyperliquid · 主网</option><option>Backpack</option><option>Lighter · 主网</option></select><div class="eg-direction" aria-label="网格方向"><button type="button" class="cursor-interaction" data-direction="long" aria-pressed="false">多头</button><button type="button" class="cursor-interaction" data-direction="neutral" aria-pressed="true">中性</button><button type="button" class="cursor-interaction" data-direction="short" aria-pressed="false">空头</button></div><div class="eg-two"><div><label for="eg-lower">价格下界 · USDC</label><input id="eg-lower" type="number" min="1" step="100" value="100000"></div><div><label for="eg-upper">价格上界 · USDC</label><input id="eg-upper" type="number" min="1" step="100" value="110000"></div></div><div class="eg-two"><div><label for="eg-count">网格数量</label><input id="eg-count" type="number" min="2" max="60" value="20"></div><div><label for="eg-mode">网格间距</label><select id="eg-mode" class="cursor-interaction"><option value="arithmetic">等差</option><option value="geometric">等比</option></select></div></div><div class="eg-two"><div><label for="eg-capital">总投入 · USDC</label><input id="eg-capital" type="number" min="100" value="1000" step="100"></div><div><label for="eg-leverage">杠杆</label><select id="eg-leverage" class="cursor-interaction"><option>2×</option><option selected>3×</option><option>5×</option></select></div></div><label class="eg-check"><input id="eg-initial" type="checkbox" disabled>立即建立初始仓位</label><details><summary class="cursor-interaction">高级设置 · 保护与移动</summary><label for="eg-trailing">移动网格</label><select id="eg-trailing" class="cursor-interaction"><option>不移动</option><option>仅向上 · 固定宽度</option><option>仅向下 · 固定宽度</option><option>双向移动 · 固定宽度</option></select><label for="eg-protection">退出条件</label><select id="eg-protection" class="cursor-interaction"><option>价格止盈止损</option><option>总净收益金额</option><option>总净收益率</option></select><label class="eg-check"><input type="checkbox" checked>触发退出后平仓</label><div class="eg-mini">保护价格与资金缓冲在开单预览中核验</div></details><div id="eg-error" class="eg-validation" role="alert" hidden></div><button type="button" id="eg-preview-button" class="eg-primary eg-full cursor-interaction">查看开单预览</button></section>
+            </div>
+            <section class="eg-preview" id="eg-preview" aria-label="创建确认示意" hidden><div class="eg-panel-head"><span>创建前确认</span><span class="eg-mini">原型 · 不连接账户、不发送订单</span></div><div id="eg-preview-summary"></div><dl class="eg-kv"><dt>资金分配</dt><dd id="eg-budget"></dd><dt>账户占用 / 最小数量 / 保证金</dt><dd>待真实账户预览</dd><dt>订单保护与掉线兜底</dt><dd>按交易所认证能力显示</dd></dl><div class="eg-action-row"><button type="button" id="eg-save" class="eg-primary cursor-interaction">保存演示草稿</button><button type="button" id="eg-back" class="cursor-interaction">继续调整</button></div></section>
+            <div id="eg-announcement" class="eg-note" aria-live="polite"></div>
+          </div>
+          <div data-page="manage" hidden>
+            <div class="eg-market"><div><div class="eg-symbol">我的网格</div><div class="eg-meta">全部账户 · 示例期间 2026-10-03 至 2026-10-10</div></div><span class="eg-status" id="eg-run-status">运行中 · 收益已核对（演示）</span></div>
+            <div class="eg-stats"><div class="eg-stat"><span>总净收益 · USDC</span><strong>+137.20</strong><span>收益包含持仓与资金费</span></div><div class="eg-stat"><span>网格配对净利润 · USDC</span><strong>+184.80</strong><span>交易费已计入配对利润</span></div><div class="eg-stat"><span>当前浮盈 / 净资金费 · USDC</span><strong>−42.10 / −5.50</strong><span>其他收益项 0.00 · 演示</span></div></div>
+            <section class="eg-panel"><div class="eg-panel-head"><span>BTC 中性网格</span><span class="eg-mini">Hyperliquid · 网格专用账户</span></div><div class="eg-grid-row"><div>100,000 — 110,000 USDC<div class="eg-meta">等差 · 20 格 · 3× · 配置版本 3</div></div><div><div class="eg-row-amount">多头 0.012 BTC</div><div class="eg-meta">持仓仍需风险保护</div></div><div class="eg-action-row" style="margin-top:0"><button type="button" id="eg-detail-button" class="cursor-interaction">订单明细</button><button type="button" id="eg-pause" class="cursor-interaction">暂停</button><button type="button" id="eg-stop" class="eg-danger cursor-interaction">结束</button></div></div></section>
+            <section class="eg-preview" id="eg-orders" hidden><div class="eg-panel-head">订单与成交</div><div class="eg-order"><span>买入 · 105,000</span><span>部分成交 0.0004 / 0.001 BTC</span><span>补单 105,500 · 已提交</span></div><div class="eg-order"><span>卖出 · 106,000</span><span>减仓挂单 0.001 BTC</span><span>来源：105,500 买入</span></div><div class="eg-order"><span>买入 · 104,500</span><span>挂单 0.001 BTC</span><span>版本 3 · 等待成交</span></div></section>
+            <section class="eg-preview" id="eg-exit" hidden><div class="eg-panel-head">结束网格</div><div class="eg-two"><button type="button" data-exit="flat" class="cursor-interaction" aria-pressed="true">结束并平仓</button><button type="button" data-exit="keep" class="cursor-interaction" aria-pressed="false">结束并保留仓位</button></div><div id="eg-exit-result" class="eg-note" aria-live="polite">撤网格挂单 → 核对晚到成交 → 减仓平掉 0.012 BTC → 最终核对；费用与剩余仓位实时显示。</div><div class="eg-note">动作流程示意 · 不执行真实操作</div></section>
+            <section class="eg-panel" style="margin-top:14px"><div class="eg-panel-head">管理能力</div><div class="eg-order"><span>调整区间 / 网格数量</span><span>先看变更后的订单与库存</span></div><div class="eg-order"><span>补保证金 / 增加规模</span><span>分别显示缓冲和交易量变化</span></div><div class="eg-order"><span>断线 / 重启 / 外部改仓</span><span>核对真实订单和持仓后恢复</span></div></section>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+  <section data-variant="引导创建" aria-label="引导创建方案" hidden>
+    <div class="eg-app" id="eg-guide-app" aria-label="引导创建布局">
+      <header class="eg-head"><span class="eg-brand">entropy <span style="color:var(--eg-accent)">/ 创建网格</span></span><span class="eg-tag">规划原型 · 演示数据</span></header>
+      <main class="eg-guide"><div class="eg-steps" aria-label="创建步骤"><button type="button" data-step="0" class="cursor-interaction" aria-pressed="true">市场</button><button type="button" data-step="1" class="cursor-interaction" aria-pressed="false">区间</button><button type="button" data-step="2" class="cursor-interaction" aria-pressed="false">资金</button><button type="button" data-step="3" class="cursor-interaction" aria-pressed="false">保护与确认</button></div><div class="eg-guide-layout"><section class="eg-panel eg-form">
+        <div data-step-panel="0"><h3>选择交易场所和方向</h3><label for="eg-guide-exchange">交易所与账户</label><select id="eg-guide-exchange" class="cursor-interaction"><option>Hyperliquid · 网格专用账户</option><option>Backpack · 网格专用账户</option></select><label for="eg-guide-symbol">合约</label><select id="eg-guide-symbol" class="cursor-interaction"><option>BTC / USDC 永续</option><option>ETH / USDC 永续</option></select><div class="eg-guide-options" aria-label="方向选择"><button type="button" data-guide-direction="neutral" class="cursor-interaction" aria-pressed="true">中性网格<small>在区间内双向交易，会积累多头或空头库存</small></button><button type="button" data-guide-direction="long" class="cursor-interaction" aria-pressed="false">多头网格<small>逐步买入，反弹时卖出减仓</small></button><button type="button" data-guide-direction="short" class="cursor-interaction" aria-pressed="false">空头网格<small>逐步卖出开空，回落时买入减仓</small></button></div></div>
+        <div data-step-panel="1" hidden><h3>设置交易区间</h3><div class="eg-two"><div><label for="eg-guide-lower">价格下界 · USDC</label><input id="eg-guide-lower" type="number" value="100000" min="1" step="100"></div><div><label for="eg-guide-upper">价格上界 · USDC</label><input id="eg-guide-upper" type="number" value="110000" min="1" step="100"></div></div><label for="eg-guide-count">网格数量</label><input id="eg-guide-count" type="number" min="2" max="60" value="20"><label for="eg-guide-mode">网格间距</label><select id="eg-guide-mode" class="cursor-interaction"><option>等差</option><option>等比</option></select><div class="eg-note">每格净价差、数量和最小投入在最终预览中核验</div></div>
+        <div data-step-panel="2" hidden><h3>分配投入与缓冲</h3><label for="eg-guide-capital">总投入 · USDC</label><input id="eg-guide-capital" type="number" min="100" step="100" value="1000"><label for="eg-guide-buffer">风险缓冲 · USDC</label><input id="eg-guide-buffer" type="number" min="0" step="50" value="200"><label for="eg-guide-leverage">杠杆</label><select id="eg-guide-leverage" class="cursor-interaction"><option>2×</option><option selected>3×</option><option>5×</option></select><div class="eg-note">缓冲不增加每格交易量；全仓预算不等于原生资金隔离</div></div>
+        <div data-step-panel="3" hidden><h3>设置保护与启动方式</h3><label for="eg-guide-start">启动条件</label><select id="eg-guide-start" class="cursor-interaction"><option>立即启动</option><option>达到指定价格</option><option>定时启动</option></select><label for="eg-guide-exit">退出条件</label><select id="eg-guide-exit" class="cursor-interaction"><option>价格止盈止损</option><option>总净收益金额</option><option>总净收益率</option></select><label class="eg-check"><input type="checkbox" checked>退出后平掉网格仓位</label><dl class="eg-kv"><dt>初始库存 / 真实订单</dt><dd>待账户校验</dd><dt>最大库存 / 预计强平情景</dt><dd>待账户校验</dd><dt>止损保护方式</dt><dd>按认证能力显示</dd></dl><div class="eg-note">最终预览必须显示具体阈值、成本与账户冲突</div></div>
+        <div class="eg-validation" id="eg-guide-error" role="alert" hidden></div><div class="eg-action-row"><button type="button" id="eg-guide-prev" class="cursor-interaction" hidden>上一步</button><button type="button" id="eg-guide-next" class="eg-primary cursor-interaction">下一步</button></div><div class="eg-note" id="eg-guide-announcement" aria-live="polite"></div>
+      </section><aside class="eg-panel eg-guide-summary"><div class="eg-panel-head">你的网格</div><div class="eg-symbol" id="eg-guide-market-label">BTC / USDC</div><div class="eg-meta" id="eg-guide-venue-label">Hyperliquid · 专用账户</div><dl class="eg-kv"><dt>方向</dt><dd id="eg-guide-direction-label">中性</dd><dt>价格区间</dt><dd id="eg-guide-range-label">100,000 — 110,000</dd><dt>网格</dt><dd id="eg-guide-grids-label">20 格 · 等差</dd><dt>交易 / 缓冲 · USDC</dt><dd id="eg-guide-budget-label">800 / 200</dd><dt>杠杆</dt><dd id="eg-guide-leverage-label">3×</dd></dl><div class="eg-note">关闭浏览器后策略继续运行</div><div class="eg-note">原型 · 不连接账户、不发送订单</div></aside></div></main>
+    </div>
+  </section>
+</div>
+<script>
+(()=>{
+ const root=document.getElementById('eg-grid-proposal');
+ const $=id=>root.querySelector('#'+id), all=s=>[...root.querySelectorAll(s)];
+ const names={long:'多头',neutral:'中性',short:'空头'};
+ const state={view:'create',direction:'neutral',step:0,guideDirection:'neutral',paused:false};
+ const fmt=n=>Number(n).toLocaleString('en-US',{maximumFractionDigits:2});
+ const config=()=>({lower:Number($('eg-lower').value),upper:Number($('eg-upper').value),count:Number($('eg-count').value),mode:$('eg-mode').value,capital:Number($('eg-capital').value)});
+ function valid(c){return Number.isFinite(c.lower)&&Number.isFinite(c.upper)&&c.lower>0&&c.upper>c.lower&&Number.isInteger(c.count)&&c.count>=2&&c.count<=60&&c.capital>=100;}
+ function persist(){if(window.openai?.setWidgetState)window.openai.setWidgetState({modelContent:{gridMockup:{direction:state.direction,config:config(),guideDirection:state.guideDirection}},privateContent:{view:state.view,step:state.step}}).catch(()=>{});}
+ function renderChart(){
+  const svg=$('eg-chart'),w=svg.getBoundingClientRect().width;if(w<100)return;
+  const c=config(),h=296,left=14,right=w-78,top=22,bottom=260,market=105800;
+  if(!valid(c)){svg.replaceChildren();return;}
+  const prices=Array.from({length:c.count+1},(_,i)=>c.mode==='geometric'?c.lower*Math.pow(c.upper/c.lower,i/c.count):c.lower+(c.upper-c.lower)*i/c.count);
+  const lows=Math.min(c.lower,102800),highs=Math.max(c.upper,107600),pad=(highs-lows)*.07,lo=lows-pad,hi=highs+pad;
+  const y=p=>top+(hi-p)/(hi-lo)*(bottom-top),x=i=>left+10+i*(right-left-20)/27;
+  svg.setAttribute('viewBox',`0 0 ${w} ${h}`);let markup='<title>演示价格与网格</title><desc>价格为演示数据。改变区间、格数和方向会同步更新网格线。</desc>';
+  for(let i=0;i<5;i++){const p=lo+(hi-lo)*i/4;markup+=`<line x1="${left}" x2="${right}" y1="${y(p)}" y2="${y(p)}" stroke="var(--eg-border)"/><text x="${right+8}" y="${y(p)+4}">${fmt(p)}</text>`;}
+  const nearest=prices.reduce((a,p,i)=>Math.abs(p-market)<=Math.abs(prices[a]-market)?i:a,0),stride=Math.max(1,Math.ceil(c.count/16));
+  prices.forEach((p,i)=>{if(i%stride!==0&&i!==c.count&&i!==nearest)return;const buy=p<market;let role=state.direction==='long'?(buy?'buy':'inactive'):state.direction==='short'?(buy?'inactive':'sell'):(i===nearest?'inactive':buy?'buy':'sell');const color=role==='buy'?'var(--eg-green)':role==='sell'?'var(--eg-red)':'var(--eg-dim)';markup+=`<line x1="${left}" x2="${right}" y1="${y(p)}" y2="${y(p)}" stroke="${color}" opacity=".5" stroke-dasharray="${role==='inactive'?'4 4':'0'}"/>`;});
+  const closes=[104600,104300,104700,105000,105300,105100,104800,104900,105600,106000,105700,106200,106600,106400,106800,106300,106100,105800,105400,105700,105200,104900,105300,105600,105200,105500,105700,105800];
+  closes.forEach((p,i)=>{const o=i?closes[i-1]:104300,up=p>=o,color=up?'var(--eg-green)':'var(--eg-red)',bw=Math.max(3,Math.min(9,(right-left)/42));markup+=`<line x1="${x(i)}" x2="${x(i)}" y1="${y(Math.max(p,o)+230)}" y2="${y(Math.min(p,o)-170)}" stroke="${color}"/><rect x="${x(i)-bw/2}" y="${Math.min(y(p),y(o))}" width="${bw}" height="${Math.max(2,Math.abs(y(p)-y(o)))}" fill="${color}"/>`;});
+  markup+=`<text x="${left}" y="286">09:00</text><text x="${(left+right)/2}" text-anchor="middle" y="286">12:30</text><text x="${right}" text-anchor="end" y="286">16:00 · 示意</text>`;svg.innerHTML=markup;
+ }
+ function render(){
+  all('[data-page]').forEach(el=>el.hidden=el.dataset.page!==state.view);all('[data-view]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.view===state.view)));
+  all('[data-direction]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.direction===state.direction)));
+  $('eg-initial').disabled=state.direction==='neutral';if(state.direction==='neutral')$('eg-initial').checked=false;
+  const c=config(),ok=valid(c);$('eg-error').hidden=ok;$('eg-error').textContent=ok?'':'请设置有效区间、2–60 格和不少于 100 的演示投入。';$('eg-preview-button').disabled=!ok;
+  if(ok){const prices=Array.from({length:c.count+1},(_,i)=>c.mode==='geometric'?c.lower*Math.pow(c.upper/c.lower,i/c.count):c.lower+(c.upper-c.lower)*i/c.count);const r=prices.slice(1).map((p,i)=>(p-prices[i]-.0001*(p+prices[i]))/prices[i]*100);$('eg-level-count').textContent=`${c.count} 格 / ${c.count+1} 条线`;$('eg-grid-return').textContent=`${Math.min(...r).toFixed(2)}% — ${Math.max(...r).toFixed(2)}%`;}
+  renderChart();
+ }
+ all('[data-view]').forEach(el=>el.addEventListener('click',()=>{state.view=el.dataset.view;render();persist();}));
+ all('[data-direction]').forEach(el=>el.addEventListener('click',()=>{state.direction=el.dataset.direction;$('eg-preview').hidden=true;render();persist();}));
+ ['eg-lower','eg-upper','eg-count','eg-mode','eg-capital','eg-leverage','eg-exchange','eg-initial','eg-trailing','eg-protection'].forEach(id=>$(id).addEventListener('input',()=>{$('eg-preview').hidden=true;render();persist();}));
+ $('eg-preview-button').addEventListener('click',()=>{const c=config();if(!valid(c))return;$('eg-preview').hidden=false;$('eg-preview-summary').textContent=`${$('eg-exchange').value} · BTC / USDC · ${names[state.direction]}网格 · ${fmt(c.lower)} — ${fmt(c.upper)} · ${c.count} 格 · ${$('eg-leverage').value}`;$('eg-budget').textContent=`总投入 ${fmt(c.capital)} USDC；交易预算与缓冲待确认`;persist();});
+ $('eg-save').addEventListener('click',()=>{$('eg-announcement').textContent='演示草稿已保存 · 实际创建需完成账户、订单与保护校验';$('eg-preview').hidden=true;persist();});
+ $('eg-back').addEventListener('click',()=>{$('eg-preview').hidden=true;});
+ $('eg-detail-button').addEventListener('click',()=>{$('eg-orders').hidden=!$('eg-orders').hidden;});
+ $('eg-pause').addEventListener('click',()=>{state.paused=!state.paused;$('eg-run-status').textContent=state.paused?'已暂停 · 仓位继续受监控（演示）':'运行中 · 收益已核对（演示）';$('eg-pause').textContent=state.paused?'恢复':'暂停';persist();});
+ $('eg-stop').addEventListener('click',()=>{$('eg-exit').hidden=!$('eg-exit').hidden;});
+ all('[data-exit]').forEach(el=>el.addEventListener('click',()=>{all('[data-exit]').forEach(b=>b.setAttribute('aria-pressed',String(b===el)));$('eg-exit-result').textContent=el.dataset.exit==='keep'?'撤普通网格挂单 → 核对成交 → 保留仓位与可识别保护；进入“已结束·有残仓”，可继续处理仓位。':'撤网格挂单 → 核对晚到成交 → 减仓平掉 0.012 BTC → 最终核对；费用与剩余仓位实时显示。';}));
+ function guideValid(){const l=Number($('eg-guide-lower').value),u=Number($('eg-guide-upper').value),n=Number($('eg-guide-count').value),m=Number($('eg-guide-capital').value),b=Number($('eg-guide-buffer').value);return l>0&&u>l&&Number.isInteger(n)&&n>=2&&n<=60&&m>=100&&b>=0&&b<m;}
+ function renderGuide(){all('[data-step-panel]').forEach(el=>el.hidden=Number(el.dataset.stepPanel)!==state.step);all('[data-step]').forEach(el=>el.setAttribute('aria-pressed',String(Number(el.dataset.step)===state.step)));all('[data-guide-direction]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.guideDirection===state.guideDirection)));$('eg-guide-prev').hidden=state.step===0;$('eg-guide-next').textContent=state.step===3?'查看确认摘要':'下一步';$('eg-guide-market-label').textContent=$('eg-guide-symbol').value.replace(' 永续','');$('eg-guide-venue-label').textContent=$('eg-guide-exchange').value;$('eg-guide-direction-label').textContent=names[state.guideDirection];$('eg-guide-range-label').textContent=`${fmt($('eg-guide-lower').value)} — ${fmt($('eg-guide-upper').value)}`;$('eg-guide-grids-label').textContent=`${$('eg-guide-count').value} 格 · ${$('eg-guide-mode').value}`;$('eg-guide-budget-label').textContent=`${fmt(Number($('eg-guide-capital').value)-Number($('eg-guide-buffer').value))} / ${fmt($('eg-guide-buffer').value)}`;$('eg-guide-leverage-label').textContent=$('eg-guide-leverage').value;$('eg-guide-error').hidden=guideValid();$('eg-guide-error').textContent='请检查区间、网格数、总投入和缓冲，缓冲需小于总投入。';}
+ all('[data-step]').forEach(el=>el.addEventListener('click',()=>{state.step=Number(el.dataset.step);renderGuide();persist();}));
+ all('[data-guide-direction]').forEach(el=>el.addEventListener('click',()=>{state.guideDirection=el.dataset.guideDirection;renderGuide();persist();}));
+ ['eg-guide-exchange','eg-guide-symbol','eg-guide-lower','eg-guide-upper','eg-guide-count','eg-guide-mode','eg-guide-capital','eg-guide-buffer','eg-guide-leverage'].forEach(id=>$(id).addEventListener('input',()=>{renderGuide();persist();}));
+ $('eg-guide-prev').addEventListener('click',()=>{state.step=Math.max(0,state.step-1);renderGuide();persist();});
+ $('eg-guide-next').addEventListener('click',()=>{if(!guideValid()){renderGuide();return;}if(state.step<3){state.step++;renderGuide();}else{$('eg-guide-announcement').textContent='摘要已生成 · 实际创建前还需核验订单、资金和保护阈值。';}persist();});
+ function restore(value){const m=value?.modelContent?.gridMockup,p=value?.privateContent;if(m?.direction&&names[m.direction])state.direction=m.direction;if(m?.guideDirection&&names[m.guideDirection])state.guideDirection=m.guideDirection;if(m?.config&&valid(m.config)){const c=m.config;$('eg-lower').value=c.lower;$('eg-upper').value=c.upper;$('eg-count').value=c.count;$('eg-mode').value=['arithmetic','geometric'].includes(c.mode)?c.mode:'arithmetic';$('eg-capital').value=c.capital;}if(p?.view&&['create','manage'].includes(p.view))state.view=p.view;if(Number.isInteger(p?.step)&&p.step>=0&&p.step<=3)state.step=p.step;render();renderGuide();}
+ restore(window.openai?.widgetState);window.addEventListener('openai:set_globals',e=>{if(e.detail?.globals?.widgetState)restore(e.detail.globals.widgetState);});
+ new ResizeObserver(renderChart).observe($('eg-chart'));
+ if(globalThis.Tweak){const design={roomy:false};const apply=()=>$('eg-terminal').dataset.roomy=String(design.roomy);const tweak=new Tweak({container:$('eg-terminal'),onChange:apply});tweak.addToggle(design,'roomy',{label:'舒适间距'});}
+})();
+</script>

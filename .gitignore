@@ -8,6 +8,10 @@ logs/
 
 # console v2 persistent storage / 控制台 V2 持久化数据库
 data/
+# independent encrypted grid credentials (including the local decryption key)
+grid-credentials/
+master.key
+accounts.enc
 
 # python
 __pycache__/

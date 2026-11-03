@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "calc_version": "grid-calc-v1",
+  "purpose": "Independent acceptance views; fixture input only; never authorizes live trading",
+  "cases": [
+    {
+      "id": "P01", "stage": "M0", "kind": "price_lines",
+      "input": {"lower": "100", "upper": "110", "count": 5, "spacing": "arithmetic", "tick": "0.5"},
+      "expected": {"validation_status": "VALID", "normalized_lower": "100", "normalized_upper": "110", "levels": ["100", "102", "104", "106", "108", "110"]}
+    },
+    {
+      "id": "P02", "stage": "M0", "kind": "price_lines",
+      "input": {"lower": "100.1", "upper": "110.1", "count": 4, "spacing": "arithmetic", "tick": "0.5"},
+      "expected": {"validation_status": "VALID", "normalized_lower": "100.5", "normalized_upper": "110", "levels": ["100.5", "103", "105.5", "107.5", "110"]}
+    },
+    {
+      "id": "P03", "stage": "M0", "kind": "price_lines",
+      "input": {"lower": "100", "upper": "400", "count": 2, "spacing": "geometric", "tick": "0.1"},
+      "expected": {"validation_status": "VALID", "levels": ["100", "200", "400"]}
+    },
+    {
+      "id": "P04", "stage": "M0", "kind": "price_lines",
+      "input": {"lower": "100", "upper": "101", "count": 4, "spacing": "arithmetic", "tick": "1"},
+      "expected": {"validation_status": "INVALID", "code": "VALIDATION_ERROR", "reason": "PRICE_LEVEL_COLLISION"}
+    },
+    {
+      "id": "P05", "stage": "M0", "kind": "price_lines",
+      "input": {"lower": "100.01", "upper": "100.22", "count": 3, "spacing": "arithmetic", "tick": "0.05"},
+      "expected": {"validation_status": "VALID", "normalized_lower": "100.05", "normalized_upper": "100.2", "levels": ["100.05", "100.1", "100.15", "100.2"]}
+    },
+    {
+      "id": "P06", "stage": "M0", "kind": "price_lines",
+      "input": {"lower": "100", "upper": "200", "count": 3, "spacing": "geometric", "tick": "0.1"},
+      "expected": {"validation_status": "VALID", "levels": ["100", "126", "158.7", "200"]}
+    },
+    {
+      "id": "P07", "stage": "M0", "kind": "price_lines",
+      "input": {"lower": "100.1", "upper": "100.4", "count": 3, "spacing": "arithmetic", "tick": "0.5"},
+      "expected": {"validation_status": "INVALID", "code": "VALIDATION_ERROR", "reason": "NORMALIZED_RANGE_EMPTY"}
+    },
+    {
+      "id": "C01", "stage": "M0", "kind": "decimal_text",
+      "input": {"value": "100.00"},
+      "expected": {"validation_status": "VALID", "canonical": "100"}
+    },
+    {
+      "id": "C02", "stage": "M0", "kind": "decimal_text",
+      "input": {"value": 100.0},
+      "expected": {"validation_status": "INVALID", "code": "VALIDATION_ERROR", "reason": "DECIMAL_STRING_REQUIRED"}
+    },
+    {
+      "id": "C03", "stage": "M0", "kind": "price_lines",
+      "input": {"lower": "100", "upper": "110", "count": true, "spacing": "arithmetic", "tick": "0.5"},
+      "expected": {"validation_status": "INVALID", "code": "VALIDATION_ERROR", "reason": "INTEGER_REQUIRED"}
+    },
+    {
+      "id": "C04", "stage": "M0", "kind": "native_id_roundtrip",
+      "input": {"trade_id": "18446744073709551615"},
+      "expected": {"trade_id": "18446744073709551615", "json_type": "string"}
+    },
+    {
+      "id": "L01", "stage": "M0", "kind": "initial_layout",
+      "input": {"levels": ["100", "102", "104", "106", "108", "110"], "reference": "105", "reference_source": "mark", "bid": "104.8", "ask": "105.2", "q_base": "0.01", "direction": "neutral", "initial_position": "deferred"},
+      "expected": {"center_index": 3, "buy_levels": [0, 1, 2], "sell_levels": [4, 5], "initial_position_qty": "0", "candidate_order_count": 5}
+    },
+    {
+      "id": "L02", "stage": "M0", "kind": "initial_layout",
+      "input": {"levels": ["100", "102", "104", "106", "108", "110"], "reference": "105", "reference_source": "mark", "bid": "104.8", "ask": "105.2", "q_base": "0.01", "direction": "long", "initial_position": "deferred"},
+      "expected": {"buy_levels": [0, 1, 2], "sell_levels": [], "pending_cycles": [3, 4], "initial_position_qty": "0", "candidate_order_count": 3}
+    },
+    {
+      "id": "L03", "stage": "M0", "kind": "initial_layout",
+      "input": {"levels": ["100", "102", "104", "106", "108", "110"], "reference": "105", "reference_source": "mark", "bid": "104.8", "ask": "105.2", "q_base": "0.01", "direction": "short", "initial_position": "deferred"},
+      "expected": {"buy_levels": [], "sell_levels": [3, 4, 5], "pending_cycles": [0, 1], "initial_position_qty": "0", "candidate_order_count": 3}
+    },
+    {
+      "id": "L04", "stage": "M0", "kind": "initial_layout",
+      "input": {"levels": ["100", "102", "104", "106", "108", "110"], "reference": "105", "reference_source": "mark", "bid": "104.8", "ask": "105.2", "q_base": "0.01", "direction": "long", "initial_position": "immediate"},
+      "expected": {"buy_levels": [0, 1, 2], "sell_levels": [], "initial_position_qty": "0.02", "initial_inventory_cycles": [3, 4], "conditional_exit_levels": [4, 5]}
+    },
+    {
+      "id": "L05", "stage": "M0", "kind": "initial_layout",
+      "input": {"levels": ["100", "102", "104", "106", "108", "110"], "reference": "105", "reference_source": "mark", "bid": "104.8", "ask": "105.2", "q_base": "0.01", "direction": "short", "initial_position": "immediate"},
+      "expected": {"buy_levels": [], "sell_levels": [3, 4, 5], "initial_position_qty": "0.02", "initial_inventory_cycles": [1, 0], "conditional_exit_levels": [1, 0]}
+    },
+    {
+      "id": "L06", "stage": "M0", "kind": "initial_layout",
+      "input": {"levels": ["100", "102", "104", "106", "108", "110"], "reference": "111", "reference_source": "mark", "bid": "110.8", "ask": "111.2", "q_base": "0.01", "direction": "long", "initial_position": "immediate"},
+      "expected": {"initialization_status": "WAITING_RANGE", "buy_levels": [], "sell_levels": [], "initial_position_qty": "0", "candidate_order_count": 0}
+    },
+    {
+      "id": "L07", "stage": "M0", "kind": "post_only_eligibility",
+      "input": {"bid": "104", "ask": "106", "buy_price": "106", "sell_price": "104"},
+      "expected": {"buy": "WAIT_POST_ONLY", "sell": "WAIT_POST_ONLY", "prices_changed": false}
+    },
+    {
+      "id": "L08", "stage": "M0", "kind": "initial_fill_allocation",
+      "input": {"direction": "long", "reference": "105", "q_base": "0.01", "cycles": [{"cycle_index": 3, "exit_level": 4, "exit_price": "108"}, {"cycle_index": 4, "exit_level": 5, "exit_price": "110"}], "actual_fill_qty": "0.014", "actual_fill_price": "105", "actual_fee": "0.000147", "fee_asset": "USD_TEST", "qty_step": "0.001", "min_qty": "0.001", "min_notional": "0.1"},
+      "expected": {"allocations": [{"cycle_index": 3, "qty_base": "0.01", "fee": "0.000105"}, {"cycle_index": 4, "qty_base": "0.004", "fee": "0.000042"}], "unbuilt_initial_qty": "0.006", "exit_demand_qty": "0.014", "allocated_fee_total": "0.000147"}
+    },
+    {
+      "id": "Q01", "stage": "M0", "kind": "fixture_sizing",
+      "input": {"risk_model": "TEST_TABLE_ONLY", "qty_step_base": "0.001", "min_qty_base": "0.001", "max_qty_base": "0.006", "used_prices": ["1000", "1010"], "min_notional": "3", "total": "60", "reserve": "10", "account_remaining": "100", "demand_rows": [{"k": 1, "ordinary": "10", "adverse": "13", "account": "13"}, {"k": 2, "ordinary": "20", "adverse": "26", "account": "26"}, {"k": 3, "ordinary": "30", "adverse": "39", "account": "39"}, {"k": 4, "ordinary": "40", "adverse": "52", "account": "52"}, {"k": 5, "ordinary": "50", "adverse": "65", "account": "65"}, {"k": 6, "ordinary": "60", "adverse": "78", "account": "78"}]},
+      "expected": {"validation_status": "VALID", "k_min": 3, "k": 4, "qty_base": "0.004", "live_eligible": false}
+    },
+    {
+      "id": "Q02", "stage": "M0", "kind": "fixture_sizing",
+      "input": {"risk_model": "TEST_TABLE_ONLY", "qty_step_base": "0.001", "min_qty_base": "0.001", "max_qty_base": "0.006", "used_prices": ["1000", "1010"], "min_notional": "3", "total": "60", "reserve": "10", "account_remaining": "45", "demand_rows": [{"k": 1, "ordinary": "10", "adverse": "13", "account": "13"}, {"k": 2, "ordinary": "20", "adverse": "26", "account": "26"}, {"k": 3, "ordinary": "30", "adverse": "39", "account": "39"}, {"k": 4, "ordinary": "40", "adverse": "52", "account": "52"}, {"k": 5, "ordinary": "50", "adverse": "65", "account": "65"}, {"k": 6, "ordinary": "60", "adverse": "78", "account": "78"}]},
+      "expected": {"validation_status": "VALID", "k_min": 3, "k": 3, "qty_base": "0.003", "live_eligible": false}
+    },
+    {
+      "id": "Q03", "stage": "M0", "kind": "fixture_sizing",
+      "input": {"risk_model": "TEST_TABLE_ONLY", "qty_step_base": "0.001", "min_qty_base": "0.001", "max_qty_base": "0.006", "used_prices": ["1000", "1010"], "min_notional": "3", "total": "30", "reserve": "5", "account_remaining": "100", "demand_rows": [{"k": 1, "ordinary": "10", "adverse": "13", "account": "13"}, {"k": 2, "ordinary": "20", "adverse": "26", "account": "26"}, {"k": 3, "ordinary": "30", "adverse": "39", "account": "39"}, {"k": 4, "ordinary": "40", "adverse": "52", "account": "52"}, {"k": 5, "ordinary": "50", "adverse": "65", "account": "65"}, {"k": 6, "ordinary": "60", "adverse": "78", "account": "78"}]},
+      "expected": {"validation_status": "INVALID", "code": "BUDGET_EXCEEDED", "qty_base": null, "live_eligible": false}
+    },
+    {
+      "id": "Q04", "stage": "M0", "kind": "risk_qualification",
+      "input": {"risk_model": null, "market_ref": "fixture-market", "plan_kind": "observed"},
+      "expected": {"validation_status": "BLOCKED", "code": "CAPABILITY_UNVERIFIED", "qty_per_grid": null, "live_eligible": false}
+    },
+    {
+      "id": "E01", "stage": "M1", "kind": "ledger",
+      "input": {"initial_position": "0", "end_mark": "1010", "funding_paid": "0", "funding_coverage_complete": true, "fills": [{"execution_key": "test:a:m:t1", "side": "buy", "qty_base": "0.004", "price": "1000", "fee": "0.0004", "asset": "USD_TEST"}, {"execution_key": "test:a:m:t2", "side": "sell", "qty_base": "0.003", "price": "1010", "fee": "0.000303", "asset": "USD_TEST"}]},
+      "expected": {"net_qty_base": "0.001", "gross_realized": "0.03", "unrealized": "0.01", "total_fees": "0.000703", "pair_qty": "0.003", "pair_net": "0.029397", "net_pnl": "0.039297"}
+    },
+    {
+      "id": "E02", "stage": "M1", "kind": "ledger",
+      "input": {"initial_position": "0", "end_mark": "1005", "funding_paid": "0", "funding_coverage_complete": true, "fills": [{"execution_key": "test:a:m:t1", "side": "buy", "qty_base": "0.004", "price": "1000", "fee": "0.0004", "asset": "USD_TEST"}, {"execution_key": "test:a:m:t2", "side": "sell", "qty_base": "0.006", "price": "1010", "fee": "0.000606", "asset": "USD_TEST"}]},
+      "expected": {"net_qty_base": "-0.002", "gross_realized": "0.04", "unrealized": "0.01", "total_fees": "0.001006", "pair_qty": "0.004", "pair_net": "0.039196", "net_pnl": "0.048994"}
+    }
+  ]
+}

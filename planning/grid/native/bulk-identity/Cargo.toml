@@ -1,0 +1,19 @@
+[package]
+name = "entropy-bulk-identity"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Calls the protocol implementation itself; never an independently invented
+# serialization or a hash of signing bytes. No signing key enters this tool.
+bulk-client = { git = "https://github.com/Bulk-trade/bulk-client", rev = "567dbc51a38c73d757ccb91547f197215b40ddc5", default-features = false }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+solana-pubkey = "=3.0.0"
+bincode = "=1.3.3"
+
+[profile.release]
+opt-level = 1
+debug = false
+
