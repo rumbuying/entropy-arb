@@ -325,14 +325,22 @@ async def capture_basis(parent, *, max_originals=256):
         # differ by ~1e-10 USDC on a 16-digit input. Accept the fold when
         # it matches bit-exactly, decimal-exactly, or within that venue
         # rounding noise; the residual stays in the recorded economics.
-        venue_rounding = _Dec('0.000000001')  # 1e-9 USDC dust bound
+        # The venue re-rounds its stored counter to 9 decimals after every
+        # update, so the stored text drifts from the exact decimal fold by
+        # up to 0.5e-9 per settlement (mainnet observed 1.02e-9 after 16
+        # hourly settlements — over a fixed bound, deadlocking recovery
+        # behind BULK_SCOPED_BASIS_FUNDING_MISMATCH). The bound scales with
+        # the folded update count; real anomalies are payment-sized (~1e-3),
+        # orders of magnitude above it.
+        def rounding_bound(updates):
+            return max(_Dec('0.000000001'), _Dec('0.0000000006') * updates)
         if not fees_ok:
             fees_residual = abs(_decimal(native['margin']['fees'], 'fees') - fees_exact)
-            if fees_residual > venue_rounding:
+            if fees_residual > rounding_bound(len(booked_fees)):
                 raise AdapterError('BULK_SCOPED_BASIS_FEES_MISMATCH')
         if not funding_ok:
             funding_residual = abs(_decimal(native['margin']['funding'], 'funding') - funding_exact)
-            if funding_residual > venue_rounding:
+            if funding_residual > rounding_bound(len(funding_order)):
                 raise AdapterError('BULK_SCOPED_BASIS_FUNDING_MISMATCH')
         value = dict(schema='bulk-scoped-recovery-v1', account=parent._account.account_id,
             owner=parent.owner, deployment=parent.deployment, network=parent.network,

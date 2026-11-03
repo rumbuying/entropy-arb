@@ -286,3 +286,52 @@ def test_restart_recovery_passes_with_booked_fills_and_scoped_basis(tmp_path, mo
         finally:
             rt.close()
     asyncio.run(run())
+
+
+def test_funding_display_rounding_drift_stays_within_the_scaled_bound(tmp_path, monkeypatch):
+    """The venue re-rounds its stored funding counter to 9 decimals after
+    every settlement. Sixteen hourly settlements left 1.02e-9 of display
+    drift on mainnet — above the old fixed 1e-9 bound, so every basis
+    capture refused (BULK_SCOPED_BASIS_FUNDING_MISMATCH) and the protective
+    closeout reconciled forever behind it. The bound now scales with the
+    folded update count; a payment-sized anomaly still refuses."""
+    async def run():
+        stack = build(monkeypatch, tmp_path)
+        rt = stack.rt
+        try:
+            venue, gid = await create_and_start(stack, monkeypatch)
+            amounts = [Decimal('0.0013382130590319555'), Decimal('0.00134427342917'),
+                       Decimal('0.0013650282617969588'), Decimal('0.0013739672668182453'),
+                       Decimal('0.0013817452380900002'), Decimal('0.00136969280927'),
+                       Decimal('0.00028660588566246004'), Decimal('0.00033363591003945003'),
+                       Decimal('0.000066223664440164'), Decimal('0.000011599440031673998'),
+                       Decimal('0.00020858117618465096'), Decimal('0.00032862290437475996'),
+                       Decimal('0.00012993242320923177'), Decimal('0.00017590846431233113'),
+                       Decimal('0.00010735975096599096'), Decimal('0.0010047512274715625')]
+            for i, amount in enumerate(amounts):
+                def w(c, amount=amount, i=i):
+                    c.execute('INSERT OR IGNORE INTO funding_payments VALUES(?,?,?,?,?,?,?,?)',
+                              (f'drift-key-{i}', venue._account.account_id, 'BTC-USD',
+                               str(-amount), 'USDC', f'2026-11-03T{10 + i // 2:02d}:{(i % 2) * 30:02d}:00Z',
+                               f'{650000000 + i}:1', 'venue_history_positive'))
+                await rt.store.write(w)
+            # The fold adds every stored payment back to the baseline counter.
+            exact = Decimal(stack.native.base['funding']) + sum(amounts)
+            for drift, expect_ok in ((Decimal('0.0000000012'), True), (Decimal('0.001'), False)):
+                counter = (exact + drift).quantize(Decimal('0.000000001'))
+                stack.native.native['margin']['funding'] = str(counter)
+                venue._state.gap = True
+                await rt.on_stream_loss(venue._account.account_id)
+                venue._state.connected = True
+                venue._state.gap = False
+                report = await rt.recover(gid, restore=True)
+                assert report['ok'] is expect_ok, json.dumps(report, default=str)[:500]
+                if expect_ok:
+                    assert report.get('scoped_basis')
+                    assert rt.lifecycle._grid(gid)['status'] == 'RUNNING'
+                else:
+                    assert report.get('scoped_basis_refusal') == 'BULK_SCOPED_BASIS_FUNDING_MISMATCH'
+                    assert rt.lifecycle._grid(gid)['status'] == 'NEEDS_ATTENTION'
+        finally:
+            rt.close()
+    asyncio.run(run())
