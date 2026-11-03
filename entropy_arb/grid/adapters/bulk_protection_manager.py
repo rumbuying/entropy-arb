@@ -22,10 +22,16 @@ from .bulk_read import BulkEvidenceReader, OPEN
 ACTIVE = ('ACCEPTED','OPEN','PARTIAL','UNKNOWN','DISPATCHING','CANCEL_REQUESTED','CANCEL_PENDING')
 CONFIRMED = ('ACCEPTED','OPEN','PARTIAL')
 PENDING = ACTIVE + ('PLANNED','BLOCKED_SLOT')
-PROOF_MAX_SECONDS = 30
+PROOF_MAX_SECONDS = 60
 OBSERVATION_WAITS = frozenset(('PROTECTION_FIXED_OBSERVATION_UNAVAILABLE',
     'PROTECTION_FIXED_OBSERVATION_CHANGED','PROTECTION_FIXED_OBSERVATION_STALE',
-    'PROTECTION_FIXED_POSITION_RECONCILIATION_REQUIRED','PROTECTION_QUOTE_STALE'))
+    'PROTECTION_FIXED_POSITION_RECONCILIATION_REQUIRED','PROTECTION_QUOTE_STALE',
+    # A failed/partial fullAccount read is blindness, not confirmed danger:
+    # the native stop keeps resting on the venue. Waiting lets the next tick
+    # re-verify; the lease deadline (PROOF_MAX_SECONDS) stays the backstop
+    # for persistent inability to see the account. (2026-11-03: a stream-gap
+    # episode turned one failed verify into an instant protective close.)
+    'PROTECTION_FIXED_SNAPSHOT_INCOMPLETE'))
 
 
 class BulkProtectionManager:

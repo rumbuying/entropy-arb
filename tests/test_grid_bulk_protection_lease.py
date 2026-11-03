@@ -3,6 +3,7 @@ import asyncio,copy,json,time
 import pytest
 from entropy_arb.grid.adapters.base import AdapterError
 from entropy_arb.grid.adapters.bulk_protection import VERIFY_WINDOW_MS
+from entropy_arb.grid.adapters.bulk_protection_manager import PROOF_MAX_SECONDS
 from entropy_arb.grid.service_coverage import GUARDIAN_EXIT_GRACE_S
 from entropy_arb.grid.protection_watch import ProtectionWatchScheduler
 from entropy_arb.grid.runtime import GridRuntime
@@ -42,7 +43,7 @@ def test_transient_read_waits_only_until_original_proof_expires(tmp_path,monkeyp
             assert code=='PROTECTION_FIXED_OBSERVATION_UNAVAILABLE'
             await rt.live_risk.freeze(gid,epoch=1,code=code)
             assert rt.lifecycle._grid(gid)['status']=='STARTING' and snapshot(rt,gid)==before
-            clock[0]+=30_000;mono[0]+=30_000
+            clock[0]+=PROOF_MAX_SECONDS*1000;mono[0]+=PROOF_MAX_SECONDS*1000
             await rt.live_risk.freeze(gid,epoch=1,code=code)
             assert rt.lifecycle._grid(gid)['status']=='STOPPING' and rt.lifecycle._grid(gid)['desired_mode']=='STOPPED'
             assert snapshot(rt,gid)==before and len(sender.calls)==1
@@ -66,7 +67,7 @@ def test_supervisor_exits_locally_while_native_read_stalls_and_rejects_late_rene
                         else:raise
             native.on_read=stalled
             await watcher.tick();await asyncio.wait_for(entered.wait(),1)
-            clock[0]+=30_001;mono[0]+=30_001
+            clock[0]+=PROOF_MAX_SECONDS*1000+1;mono[0]+=PROOF_MAX_SECONDS*1000+1
             await asyncio.wait_for(watcher.tick(),.3)
             assert rt.lifecycle._grid(gid)['status']=='STOPPING'
             assert snapshot(rt,gid)==before and native.orders and len(sender.calls)==1
@@ -85,7 +86,7 @@ def test_monotonic_deadline_still_expires_when_wall_clock_stops(tmp_path,monkeyp
     async def run():
         parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,*_=parts
         try:
-            before=snapshot(rt,gid);mono[0]+=30_000
+            before=snapshot(rt,gid);mono[0]+=PROOF_MAX_SECONDS*1000
             assert rt.protection_lease.check(gid,now_ms=clock[0])=='PROTECTION_SERVICE_FIXED_PROOF_EXPIRED'
             assert snapshot(rt,gid)==before
         finally:rt.close()
@@ -100,7 +101,7 @@ def test_new_native_confirmation_renews_both_clocks_only_after_consistent_read(t
             assert await rt.protection.verify(gid) is None
             new=snapshot(rt,gid)
             assert new['confirmed_from_ms']==old['confirmed_from_ms']+10_000
-            assert new['deadline_ms']==new['confirmed_from_ms']+30_000
+            assert new['deadline_ms']==new['confirmed_from_ms']+PROOF_MAX_SECONDS*1000
             assert new['deadline_mono_ms']==old['deadline_mono_ms']+10_000
             assert rt.protection_lease.check(gid,now_ms=clock[0]) is None
         finally:rt.close()
@@ -133,7 +134,7 @@ def test_recovery_fence_carries_capacity_without_renewing_time_and_needs_healthy
             assert not rt.protection_lease.retain_orders_during_gap(gid)
             rt.service_guardian_status=lambda:dict(healthy=True)
             assert rt.protection_lease.retain_orders_during_gap(gid)
-            mono[0]+=30_000
+            mono[0]+=PROOF_MAX_SECONDS*1000
             assert not rt.protection_lease.retain_orders_during_gap(gid)
             assert snapshot(rt,gid)==old|dict(epoch=2)
         finally:rt.close()
