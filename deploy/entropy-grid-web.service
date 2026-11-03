@@ -1,0 +1,17 @@
+[Unit]
+Description=entropy independent grid website (loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/code/entropy
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/code/entropy/.venv/bin/python grid_web.py --port 8789 --socket data/run/grid-runtime.sock
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

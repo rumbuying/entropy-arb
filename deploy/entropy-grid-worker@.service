@@ -1,0 +1,24 @@
+# One independent checkout + venv + vault + DB per venue. New workers are
+# observation-only until their actual trading/recovery/protection audit exists.
+# This template does not replace entropy-grid.service or any arbitrage unit.
+[Unit]
+Description=Independent grid connection worker (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/code/entropy-grid-workers/%i
+Environment=GRID_REAL_DISPATCH=0
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/code/entropy-grid-workers/%i/.venv/bin/python grid_main.py --mode production --venue %i --db data/grid-runtime.sqlite3 --socket data/run/grid-runtime.sock --credentials-dir data/grid-credentials --heartbeat-file data/run/grid-runtime-heartbeat.json
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+# Independent Bulk account entry; does not own a credential vault or engine.
+[Unit]
+Description=Bulk grid account website
+After=network.target entropy-grid-worker@bulk.service
+Wants=entropy-grid-worker@bulk.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/code/entropy-grid-workers/bulk
+Environment=GRID_REAL_DISPATCH=0
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/code/entropy-grid-workers/bulk/.venv/bin/python grid_web.py --port 8790 --socket /root/code/entropy-grid-workers/bulk/data/run/grid-runtime.sock
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

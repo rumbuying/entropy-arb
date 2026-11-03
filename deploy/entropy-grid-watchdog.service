@@ -1,0 +1,21 @@
+# Template: replace the installation directory with the confirmed server path.
+# Runtime and watchdog must run as the same OS user. This system-service
+# template uses systemctl without --user and requires service-control rights.
+# Keep GRID_REAL_DISPATCH=0 until actual Linux recovery qualification passes.
+[Unit]
+Description=entropy independent grid runtime watchdog
+After=entropy-grid.service
+Wants=entropy-grid.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/code/entropy
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/code/entropy/.venv/bin/python -u -m entropy_arb.grid.watchdog --root /root/code/entropy --manager systemd
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

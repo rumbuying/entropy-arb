@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>entropy-grid — 网格服务入口</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #111820; --panel-2: #0e141b; --border: #1e2a36;
+    --text: #d7e2ec; --dim: #7a8b9c; --accent: #35c4dc;
+    --green: #2ecc71; --blue: #4aa3ff;
+    --mono: "SFMono-Regular", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 22px 24px 4px; max-width: 980px; margin: 0 auto; width: 100%;
+  }
+  header .brand { font-weight: 700; font-size: 18px; }
+  header .brand .accent { color: var(--accent); }
+  header .sub { color: var(--dim); font-size: 13px; }
+  main {
+    flex: 1; max-width: 980px; width: 100%; margin: 0 auto;
+    padding: 18px 24px 30px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-content: start;
+  }
+  a.card {
+    display: flex; flex-direction: column; gap: 10px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 22px 20px 18px; text-decoration: none; color: var(--text);
+    transition: border-color .15s, transform .15s;
+  }
+  a.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card .head { display: flex; align-items: center; gap: 10px; }
+  .card .icon { font-size: 22px; }
+  .card .name { font-size: 16.5px; font-weight: 700; }
+  .card .venue { color: var(--accent); font-size: 12px; font-family: var(--mono); }
+  .card p { margin: 0; color: var(--dim); font-size: 13px; }
+  .card .go { margin-top: auto; padding-top: 6px; color: var(--accent); font-size: 13px; font-weight: 600; }
+  .card .go::after { content: " →"; }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .facts span {
+    font-size: 11.5px; color: var(--dim); font-family: var(--mono);
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px;
+    padding: 2px 7px;
+  }
+  .facts span.ok { color: var(--green); border-color: rgba(46,204,113,.35); }
+  footer {
+    max-width: 980px; width: 100%; margin: 0 auto;
+    padding: 0 24px 22px; color: var(--dim); font-size: 12px;
+  }
+  footer b { color: var(--text); font-weight: 600; }
+  @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">entropy-grid <span class="accent">网格服务</span></div>
+  <div class="sub">选择要打开的网格服务</div>
+</header>
+<main>
+  <a class="card" href="/grid/hl/">
+    <div class="head"><span class="icon">⚡</span><span class="name">HL 网格</span><span class="venue">Hyperliquid</span></div>
+    <p>Hyperliquid 永续网格控制台。独立运行时与看护，与 Bulk 服务互不影响。</p>
+    <div class="facts"><span class="ok">运行中</span><span>worker + web + watchdog</span><span>策略账号</span></div>
+    <div class="go">打开控制台</div>
+  </a>
+  <a class="card" href="/grid/bulk/">
+    <div class="head"><span class="icon">▦</span><span class="name">Bulk 网格</span><span class="venue">bulk.trade</span></div>
+    <p>Bulk 永续网格控制台。13 个币种已开放，做多个网格，原生止损保护。</p>
+    <div class="facts"><span class="ok">运行中</span><span>worker + web + watchdog</span><span>13 币种</span></div>
+    <div class="go">打开控制台</div>
+  </a>
+</main>
+<footer>
+  两个服务共用同一登录凭据（打开时浏览器会自动带上）。运行时相互独立：一个服务的重启、看护或网络问题不影响另一个。
+</footer>
+</body>
+</html>

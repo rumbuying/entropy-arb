@@ -1,0 +1,6 @@
+{
+  "hl": "/root/code/entropy-grid/data/run/grid-runtime.sock",
+  "lighter": "/root/code/entropy-grid-workers/lighter/data/run/grid-runtime.sock",
+  "katana": "/root/code/entropy-grid-workers/katana/data/run/grid-runtime.sock",
+  "backpack": "/root/code/entropy-grid-workers/backpack/data/run/grid-runtime.sock"
+}

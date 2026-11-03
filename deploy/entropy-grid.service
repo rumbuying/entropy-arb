@@ -1,0 +1,57 @@
+# entropy-arb grid runtime systemd unit (spec §15)
+#
+# 安装（root）:
+#   cp deploy/entropy-grid.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now entropy-grid
+#
+# 查看日志 / 状态:
+#   journalctl -u entropy-grid -f
+#   systemctl status entropy-grid
+#
+# 关键边界（GRID-TRADING-DEVELOPMENT-SPEC §15）:
+#   * 这是独立服务，不是 entropy-console 的子进程；Console 重启不影响
+#     网格执行，本服务重启也不影响旧套利 worker。
+#   * Restart=on-failure 重启后 Runtime 进入恢复核对（RECOVERING）——
+#     它不会跳过账本/未知订单检查直接续单（spec §9.3 恢复屏障）。
+#   * 首次发布 feature flag：GRID_REAL_DISPATCH=0 时 production 模式
+#     可通过 --hl-account 显式注册只读观察，不派发真实订单。
+#     全局开关不替代按账户/凭证/币种核验的资格。已认证范围见
+#     planning/grid/GRID-LIVE-RELEASE.zh-CN.md；本模板仍默认只读。
+#   * 运行库 data/grid-runtime.sqlite3、socket data/run/grid-runtime.sock
+#     都在持久数据目录；备份走 store.backup（online backup + manifest），
+#     不要只复制 .sqlite 而丢掉 WAL。
+#
+# simulation（无凭证演练）:
+#   ExecStart 改为:
+#     /usr/bin/python3.11 grid_main.py --mode simulation \
+#       --db data/grid-runtime-sim.sqlite3 --socket data/run/grid-sim.sock
+
+[Unit]
+Description=entropy-arb grid runtime (futures grid execution service)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/code/entropy
+# 真实派发总开关：0（默认）= production 也不派发真实订单
+Environment=GRID_REAL_DISPATCH=0
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/code/entropy/.venv/bin/python grid_main.py --mode production \
+  --db data/grid-runtime.sqlite3 --socket data/run/grid-runtime.sock \
+  --credentials-dir data/grid-credentials --funding-allowance 0 --commissioning-allowance 0 \
+  --heartbeat-file data/run/grid-runtime-heartbeat.json
+# 优雅停止：Runtime 关停时停开仓、撤普通网格单、核对落库（spec §9.1），
+# 超时则记录未决并退出，下一次启动先进恢复屏障。
+TimeoutStopSec=45
+Restart=always
+RestartSec=3
+# Runtime 是交易权威进程：control-group 全组重启（与 console 的
+# KillMode=process 语义不同——这里没有需要跨重启收养的子引擎）。
+KillMode=control-group
+# 持久数据目录的最低权限
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
