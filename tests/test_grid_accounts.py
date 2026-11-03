@@ -428,3 +428,37 @@ def test_unresolved_commission_blocks_credential_mutation_but_preserves_key(serv
             await accounts.save(payload(account_id=row['account_id'],expected_revision=row['revision'],request_id='replacement',private_key=''))
         assert vault.path.read_bytes()==before and vault.records[row['account_id']]['private_key']==KEY
     asyncio.run(run())
+
+
+def test_stream_task_death_restarts_with_backoff_and_a_deliberate_stop_does_not(service, monkeypatch):
+    accounts, rt, _, _ = service
+    attempts = []
+    async def observe(venue, stop):
+        attempts.append(venue)
+        if len(attempts) == 1:
+            raise RuntimeError('stream transport exploded')
+        await stop.wait()
+    monkeypatch.setattr(HyperliquidGridVenue, "run_stream", observe)
+    async def run():
+        row = (await accounts.save(payload()))["account"]
+        await accounts.verify({"account_id": row["account_id"], "expected_revision": row["revision"]})
+        first = accounts.start_stream(row["account_id"])
+        assert first is not None
+        loop = asyncio.get_running_loop()
+        end = loop.time() + 8
+        while len(attempts) < 2:
+            # First death restarts after the 2s backoff step.
+            assert loop.time() < end, "dead stream task was never restarted"
+            await asyncio.sleep(.05)
+        assert accounts._streams[row["account_id"]][1] is not first
+        assert first.done() and first.exception() is not None
+        # The restarted stream owns the venue again and stays up.
+        await asyncio.sleep(.2)
+        assert len(attempts) == 2 and not accounts._streams[row["account_id"]][1].done()
+        # A deliberate stop must leave no restart behind.
+        await accounts._stop_stream(row["account_id"])
+        settled = len(attempts)
+        await asyncio.sleep(.3)
+        assert len(attempts) == settled and not accounts._streams
+        await accounts.close()
+    asyncio.run(run())

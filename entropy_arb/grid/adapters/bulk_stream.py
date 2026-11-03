@@ -8,6 +8,7 @@ import asyncio
 from collections import OrderedDict
 from dataclasses import dataclass,replace
 import json
+import logging
 import re
 import time
 
@@ -21,6 +22,8 @@ from .bulk_wire import base58, uint, native_decimal, text
 
 WS_ORIGINS = {'mainnet':'wss://mainnet-ws1.bulk.trade', 'testnet':'wss://exchange-ws1.bulk.trade'}
 TERMINAL = CANCELED | REJECTED | {'filled','partiallyFilled','siblingCancelled','triggerFailed'}
+
+log = logging.getLogger('grid.bulk_stream')
 
 
 @dataclass(frozen=True)
@@ -287,6 +290,21 @@ class BulkAccountStream:
                 data=dict(code='BULK_STREAM_QUEUE_OVERFLOW')))
         else:self.queue.put_nowait(event)
 
+    def _emit_or_reconnect(self,event):
+        """Emit a data event, or demand a fresh subscription.
+
+        A full queue means the consumer fell behind: the events it would
+        need to stay reconciled are being dropped, and a healthy socket
+        never reconnects by itself — so without this raise, `connected`
+        stays false forever while frames keep flowing. Raising closes the
+        socket; the run loop reconnects, bumps the generation and requests
+        a fresh snapshot, which is the only state that can be trusted."""
+        if event is None:return
+        if self.queue.full():
+            self.recovery_required=True
+            raise AdapterError('BULK_STREAM_QUEUE_OVERFLOW')
+        self.queue.put_nowait(event)
+
     def poll(self):
         result=[]
         while not self.queue.empty():result.append(self.queue.get_nowait())
@@ -320,11 +338,13 @@ class BulkAccountStream:
                         raise AdapterError('BULK_STREAM_REDIRECT_REFUSED')
                     self.connected=True
                     await ws.send_json(dict(method='subscribe',subscription=[dict(type='account',user=self.owner)]))
-                    self._emit(BulkStreamEvent('stream_connected',self.decoder.generation))
+                    self._emit_or_reconnect(BulkStreamEvent('stream_connected',self.decoder.generation))
+                    log.info('bulk account stream connected: generation=%s', self.decoder.generation)
                     async for msg in ws:
                         if msg.type==aiohttp.WSMsgType.TEXT:
                             self.last_received=time.monotonic()
-                            event=self.decoder.ingest(msg.data);self._emit(event)
+                            event=self.decoder.ingest(msg.data)
+                            self._emit_or_reconnect(event)
                             if self.decoder.has_snapshot:delay=1
                         elif msg.type not in (aiohttp.WSMsgType.PING,aiohttp.WSMsgType.PONG):break
             except asyncio.CancelledError:raise
@@ -336,6 +356,8 @@ class BulkAccountStream:
             finally:
                 self.connected=False;self.recovery_required=True
                 self._emit(BulkStreamEvent('stream_gap',self.decoder.generation,data=dict(code=code)))
+                if not self.stopped.is_set():
+                    log.warning('bulk account stream gap: %s (generation=%s)', code, self.decoder.generation)
             try:await asyncio.wait_for(self.stopped.wait(),timeout=delay)
             except TimeoutError:pass
             delay=min(30,delay*2)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import os
 import re
 import uuid
@@ -24,6 +25,8 @@ KEY = re.compile(r"(?:0x)?[0-9a-fA-F]{64}\Z")
 PUBLIC_FIELDS = ("account_id", "name", "venue", "network", "account_address",
                  "signer_address", "revision", "credential_ref", "created_ts", "updated_ts", "verification")
 
+log = logging.getLogger("grid.accounts")
+
 
 class GridAccounts:
     def __init__(self, runtime, vault: CredentialVault, transport_factory, *, observe_streams=False, temporary=False,
@@ -33,6 +36,8 @@ class GridAccounts:
         self.observe_streams = observe_streams
         self.temporary = temporary
         self._streams = {}
+        self._stream_restarts = {}
+        self._closed = False
         from .venue_registry import spec_for
         from .connections import ConnectionAccounts
         self.venue_keys = tuple(venue_keys)
@@ -573,6 +578,7 @@ class GridAccounts:
             stream[0].set()
             stream[1].cancel()
             await asyncio.gather(stream[1], return_exceptions=True)
+            self._stream_restarts.pop(aid, None)
 
     def start_stream(self, aid):
         """Own the private account stream of an execution-capable venue.
@@ -585,8 +591,28 @@ class GridAccounts:
             return None
         stop = asyncio.Event()
         task = asyncio.create_task(venue.run_stream(stop), name=f"grid-account-stream:{aid}")
+        task.add_done_callback(lambda done, aid=aid: self._stream_finished(aid, done))
         self._streams[aid] = (stop, task)
         return task
+
+    def _stream_finished(self, aid, task):
+        """A stream task that ends un-stopped is a fault, not a shutdown.
+
+        Nobody else maintains the venue's connected state, so a dead task
+        used to strand recovery forever with nothing in the logs. Restart
+        with backoff; a deliberate stop cancels the task, which lands here
+        as cancelled and never restarts."""
+        if self._closed or task.cancelled() or task.exception() is None:
+            return
+        log.error("account stream task died: %s: %r", aid, task.exception())
+        attempts = self._stream_restarts.get(aid, 0) + 1
+        self._stream_restarts[aid] = attempts
+        delay = min(30.0, 2.0 ** min(attempts, 5))
+        async def restart():
+            await asyncio.sleep(delay)
+            if not self._closed:
+                self.start_stream(aid)
+        asyncio.create_task(restart(), name=f"grid-account-stream-restart:{aid}")
 
     def _close_signer(self, aid):
         venue = self.runtime.venues.get(aid)
@@ -603,6 +629,7 @@ class GridAccounts:
                 self.runtime.venues[aid].poll()
 
     async def close(self):
+        self._closed = True
         await self.connections.close()
         for aid in list(self._streams):
             await self._stop_stream(aid)

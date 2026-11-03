@@ -138,7 +138,12 @@ def test_account_ingests_real_stream_and_confirms_only_native_rest_fills_without
             for raw in FRAMES:
                 event=d.ingest(raw)
                 if event:await root.ingest_events([event])
-            view=root.market_venue(ENTRY.market);events=view.poll()
+            view=root.market_venue(ENTRY.market)
+            # Confirmation is driven off the ingest path (confirm loop); one
+            # explicit tick here stands in for the loop's iteration.
+            for v in root.views.values():
+                if v._pending:await v.confirm_pending()
+            events=view.poll()
             assert len(events)==2 and {e.execution.side for e in events}=={'buy','sell'}
             assert all(e.execution.source=='rest_backfill' and e.execution.finality=='final' for e in events)
             assert not view._pending and root.stream_connected and root.stream_gap  # global coverage remains unverified

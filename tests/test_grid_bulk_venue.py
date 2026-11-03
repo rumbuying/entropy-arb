@@ -2,16 +2,21 @@
 import asyncio,copy
 from dataclasses import replace
 import pytest
+import aiohttp
+from aiohttp import web
+from aiohttp.test_utils import TestServer
+
 from entropy_arb.grid.adapters.bulk import BulkAccountVenue
 from entropy_arb.grid.adapters.base import AdapterError
 from entropy_arb.grid.adapters.bulk_read import BulkReply
+from entropy_arb.grid.adapters.bulk_stream import WS_ORIGINS
 from entropy_arb.grid.adapters.observation import ORIGINS
 from entropy_arb.grid.runtime import GridRuntime
 from entropy_arb.grid.store import Store
 from entropy_arb.grid.venue_registry import account_identity
 from test_grid_bulk import OWNER,META,REQUEST,RULES,OID,fill,history
 from test_grid_bulk_fees import quote
-from test_grid_bulk_stream import decoder,frame,ws_fill
+from test_grid_bulk_stream import decoder,frame,ws_fill,ws_order,snapshot
 from test_grid_bulk_execution import Protocol,Sender
 
 
@@ -263,4 +268,88 @@ def test_unsupported_sibling_rules_are_explicit_without_stranding_the_supported_
             btc=venue.market_venue(RULES.market_ref.replace('ETH-USD','BTC-USD'))
             with pytest.raises(AdapterError):await btc.load_instrument(btc.market.market_key)
         finally:st.close()
+    asyncio.run(run())
+
+
+def test_pending_confirmations_are_driven_off_the_ingest_path(tmp_path):
+    async def run():
+        transport=Read();st=Store.open(str(tmp_path/'confirm.sqlite'))
+        try:
+            venue=root(st,transport);await venue.catalog_markets()
+            view=venue.market_venue('bulk:mainnet||ETH-USD|linear_perp|USDC')
+            event=decoder().ingest(frame(ws_fill()))
+            view._pending[event.execution.execution_key]=event.execution
+            stop=asyncio.Event()
+            task=asyncio.create_task(venue._confirm_pending_loop(stop),name='confirm-loop')
+            try:
+                end=asyncio.get_running_loop().time()+4
+                while not any(kind=='fills' for kind,_ in transport.calls):
+                    assert asyncio.get_running_loop().time()<end,'confirm loop never read fill history'
+                    await asyncio.sleep(.02)
+            finally:
+                stop.set();await asyncio.gather(task,return_exceptions=True)
+            assert task.done()
+        finally:st.close()
+    asyncio.run(run())
+
+
+def test_run_stream_survives_an_ingest_fault_and_keeps_ingesting(tmp_path, monkeypatch):
+    async def run():
+        transport=Read();st=Store.open(str(tmp_path/'stream.sqlite'))
+        handshook=asyncio.Event();send_fill=asyncio.Event()
+        async def endpoint(request):
+            ws=web.WebSocketResponse();await ws.prepare(request)
+            await ws.receive_json()
+            await ws.send_json(dict(type='subscriptionResponse',topics=['account.'+OWNER]))
+            await ws.send_str(frame(snapshot()))
+            handshook.set()
+            await send_fill.wait()
+            await ws.send_str(frame(ws_fill()))
+            await asyncio.sleep(.3)
+            await ws.send_str(frame(ws_order()))
+            await asyncio.sleep(1)
+            await ws.close()
+            return ws
+        app=web.Application();app.router.add_get('/ws',endpoint)
+        server=TestServer(app);await server.start_server()
+        monkeypatch.setitem(WS_ORIGINS,'mainnet',str(server.make_url('/ws')).replace('http://','ws://'))
+        try:
+            async with aiohttp.ClientSession() as session:
+                transport.session=session
+                venue=root(st,transport);await venue.catalog_markets()
+                original=venue.ingest_events
+                fault={'raised':False}
+                async def flaky(events):
+                    if any(e.kind=='fill_requires_history' for e in events) and not fault['raised']:
+                        fault['raised']=True
+                        raise AdapterError('BULK_STREAM_BUFFER_OVERFLOW')
+                    await original(events)
+                monkeypatch.setattr(venue,'ingest_events',flaky)
+                stop=asyncio.Event()
+                task=asyncio.create_task(venue.run_stream(stop),name='run-stream')
+                try:
+                    await asyncio.wait_for(handshook.wait(),4)
+                    end=asyncio.get_running_loop().time()+4
+                    while not venue._state.connected:
+                        assert asyncio.get_running_loop().time()<end,'stream never became connected'
+                        await asyncio.sleep(.02)
+                    send_fill.set()
+                    end=asyncio.get_running_loop().time()+6
+                    while not fault['raised']:
+                        assert asyncio.get_running_loop().time()<end,'poisoned batch never reached ingest'
+                        await asyncio.sleep(.02)
+                    # The fault is swallowed and flagged; the task and the state
+                    # machine keep ingesting later events.
+                    assert venue._state.gap
+                    revision=venue.private_revision
+                    end=asyncio.get_running_loop().time()+6
+                    while venue.private_revision==revision:
+                        assert asyncio.get_running_loop().time()<end,'ingest stalled after the fault'
+                        await asyncio.sleep(.02)
+                    assert not task.done()
+                finally:
+                    stop.set();await asyncio.gather(task,return_exceptions=True)
+                assert task.done() and venue._stream is None
+        finally:
+            await server.close();st.close()
     asyncio.run(run())

@@ -209,6 +209,69 @@ def test_queue_overflow_leaves_explicit_gap_and_never_silently_loses_fills():
     asyncio.run(run())
 
 
+def test_queue_overflow_while_connected_forces_a_fresh_subscription(monkeypatch):
+    async def run():
+        connections=0;observed=[];overflow=asyncio.Event();reconnected=asyncio.Event()
+        async def endpoint(request):
+            nonlocal connections
+            connections+=1;number=connections
+            ws=web.WebSocketResponse();await ws.prepare(request)
+            await ws.receive_json()
+            await ws.send_json(dict(type='subscriptionResponse',topics=['account.'+OWNER]))
+            await ws.send_str(frame(snapshot()))
+            if number==1:
+                # A burst a stalled consumer cannot drain. The producer must
+                # refuse to keep dropping events into a full queue: it raises,
+                # the socket closes and a fresh subscription rebuilds state.
+                for i in range(30):
+                    await ws.send_str(frame(ws_fill(tradeId=f'10{i}:1')))
+                await eventually(lambda:overflow.is_set(),6)
+                await ws.close()
+            else:
+                await asyncio.sleep(.3)
+                await ws.close()
+            return ws
+        app=web.Application();app.router.add_get('/ws',endpoint)
+        server=TestServer(app);await server.start_server()
+        monkeypatch.setitem(WS_ORIGINS,'mainnet',str(server.make_url('/ws')).replace('http://','ws://'))
+        try:
+            async with aiohttp.ClientSession() as session:
+                stream=BulkAccountStream(session,network='mainnet',account='account-1',owner=OWNER,
+                    reader_factory=lambda _:reader(),queue_size=2)
+                await stream.start()
+                try:
+                    def fresh_start():
+                        """A stream_connected observed after an overflow gap."""
+                        gaps=[i for i,e in enumerate(observed) if e.kind=='stream_gap'
+                              and e.data.get('code')=='BULK_STREAM_QUEUE_OVERFLOW']
+                        return any(i for i,e in enumerate(observed)
+                                   if e.kind=='stream_connected'
+                                   and any(g<i for g in gaps))
+                    async def drain():
+                        while True:
+                            observed.extend(stream.poll())
+                            if (any(e.kind=='stream_gap' and e.data.get('code')=='BULK_STREAM_QUEUE_OVERFLOW'
+                                    for e in observed)):overflow.set()
+                            if fresh_start():reconnected.set()
+                            await asyncio.sleep(.01)
+                    drainer=asyncio.create_task(drain())
+                    try:
+                        await asyncio.wait_for(reconnected.wait(),8)
+                    finally:
+                        drainer.cancel();await asyncio.gather(drainer,return_exceptions=True)
+                    assert connections>=2
+                    assert stream.decoder.generation>=2
+                    first_gap=next(i for i,e in enumerate(observed)
+                                   if e.kind=='stream_gap' and e.data.get('code')=='BULK_STREAM_QUEUE_OVERFLOW')
+                    assert any(e.kind=='stream_connected' for e in observed[first_gap:])
+                    # A reconnect re-emits the subscription snapshot: begin()
+                    # resets the decoder, so the fresh state is observable.
+                    assert any(e.kind=='snapshot_requires_reconciliation' for e in observed[first_gap:])
+                finally:await stream.close()
+        finally:await server.close()
+    asyncio.run(run())
+
+
 def test_redirected_ws_gets_no_owner_subscription(monkeypatch):
     async def run():
         received=[];connected=asyncio.Event()

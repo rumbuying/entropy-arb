@@ -8,6 +8,7 @@ import asyncio
 import copy
 from dataclasses import dataclass
 from decimal import Decimal
+import logging
 import os
 import time
 
@@ -20,6 +21,8 @@ from .bulk_read import BulkEvidenceReader,ns_iso
 from .bulk_stream import BulkAccountStream,confirm_stream_fill
 from .bulk_wire import BulkIntentJournal,BulkWireRules,base58,uint,text,native_decimal
 from .observation import ORIGINS
+
+log = logging.getLogger('grid.bulk')
 
 
 @dataclass
@@ -210,7 +213,6 @@ class BulkAccountVenue(GridVenue):
                     view=self.market_venue(models.MarketIdentity(self.deployment,event.symbol,'','linear_perp','USDC').market_key)
                     if len(view._pending)>=1024:raise AdapterError('BULK_STREAM_BUFFER_OVERFLOW')
                     view._pending[event.execution.execution_key]=event.execution
-                    await view.confirm_pending()
                 elif event.kind=='order_requires_reconciliation':
                     order=event.order
                     view=self.market_venue(models.MarketIdentity(self.deployment,event.symbol,'','linear_perp','USDC').market_key)
@@ -235,16 +237,42 @@ class BulkAccountVenue(GridVenue):
         stream=BulkAccountStream(self.transport.session,owner=self.owner,account=self._account.account_id,
             network=self.network,reader_factory=reader)
         self._stream=stream
+        confirm=asyncio.create_task(self._confirm_pending_loop(stop),name='bulk-confirm-pending')
         try:
             await stream.start()
             while not stop.is_set():
-                await self.ingest_events(stream.poll())
-                for view in list(self.views.values()):
-                    if view._pending:await view.confirm_pending()
+                try:
+                    await self.ingest_events(stream.poll())
+                except asyncio.CancelledError:raise
+                except Exception:
+                    # One malformed batch must not kill the account stream:
+                    # a dead task leaves connected=false forever with nobody
+                    # left to restart it. The dropped provisional fills are
+                    # re-derived by recovery from native REST history.
+                    log.exception('bulk account event ingest failed')
+                    self._state.gap=True
                 try:await asyncio.wait_for(stop.wait(),timeout=1)
                 except TimeoutError:pass
         finally:
+            confirm.cancel();await asyncio.gather(confirm,return_exceptions=True)
             await stream.close();self._stream=None;self._state.connected=False;self._state.gap=True
+
+    async def _confirm_pending_loop(self,stop):
+        """Confirm provisional stream fills off the ingest path.
+
+        A confirmation read rides the shared paced transport; inline it let
+        one slow read stall the ingest loop until the stream queue
+        overflowed, and the venue then stayed permanently disconnected.
+        Fills remain provisional (and reconcilable) until this loop matches
+        them against native REST history."""
+        while not stop.is_set():
+            try:
+                for view in list(self.views.values()):
+                    if view._pending:await view.confirm_pending()
+            except asyncio.CancelledError:raise
+            except Exception:self._state.gap=True
+            try:await asyncio.wait_for(stop.wait(),timeout=1)
+            except TimeoutError:pass
 
     def poll(self):return [event for view in self.views.values() for event in view.poll()]
 
