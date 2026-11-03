@@ -1,0 +1,133 @@
+{
+  "provenance": {
+    "request_id": "bulk-trigger-20261030-v37",
+    "source_sha256": "a74f6d436249f669c5197d19ebc8adbff07f94b03d09af2f0b014f199c0f3590",
+    "checked_ms": 1793369370994
+  },
+  "account": "f9e93774-7f0a-5fe1-9d66-04277c0d9b19",
+  "owner": "CEQCFMNRS2mCED3CPz9sc4ReaWhgxA3xkJs5kzCdWW87",
+  "stop_request": {
+    "account": "f9e93774-7f0a-5fe1-9d66-04277c0d9b19",
+    "client_id": "bulk-trigger-20261030-v37:stop",
+    "epoch": 1,
+    "intent_id": "bulk-trigger-20261030-v37:stop",
+    "market": "bulk:mainnet||BTC-USD|linear_perp|USDC",
+    "policy": "gtc",
+    "price": "76833.01",
+    "qty_base": "0.00001951",
+    "reduce_only": true,
+    "request_deadline_sec": null,
+    "side": "sell",
+    "trigger_price": "76833.01",
+    "whole_position": false
+  },
+  "entry_request": {
+    "account": "f9e93774-7f0a-5fe1-9d66-04277c0d9b19",
+    "client_id": "bulk-trigger-20261030-v37:entry",
+    "epoch": 1,
+    "intent_id": "bulk-trigger-20261030-v37:entry",
+    "market": "bulk:mainnet||BTC-USD|linear_perp|USDC",
+    "policy": "ioc",
+    "price": "76989.7",
+    "qty_base": "0.00001951",
+    "reduce_only": false,
+    "request_deadline_sec": null,
+    "side": "buy",
+    "trigger_price": null,
+    "whole_position": false
+  },
+  "order_history": [
+    {
+      "orderId": "5Vu7edkreND9pjtDSzBFCJXekJ4ntTyhnShYNoYXcueq",
+      "symbol": "BTC-USD",
+      "side": "sell",
+      "orderType": "market",
+      "tif": "ioc",
+      "price": "76829.85",
+      "vwap": "76829.85",
+      "originalSize": "0.00001951",
+      "executedSize": "0.00001951",
+      "reduceOnly": true,
+      "status": "filled",
+      "trigger": {
+        "isAbove": false,
+        "px": "76833.01"
+      },
+      "iso": false,
+      "slot": 640469011,
+      "timestamp": 1793369293419681487,
+      "sequence": 21
+    },
+    {
+      "orderId": "GJU4f8bH6jGhj4tadZeBPZUgrJVbKQ2HXc3fqHnqn1g5",
+      "symbol": "BTC-USD",
+      "side": "buy",
+      "orderType": "limit",
+      "tif": "ioc",
+      "price": "76989.7",
+      "vwap": "76942.63",
+      "originalSize": "0.00001951",
+      "executedSize": "0.00001951",
+      "reduceOnly": false,
+      "status": "filled",
+      "iso": false,
+      "slot": 640464735,
+      "timestamp": 1793369259212376427,
+      "sequence": 20
+    }
+  ],
+  "fills": [
+    {
+      "maker": "7Xg5ginEh2oaSZzrimsBM9AGoaTJpMfXQxvB8xvBJrZd",
+      "taker": "CEQCFMNRS2mCED3CPz9sc4ReaWhgxA3xkJs5kzCdWW87",
+      "orderIdMaker": "85nu7C96b99G6vChiSXaoWufwoAapcyKxMBPEPCpoypZ",
+      "orderIdTaker": "5Vu7edkreND9pjtDSzBFCJXekJ4ntTyhnShYNoYXcueq",
+      "isBuy": false,
+      "symbol": "BTC-USD",
+      "amount": "0.00001951",
+      "price": "76829.85",
+      "makerFee": "0.000225",
+      "takerFee": "-0.000525",
+      "fee": "-0.000525",
+      "reasonCode": 0,
+      "iso": false,
+      "counterpartyHint": "7Xg5..JrZd",
+      "slot": 640469011,
+      "timestamp": 1793369293419681487,
+      "sequence": 19
+    },
+    {
+      "maker": "H93eRi2sGYcW4MzJu92VLhPCQVZ3S2K1mFAa1Ja1Zwcg",
+      "taker": "CEQCFMNRS2mCED3CPz9sc4ReaWhgxA3xkJs5kzCdWW87",
+      "orderIdMaker": "Dp7XJov3JrHFN1YmUBRreW4bZjLNcQBZxrmccP1Wsvgc",
+      "orderIdTaker": "GJU4f8bH6jGhj4tadZeBPZUgrJVbKQ2HXc3fqHnqn1g5",
+      "isBuy": true,
+      "symbol": "BTC-USD",
+      "amount": "0.00001951",
+      "price": "76942.63",
+      "makerFee": "0.00015",
+      "takerFee": "-0.000525",
+      "fee": "-0.000525",
+      "reasonCode": 0,
+      "iso": false,
+      "counterpartyHint": "H93e..Zwcg",
+      "slot": 640464735,
+      "timestamp": 1793369259212376427,
+      "sequence": 18
+    }
+  ],
+  "native_margin": {
+    "totalMargin": "500.691276",
+    "availableMargin": "500.691276",
+    "executionImpact": "0.0",
+    "transferableBalance": "500.691276",
+    "marginUsed": "0.0",
+    "marginBufferRate": "0.05",
+    "bufferedMargin": "0.0",
+    "notional": "0.0",
+    "realizedPnl": "-0.005505",
+    "unrealizedPnl": "0.0",
+    "fees": "-0.0042",
+    "funding": "-0.000018782"
+  }
+}

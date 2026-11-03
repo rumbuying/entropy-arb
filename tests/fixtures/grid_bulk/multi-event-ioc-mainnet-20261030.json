@@ -1,0 +1,166 @@
+{
+  "request_id": "bulk-trigger-20261030-v37",
+  "entry_request": {
+    "account": "f9e93774-7f0a-5fe1-9d66-04277c0d9b19",
+    "client_id": "bulk-trigger-20261030-v37:entry",
+    "epoch": 1,
+    "intent_id": "bulk-trigger-20261030-v37:entry",
+    "market": "bulk:mainnet||BTC-USD|linear_perp|USDC",
+    "policy": "ioc",
+    "price": "76989.7",
+    "qty_base": "0.00001951",
+    "reduce_only": false,
+    "request_deadline_sec": null,
+    "side": "buy",
+    "trigger_price": null,
+    "whole_position": false
+  },
+  "stop_request": {
+    "account": "f9e93774-7f0a-5fe1-9d66-04277c0d9b19",
+    "client_id": "bulk-trigger-20261030-v37:stop",
+    "epoch": 1,
+    "intent_id": "bulk-trigger-20261030-v37:stop",
+    "market": "bulk:mainnet||BTC-USD|linear_perp|USDC",
+    "policy": "gtc",
+    "price": "76833.01",
+    "qty_base": "0.00001951",
+    "reduce_only": true,
+    "request_deadline_sec": null,
+    "side": "sell",
+    "trigger_price": "76833.01",
+    "whole_position": false
+  },
+  "submission_responses": [
+    {
+      "action": "st",
+      "data": {
+        "response": {
+          "data": {
+            "statuses": [
+              {
+                "resting": {
+                  "oid": "5Vu7edkreND9pjtDSzBFCJXekJ4ntTyhnShYNoYXcueq"
+                }
+              }
+            ]
+          },
+          "type": "order"
+        },
+        "status": "ok"
+      },
+      "kind": "submission-response",
+      "observed_ms": 1793369245193,
+      "order_id": "5Vu7edkreND9pjtDSzBFCJXekJ4ntTyhnShYNoYXcueq",
+      "status": 200
+    },
+    {
+      "action": "l",
+      "data": {
+        "response": {
+          "data": {
+            "statuses": [
+              {
+                "working": {
+                  "filledSz": "0.00001951",
+                  "oid": "Dp7XJov3JrHFN1YmUBRreW4bZjLNcQBZxrmccP1Wsvgc",
+                  "remainingSz": "0.07797287",
+                  "vwap": "76942.63"
+                }
+              },
+              {
+                "filled": {
+                  "avgPx": "76942.63",
+                  "oid": "GJU4f8bH6jGhj4tadZeBPZUgrJVbKQ2HXc3fqHnqn1g5",
+                  "totalSz": "0.00001951"
+                }
+              }
+            ]
+          },
+          "type": "order"
+        },
+        "status": "ok"
+      },
+      "kind": "submission-response",
+      "observed_ms": 1793369259217,
+      "order_id": "GJU4f8bH6jGhj4tadZeBPZUgrJVbKQ2HXc3fqHnqn1g5",
+      "status": 200
+    }
+  ],
+  "originals": [
+    {
+      "client_id": "bulk-trigger-20261030-v37:stop",
+      "order_id": "5Vu7edkreND9pjtDSzBFCJXekJ4ntTyhnShYNoYXcueq",
+      "request_hash": "8d7e6608e740635e7cd39cc667accfc1a8394283788f62eb486db7fde6049b45",
+      "nonce": 1793369242151063152,
+      "action": {
+        "iso": false,
+        "size": "0.00001951",
+        "symbol": "BTC-USD",
+        "trigger_price": "76833.01",
+        "type": "stop"
+      },
+      "receipt": {
+        "detail": "",
+        "exchange_order_id": "5Vu7edkreND9pjtDSzBFCJXekJ4ntTyhnShYNoYXcueq",
+        "executed_qty": "0",
+        "reject_code": null,
+        "stage": "bulk_resting",
+        "state": "ACCEPTED"
+      },
+      "native_evidence": {
+        "conditional_parked": false,
+        "cumulative_known": true,
+        "cumulative_qty": "0.00001951",
+        "history_start_slot": 0,
+        "native_order_id": "5Vu7edkreND9pjtDSzBFCJXekJ4ntTyhnShYNoYXcueq",
+        "native_status": "filled",
+        "request_hash": "8d7e6608e740635e7cd39cc667accfc1a8394283788f62eb486db7fde6049b45",
+        "state": "FOUND_TERMINAL",
+        "terminal_state": "FILLED"
+      }
+    },
+    {
+      "client_id": "bulk-trigger-20261030-v37:entry",
+      "order_id": "GJU4f8bH6jGhj4tadZeBPZUgrJVbKQ2HXc3fqHnqn1g5",
+      "request_hash": "accae94e05b7cef054745427cf066f2239659945f9ba4e5ccc0d6a495085374a",
+      "nonce": 1793369254163668680,
+      "action": {
+        "is_buy": true,
+        "iso": false,
+        "order_type": {
+          "tif": "IOC",
+          "type": "limit"
+        },
+        "price": "76989.7",
+        "reduce_only": false,
+        "size": "0.00001951",
+        "symbol": "BTC-USD",
+        "type": "order"
+      },
+      "receipt": {
+        "detail": "",
+        "exchange_order_id": "GJU4f8bH6jGhj4tadZeBPZUgrJVbKQ2HXc3fqHnqn1g5",
+        "executed_qty": "0",
+        "reject_code": null,
+        "stage": "bulk_ack_unproven",
+        "state": "UNKNOWN"
+      },
+      "native_evidence": {
+        "conditional_parked": false,
+        "cumulative_known": true,
+        "cumulative_qty": "0.00001951",
+        "history_start_slot": 0,
+        "native_order_id": "GJU4f8bH6jGhj4tadZeBPZUgrJVbKQ2HXc3fqHnqn1g5",
+        "native_status": "filled",
+        "request_hash": "accae94e05b7cef054745427cf066f2239659945f9ba4e5ccc0d6a495085374a",
+        "state": "FOUND_TERMINAL",
+        "terminal_state": "FILLED"
+      }
+    }
+  ],
+  "provenance": {
+    "source_sha256": "75e100de556574f3d7c7c708c6f785c0ad581545bd151847f9252751677da7ee",
+    "checked_ms": 1793370868237,
+    "public_unsigned_evidence": true
+  }
+}

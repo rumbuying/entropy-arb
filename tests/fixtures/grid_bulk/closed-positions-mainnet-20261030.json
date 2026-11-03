@@ -1,0 +1,52 @@
+{
+  "source": "native-positions-mainnet-20261030",
+  "source_sha256": "1cf7dfd22f03119e84a01c495a9dfaf9ee16cd5a126fd09a8d621665038bbeea",
+  "response": {
+    "data": [
+      {
+        "owner": "CEQCFMNRS2mCED3CPz9sc4ReaWhgxA3xkJs5kzCdWW87",
+        "symbol": "BTC-USD",
+        "quantity": "0.00001843",
+        "maxQuantity": "0.00001843",
+        "totalVolume": "0.00003686",
+        "avgOpenPrice": "81439.08",
+        "avgClosePrice": "81422.43",
+        "realizedPnl": "-0.000306",
+        "fees": "-0.00105",
+        "funding": "0.0",
+        "openTime": 1793287227163715423,
+        "closeTime": 1793287246188421467,
+        "closeReason": "normal",
+        "iso": false,
+        "closeSlot": 630213107,
+        "sequence": 0
+      },
+      {
+        "owner": "CEQCFMNRS2mCED3CPz9sc4ReaWhgxA3xkJs5kzCdWW87",
+        "symbol": "BTC-USD",
+        "quantity": "0.0000188",
+        "maxQuantity": "0.0000188",
+        "totalVolume": "0.0000376",
+        "avgOpenPrice": "79794.79",
+        "avgClosePrice": "79594.93",
+        "realizedPnl": "-0.003757",
+        "fees": "-0.001049",
+        "funding": "0.0",
+        "openTime": 1793021330579735767,
+        "closeTime": 1793021844275648022,
+        "closeReason": "normal",
+        "iso": false,
+        "closeSlot": 597037868,
+        "sequence": 0
+      }
+    ],
+    "page": {
+      "nextCursor": null,
+      "hasMore": false,
+      "asOfSlot": 630213107,
+      "startSlot": 0,
+      "endSlot": 630213107,
+      "coverage": "unknown"
+    }
+  }
+}

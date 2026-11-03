@@ -1,0 +1,34 @@
+{
+  "fee_tiers": [
+    {
+      "symbol": "global",
+      "rollingVolume": "0.0",
+      "tierIndex": 0,
+      "tierThreshold": "0.0",
+      "makerBps": "0.0",
+      "takerBps": "3.5",
+      "windowDays": 14
+    }
+  ],
+  "fee_reply": [
+    {
+      "feeTier": {
+        "scopeInstrument": null,
+        "rollingVolume": "0.0",
+        "tierIndex": 0,
+        "tierThreshold": "0.0",
+        "makerBps": "0.0",
+        "takerBps": "3.5",
+        "windowDays": 14,
+        "assessmentEpochDay": 20751,
+        "assessmentCutoff": 1792886400000000000,
+        "assessedAccountVolume": "0.0",
+        "makerNumerator": "0.0",
+        "marketDenominator": "76865298.641581",
+        "makerSharePpm": 0,
+        "makerShareRebateBps": "0.0",
+        "effectiveMakerBps": "0.0"
+      }
+    }
+  ]
+}

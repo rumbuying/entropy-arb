@@ -1,0 +1,170 @@
+{
+  "source": "bulk-resting-20261029-v20.run.json",
+  "source_sha256": "4e1e4bb25ff028d99e02106447338abe1b1de96921387a51bd5f7d421bb500e0",
+  "observed_ms": 1793289221123,
+  "note": "Account envelope reconstructed from verified MasterEOA sample; native margin/orders/settings preserved.",
+  "native_account": {
+    "kind": "MasterEOA",
+    "margin": {
+      "availableMargin": "500.694838",
+      "bufferedMargin": "0.0",
+      "executionImpact": "0.0",
+      "fees": "-0.002099",
+      "funding": "0.0",
+      "marginBufferRate": "0.05",
+      "marginUsed": "0.0",
+      "notional": "0.0",
+      "realizedPnl": "-0.004063",
+      "totalMargin": "500.694838",
+      "transferableBalance": "500.694838",
+      "unrealizedPnl": "0.0"
+    },
+    "positions": [],
+    "openOrders": [
+      {
+        "filledSize": "0.0",
+        "iso": false,
+        "maker": true,
+        "orderId": "9XrEDqT1mzB64bmnqm43CXEeKubv81PEdYwr22PfqZFP",
+        "orderType": "stop",
+        "originalSize": "-0.00002978",
+        "price": "78385.32",
+        "reduceOnly": true,
+        "size": "-0.00002978",
+        "status": "resting",
+        "symbol": "BTC-USD",
+        "tif": "gtc",
+        "timestamp": 1793289221116153386,
+        "trigger": {
+          "isAbove": false,
+          "px": "78385.32"
+        },
+        "vwap": "78385.32"
+      },
+      {
+        "filledSize": "0.0",
+        "iso": false,
+        "maker": true,
+        "orderId": "J7NEiV54EkfzVtpoyEvtVxpc4YevME1np2fSEYiApULE",
+        "orderType": "limit",
+        "originalSize": "0.00001485",
+        "price": "80834.85",
+        "reduceOnly": false,
+        "size": "0.00001485",
+        "status": "resting",
+        "symbol": "BTC-USD",
+        "tif": "gtc",
+        "timestamp": 1793289203988508556,
+        "trigger": null,
+        "vwap": "0.0"
+      },
+      {
+        "filledSize": "0.0",
+        "iso": false,
+        "maker": true,
+        "orderId": "HQ7G7CwD1ugyqjfKPQ5bmjS3LwjaEnVFUKyFdLYc5uBj",
+        "orderType": "limit",
+        "originalSize": "0.00001493",
+        "price": "80426.59",
+        "reduceOnly": false,
+        "size": "0.00001493",
+        "status": "resting",
+        "symbol": "BTC-USD",
+        "tif": "gtc",
+        "timestamp": 1793289219083769631,
+        "trigger": null,
+        "vwap": "0.0"
+      }
+    ],
+    "leverageSettings": [
+      {
+        "leverage": "40.0",
+        "symbol": "BTC-USD"
+      },
+      {
+        "leverage": "25.0",
+        "symbol": "ETH-USD"
+      },
+      {
+        "leverage": "20.0",
+        "symbol": "SOL-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "DOGE-USD"
+      },
+      {
+        "leverage": "20.0",
+        "symbol": "PAXG-USD"
+      },
+      {
+        "leverage": "20.0",
+        "symbol": "XRP-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "BNB-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "FARTCOIN-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "SUI-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "ZEC-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "XPL-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "MEGA-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "TAO-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "MON-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "AAVE-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "JTO-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "JUP-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "LIT-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "HYPE-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "ENA-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "NEAR-USD"
+      },
+      {
+        "leverage": "10.0",
+        "symbol": "PUMP-USD"
+      }
+    ]
+  }
+}

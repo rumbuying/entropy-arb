@@ -1,0 +1,298 @@
+{
+  "source": "completed HL v21 original reports; reduced fields, not a new live run",
+  "state": {
+    "scope": "ordinary",
+    "grid_id": "g-e3debcab696d41ba",
+    "ordinary_context": {
+      "account": "1f2c5a57-5238-5d6a-be9b-11bc001e027e",
+      "config_hash": "1db2909c54e6576092a10788a3e8b6c967c632b583b51e0fa5867f634b0757a3",
+      "credential_revision": "88eebab1267c4c4ab29eb6fc9cbfca20",
+      "grant_id": "0cffb12044a3900858a1c3597cc216a2572651453fb1c70f46cc94990829ff5e",
+      "grid_id": "g-e3debcab696d41ba",
+      "history": {
+        "fill_floor": 1791741105305,
+        "funding_floor": 1792293216435
+      },
+      "market": "||ETH|linear_perp|USDC",
+      "small_close": true
+    },
+    "finished": true,
+    "control_handed_back": false,
+    "observation_end": "observer_finished",
+    "observation_started_ms": 1793112289325,
+    "observation_started_monotonic": 21682554.840308513,
+    "observation_deadline_ms": 1793198749325,
+    "observation_deadline_monotonic": 21769014.840308513,
+    "protected_observation_elapsed_seconds": 86435.8265221417,
+    "supervision": {
+      "native_protection_deadlines_unchanged": true,
+      "observation_invalidated": true,
+      "recoveries": [
+        {
+          "activation_epoch": 3,
+          "attempt_ok": true,
+          "completed_ms": 1793122728876,
+          "elapsed_seconds": 121.152,
+          "epoch": 2,
+          "event_seq": 5676,
+          "reconciliation_ok": true,
+          "started_monotonic": 21692873.23880792,
+          "started_ms": 1793122607724
+        },
+        {
+          "activation_epoch": 5,
+          "attempt_ok": true,
+          "completed_ms": 1793132874904,
+          "elapsed_seconds": 120.933,
+          "epoch": 4,
+          "event_seq": 5681,
+          "reconciliation_ok": true,
+          "started_monotonic": 21703019.48619067,
+          "started_ms": 1793132753971
+        },
+        {
+          "activation_epoch": 7,
+          "attempt_ok": true,
+          "completed_ms": 1793141518035,
+          "elapsed_seconds": 181.64790834486485,
+          "epoch": 6,
+          "event_seq": 5686,
+          "reconciliation_ok": true,
+          "started_monotonic": 21711601.902179655,
+          "started_ms": 1793141336387
+        },
+        {
+          "activation_epoch": 9,
+          "attempt_ok": true,
+          "completed_ms": 1793152282349,
+          "elapsed_seconds": 126.408,
+          "epoch": 8,
+          "event_seq": 5691,
+          "reconciliation_ok": true,
+          "started_monotonic": 21722421.456065282,
+          "started_ms": 1793152155941
+        },
+        {
+          "activation_epoch": 11,
+          "attempt_ok": true,
+          "completed_ms": 1793162317578,
+          "elapsed_seconds": 126.225,
+          "epoch": 10,
+          "event_seq": 5696,
+          "reconciliation_ok": true,
+          "started_monotonic": 21732456.86809405,
+          "started_ms": 1793162191353
+        },
+        {
+          "activation_epoch": 13,
+          "attempt_ok": true,
+          "completed_ms": 1793173052915,
+          "elapsed_seconds": 126.07314100116491,
+          "epoch": 12,
+          "event_seq": 5701,
+          "reconciliation_ok": true,
+          "started_monotonic": 21743192.356676303,
+          "started_ms": 1793172926841
+        },
+        {
+          "activation_epoch": 15,
+          "attempt_ok": true,
+          "completed_ms": 1793183570931,
+          "elapsed_seconds": 126.01872561872005,
+          "epoch": 14,
+          "event_seq": 5706,
+          "reconciliation_ok": true,
+          "started_monotonic": 21753710.427094884,
+          "started_ms": 1793183444912
+        },
+        {
+          "activation_epoch": 17,
+          "attempt_ok": true,
+          "completed_ms": 1793193997297,
+          "elapsed_seconds": 126.254,
+          "epoch": 16,
+          "event_seq": 5711,
+          "reconciliation_ok": true,
+          "started_monotonic": 21764136.558099434,
+          "started_ms": 1793193871043
+        }
+      ],
+      "recovery": null,
+      "release_qualified_by_supervision": false,
+      "stop_reason": null
+    },
+    "observation_epoch": 1,
+    "final_grid": {
+      "desired_mode": "STOPPED",
+      "epoch": 18,
+      "grid_id": "g-e3debcab696d41ba",
+      "latest_operation": {
+        "op_type": "stop_flat",
+        "status": "succeeded"
+      },
+      "status": "CLOSED"
+    },
+    "cleanup": {
+      "operation_id": "496ba620-66f5-43fc-9d8d-23fc50aa4db6",
+      "remaining": "0",
+      "status": "succeeded"
+    },
+    "ordinary_24h_observed": false,
+    "protected_24h_observed": false
+  },
+  "observer": {
+    "completed_without_observed_issues": false,
+    "independent_native_audit_required": true,
+    "issues": {
+      "GRID_EPOCH_CHANGED": 12,
+      "GRID_NOT_RUNNING": 210
+    },
+    "last_sample": {
+      "epoch": 17,
+      "event_seq": 5715,
+      "fills": 1,
+      "grid_status": "RUNNING",
+      "identity": {
+        "account": "1f2c5a57-5238-5d6a-be9b-11bc001e027e",
+        "config_hash": "1db2909c54e6576092a10788a3e8b6c967c632b583b51e0fa5867f634b0757a3",
+        "credential_revision": "88eebab1267c4c4ab29eb6fc9cbfca20",
+        "grant_id": "0cffb12044a3900858a1c3597cc216a2572651453fb1c70f46cc94990829ff5e",
+        "grid_id": "g-e3debcab696d41ba",
+        "market": "||ETH|linear_perp|USDC",
+        "policy_hash": null,
+        "scope": "ordinary"
+      },
+      "issues": [],
+      "monotonic": 21768985.161622543,
+      "native_evidence": "engine_lease_only_not_independent_exchange_audit",
+      "runtime_instance": "60668ba393b24b16b70ddbfdf05e0160",
+      "schema_version": 1,
+      "scope_is_ordinary": true,
+      "unknown_intents": 0,
+      "wall_ms": 1793198719646
+    },
+    "live_dispatch_enabled_by_observer": false,
+    "longest_continuous_seconds": 10638.669713504612,
+    "ordinary_24h_observation": true,
+    "read_only": true,
+    "release_qualified_by_observer": false,
+    "required_seconds": 86400,
+    "samples": 17140
+  },
+  "native": {
+    "grid_id": "g-e3debcab696d41ba",
+    "account_id": "1f2c5a57-5238-5d6a-be9b-11bc001e027e",
+    "config_hash": "1db2909c54e6576092a10788a3e8b6c967c632b583b51e0fa5867f634b0757a3",
+    "performance": {
+      "funding_net": "-0.010867",
+      "grid_pair_net": "0",
+      "grid_pair_qty": "0",
+      "gross_realized": "0.0234",
+      "method_version": "fifo-v1-grid",
+      "net_pnl": "-0.020198",
+      "net_qty_base": "0",
+      "other_costs": "0",
+      "pair_net": "-0.009331",
+      "pair_qty": "0.0156",
+      "reconciliation_status": "booked",
+      "roi_denominator": "40",
+      "roi_method": "net-pnl-over-cumulative-allocation-v1",
+      "roi_percent": "-0.050495",
+      "roi_status": "booked",
+      "total_fees": "0.032731",
+      "unrealized": "0"
+    },
+    "final_dexes": [
+      {
+        "dex": "",
+        "orders": [],
+        "positions": [],
+        "time": 1793198734240
+      },
+      {
+        "dex": "xyz",
+        "orders": [],
+        "positions": [],
+        "time": 1793198734240
+      },
+      {
+        "dex": "flx",
+        "orders": [],
+        "positions": [],
+        "time": 1793198734322
+      },
+      {
+        "dex": "vntl",
+        "orders": [],
+        "positions": [],
+        "time": 1793198734374
+      },
+      {
+        "dex": "hyna",
+        "orders": [],
+        "positions": [],
+        "time": 1793198734452
+      },
+      {
+        "dex": "km",
+        "orders": [],
+        "positions": [],
+        "time": 1793198734515
+      },
+      {
+        "dex": "abcd",
+        "orders": [],
+        "positions": [],
+        "time": 1793198734593
+      },
+      {
+        "dex": "cash",
+        "orders": [],
+        "positions": [],
+        "time": 1793198734593
+      },
+      {
+        "dex": "para",
+        "orders": [],
+        "positions": [],
+        "time": 1793198734702
+      },
+      {
+        "dex": "mkts",
+        "orders": [],
+        "positions": [],
+        "time": 1793198734702
+      },
+      {
+        "dex": "io",
+        "orders": [],
+        "positions": [],
+        "time": 1793198734755
+      }
+    ]
+  },
+  "finalization": {
+    "commands": [
+      {
+        "exit_code": 0,
+        "finished_ms": 1793198735369,
+        "name": "native-audit"
+      },
+      {
+        "exit_code": 0,
+        "finished_ms": 1793198736071,
+        "name": "backup"
+      }
+    ],
+    "controller_claims_ordinary_24h": false,
+    "controller_claims_protected_24h": false,
+    "finished": true,
+    "finished_ms": 1793198736086,
+    "grid_id": "g-e3debcab696d41ba",
+    "last_checked_ms": 1793198732407,
+    "last_status": "CLOSED",
+    "no_trading_actions": true,
+    "ordinary_24h_terminal_review_required": true,
+    "started_ms": 1793111924631
+  }
+}

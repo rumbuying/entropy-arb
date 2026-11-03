@@ -1,0 +1,6 @@
+# Minimal, reproducible Hyperliquid grid dependencies; no other venue SDKs.
+-r requirements.txt
+hyperliquid-python-sdk==0.24.0
+eth-account>=0.13,<0.14
+certifi>=2024.2
+cryptography>=43,<51

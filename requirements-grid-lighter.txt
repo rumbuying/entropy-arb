@@ -1,0 +1,3 @@
+# Grid-only SDK. Install into an isolated worker venv, never the arbitrage
+# environment or the running HL worker. No moving main-branch dependency.
+lighter-sdk @ git+https://github.com/elliottech/lighter-python.git@a7a9ba88514d38a863a33642acd41f8adf442e5c

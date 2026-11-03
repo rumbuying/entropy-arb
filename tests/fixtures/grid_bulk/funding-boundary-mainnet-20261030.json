@@ -1,0 +1,131 @@
+{
+  "source_file": "grid-bulk-funding-diagnosis-v33.json",
+  "source_sha256": "a2c63841ad1d478cc76e2117eec2ec01ee92ae6816e57b93c5c712ea8e4ed791",
+  "owned": {
+    "account": "f9e93774-7f0a-5fe1-9d66-04277c0d9b19",
+    "market": "bulk:mainnet||BTC-USD|linear_perp|USDC",
+    "original_orders": [
+      {
+        "client_id": "bulk-funding-20261030-v33:entry",
+        "order_id": "3Z5YyS2DUV1kpPaqzCdtodraS42WvPxcxQZyyNNVCsnw",
+        "nonce": 1793325481806200547,
+        "request_hash": "c3413fab008259e67b379071b884ac94fc859ee0a2debbdd617371f216667783",
+        "state": "FOUND_TERMINAL",
+        "cumulative_qty": "0.00001959",
+        "terminal_state": "FILLED",
+        "native_status": "filled"
+      },
+      {
+        "client_id": "bulk-funding-20261030-v33:exit:0",
+        "order_id": "BeJcggdn9dHCAG86oZmv7Z1SG6FNPKUPJrqawy47oboS",
+        "nonce": 1793325640594451872,
+        "request_hash": "016a471e6bb3ac2194495e680908cfa05a9bdceb184dcffddeacd458dfb6a072",
+        "state": "FOUND_TERMINAL",
+        "cumulative_qty": "0.00001959",
+        "terminal_state": "FILLED",
+        "native_status": "filled"
+      }
+    ],
+    "records": [
+      {
+        "execution_key": "18705af82e3f4514bb8a36f5dc681ce3c09e3e5b41bcfca36e0c505ade1cd941",
+        "account": "f9e93774-7f0a-5fe1-9d66-04277c0d9b19",
+        "market": "bulk:mainnet||BTC-USD|linear_perp|USDC",
+        "order_client_id": "bulk-funding-20261030-v33:entry",
+        "exchange_order_id": "3Z5YyS2DUV1kpPaqzCdtodraS42WvPxcxQZyyNNVCsnw",
+        "trade_id": "634993189:50",
+        "side": "buy",
+        "qty_base": "0.00001959",
+        "price": "76621.18",
+        "fee_amount": "0.000525",
+        "fee_asset": "USDC",
+        "is_maker": false,
+        "exchange_ts": "2026-10-30T01:58:06.843600Z",
+        "received_ts": "2026-10-30T02:03:26.818291Z",
+        "source": "rest_backfill",
+        "source_seq": "634993189:50",
+        "finality": "final"
+      },
+      {
+        "execution_key": "62402df8fac3ef6e6a359b2e79db5255a7b485b0647d3e562c96299b2896c7ae",
+        "account": "f9e93774-7f0a-5fe1-9d66-04277c0d9b19",
+        "market": "bulk:mainnet||BTC-USD|linear_perp|USDC",
+        "order_client_id": "bulk-funding-20261030-v33:exit:0",
+        "exchange_order_id": "BeJcggdn9dHCAG86oZmv7Z1SG6FNPKUPJrqawy47oboS",
+        "trade_id": "635013164:23",
+        "side": "sell",
+        "qty_base": "0.00001959",
+        "price": "76659.9",
+        "fee_amount": "0.000526",
+        "fee_asset": "USDC",
+        "is_maker": false,
+        "exchange_ts": "2026-10-30T02:00:46.643896Z",
+        "received_ts": "2026-10-30T02:03:26.818164Z",
+        "source": "rest_backfill",
+        "source_seq": "635013164:23",
+        "finality": "final"
+      }
+    ],
+    "quantity_matched": true,
+    "signed_qty": "0",
+    "fee_cost": "0.001051",
+    "trade_cashflow": "0.0007585248",
+    "proof_id": "5923550dbdfd8c72be7b3949b67cc46690d16e92110058d70a5ff72089293158",
+    "native_window": {
+      "start_slot": 0,
+      "end_slot": 635013164,
+      "as_of_slot": 635013164,
+      "complete": false,
+      "pages": 1,
+      "reason": "BULK_HISTORY_NOT_CERTIFIED"
+    },
+    "excluded_fill_count": 4,
+    "account_history_certified": false
+  },
+  "closed_position": {
+    "owner": "CEQCFMNRS2mCED3CPz9sc4ReaWhgxA3xkJs5kzCdWW87",
+    "symbol": "BTC-USD",
+    "quantity": "0.00001959",
+    "maxQuantity": "0.00001959",
+    "totalVolume": "0.00003918",
+    "avgOpenPrice": "76621.18",
+    "avgClosePrice": "76659.9",
+    "realizedPnl": "0.000758",
+    "fees": "-0.0010509999999999999",
+    "funding": "-0.000018782",
+    "openTime": 1793325486843600570,
+    "closeTime": 1793325646643896816,
+    "closeReason": "normal",
+    "iso": false,
+    "closeSlot": 635013164,
+    "sequence": 0
+  },
+  "native_funding_records": [
+    {
+      "owner": "CEQCFMNRS2mCED3CPz9sc4ReaWhgxA3xkJs5kzCdWW87",
+      "symbol": "BTC-USD",
+      "size": "0.00001959",
+      "payment": "-0.000018781852505625004",
+      "fundingRate": "0.0000125",
+      "markPrice": "76699.755",
+      "iso": false,
+      "slot": 635007334,
+      "timestamp": 1793325600004485766,
+      "sequence": 271
+    }
+  ],
+  "native_margin": {
+    "totalMargin": "500.694526",
+    "availableMargin": "500.694526",
+    "executionImpact": "0.0",
+    "transferableBalance": "500.694526",
+    "marginUsed": "0.0",
+    "marginBufferRate": "0.05",
+    "bufferedMargin": "0.0",
+    "notional": "0.0",
+    "realizedPnl": "-0.003305",
+    "unrealizedPnl": "0.0",
+    "fees": "-0.00315",
+    "funding": "-0.000018782"
+  }
+}

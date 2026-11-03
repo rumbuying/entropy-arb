@@ -1,0 +1,10 @@
+{
+  "source": "bulk-roundtrip-20261029-v19.run.json",
+  "source_sha256": "6a4f518c99e7de76b0466a7035ebf482d18d64e63c3bc4af9792b879488b5577",
+  "observed_ms": 1793287232133,
+  "quantity": "0.00001843",
+  "reference_mark": "81439.075",
+  "margin_used": "0.07504610761250001",
+  "native_lambda": "0.05",
+  "native_leverage": "20.0"
+}

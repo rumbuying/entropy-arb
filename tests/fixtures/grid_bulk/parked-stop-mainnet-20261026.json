@@ -1,0 +1,35 @@
+{
+  "source": "historical-native-read-not-a-current-permit",
+  "source_file": "data/run/grid-bulk-roundtrip-original-inspect-v1.json",
+  "source_sha256": "82ad893ceecd216fd9b5811a11e3292890f21058ecc99f95729028762da544c0",
+  "observed_ms": 1793021414115,
+  "owner": "CEQCFMNRS2mCED3CPz9sc4ReaWhgxA3xkJs5kzCdWW87",
+  "client_id": "bulk-roundtrip-20261026-v1:stop",
+  "action": {
+    "iso": false,
+    "size": "0.0000188",
+    "symbol": "BTC-USD",
+    "trigger_price": "77397.19",
+    "type": "stop"
+  },
+  "order": {
+    "symbol": "BTC-USD",
+    "orderId": "4nAMtjVGA84ZEFG5NS7ce8JsWf9HfVBzHtvCurypenMU",
+    "price": "77397.19",
+    "originalSize": "-0.0000188",
+    "size": "-0.0000188",
+    "filledSize": "0.0",
+    "vwap": "77397.19",
+    "maker": true,
+    "reduceOnly": true,
+    "iso": false,
+    "orderType": "stop",
+    "trigger": {
+      "isAbove": false,
+      "px": "77397.19"
+    },
+    "tif": "gtc",
+    "status": "resting",
+    "timestamp": 1793021414171774536
+  }
+}

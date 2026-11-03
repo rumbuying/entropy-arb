@@ -1,0 +1,101 @@
+{
+  "source": "native mainnet read, no credentials",
+  "owner": "CEQCFMNRS2mCED3CPz9sc4ReaWhgxA3xkJs5kzCdWW87",
+  "fills": [
+    {
+      "maker": "FJ2KJkDmwDNzwWuwGHcGKoXTc6qpoAP3XPdnBYv3JBL4",
+      "taker": "CEQCFMNRS2mCED3CPz9sc4ReaWhgxA3xkJs5kzCdWW87",
+      "orderIdMaker": "612GtyXZCmNRThfcdCqfne6cFLy6Vuv3dre4ZXMiC1en",
+      "orderIdTaker": "JD6nLuYWqgGT8hyvUSyWBWg36Hu4FrAZnTmnbRaYzYkE",
+      "isBuy": false,
+      "symbol": "BTC-USD",
+      "amount": "0.0000188",
+      "price": "79594.93",
+      "makerFee": "0.000224",
+      "takerFee": "-0.000524",
+      "fee": "-0.000524",
+      "reasonCode": 0,
+      "iso": false,
+      "counterpartyHint": "FJ2K..JBL4",
+      "slot": 597037868,
+      "timestamp": 1793021844275648022,
+      "sequence": 2
+    },
+    {
+      "maker": "5jn4N6aYkpTZsGM98CD39Wxn31zzu9zsFyBUtjYjhEac",
+      "taker": "CEQCFMNRS2mCED3CPz9sc4ReaWhgxA3xkJs5kzCdWW87",
+      "orderIdMaker": "JefVdbSMFjrVLXxtWuoyP6imVSDDWEjai6hXruRRin7",
+      "orderIdTaker": "3Lgb2Uy85xdzt9zapMhoD2Kk3Ppo9XYHV2G9rHBiAw6i",
+      "isBuy": true,
+      "symbol": "BTC-USD",
+      "amount": "0.0000188",
+      "price": "79794.79",
+      "makerFee": "0.000225",
+      "takerFee": "-0.000525",
+      "fee": "-0.000525",
+      "reasonCode": 0,
+      "iso": false,
+      "counterpartyHint": "5jn4..hEac",
+      "slot": 596973656,
+      "timestamp": 1793021330579735767,
+      "sequence": 68
+    }
+  ],
+  "orders": [
+    {
+      "orderId": "4nAMtjVGA84ZEFG5NS7ce8JsWf9HfVBzHtvCurypenMU",
+      "symbol": "BTC-USD",
+      "side": "buy",
+      "orderType": "stop",
+      "tif": "gtc",
+      "price": "77397.19",
+      "vwap": "0.0",
+      "originalSize": "0.0",
+      "executedSize": "0.0",
+      "reduceOnly": true,
+      "status": "cancelled",
+      "trigger": {
+        "isAbove": false,
+        "px": "77397.19"
+      },
+      "iso": false,
+      "slot": 597042203,
+      "timestamp": 1793021878956565875,
+      "sequence": 8
+    },
+    {
+      "orderId": "JD6nLuYWqgGT8hyvUSyWBWg36Hu4FrAZnTmnbRaYzYkE",
+      "symbol": "BTC-USD",
+      "side": "sell",
+      "orderType": "limit",
+      "tif": "ioc",
+      "price": "79170.38",
+      "vwap": "79594.93",
+      "originalSize": "0.0000188",
+      "executedSize": "0.0000188",
+      "reduceOnly": true,
+      "status": "filled",
+      "iso": false,
+      "slot": 597037868,
+      "timestamp": 1793021844275648022,
+      "sequence": 4
+    },
+    {
+      "orderId": "3Lgb2Uy85xdzt9zapMhoD2Kk3Ppo9XYHV2G9rHBiAw6i",
+      "symbol": "BTC-USD",
+      "side": "buy",
+      "orderType": "limit",
+      "tif": "ioc",
+      "price": "79880.76",
+      "vwap": "79794.79",
+      "originalSize": "0.0000188",
+      "executedSize": "0.0000188",
+      "reduceOnly": false,
+      "status": "filled",
+      "iso": false,
+      "slot": 596973656,
+      "timestamp": 1793021330579735767,
+      "sequence": 70
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+# Independent Bulk worker only; never install in the running HL/arb venv.
+# Reviewed public source: bulk-keychain 0.1.30 sdist SHA256
+# 05db7a4c486794c748e5860bd0748ea11fb1e2ce48002efbfa89e54c8575d12a
+bulk-keychain==0.1.30
