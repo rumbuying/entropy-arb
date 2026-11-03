@@ -2,6 +2,7 @@
 import asyncio,copy,json
 import pytest
 from entropy_arb.grid.adapters.base import AdapterError
+from entropy_arb.grid.adapters.bulk_protection import VERIFY_WINDOW_MS
 from entropy_arb.grid.protection_watch import ProtectionWatchScheduler
 from entropy_arb.grid.runtime import GridRuntime
 from test_grid_bulk_protection_manager import setup,planned_entry
@@ -230,7 +231,7 @@ def test_final_native_send_proof_expires_on_monotonic_clock_even_if_wall_clock_s
             calls=[]
             async def slow_policy(*a,**kw):
                 calls.append(1)
-                if len(calls)==2:mono[0]+=5001
+                if len(calls)==2:mono[0]+=VERIFY_WINDOW_MS+1
             with pytest.raises(AdapterError,match='OBSERVATION_STALE'):
                 await backend.final_gate('submit',dict(request=request.to_dict(),owner=view.owner,account=cfg.account_ref,network='mainnet'),phase='send',base_gate=slow_policy)
             assert len(sender.calls)==1

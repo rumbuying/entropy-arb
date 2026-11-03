@@ -12,6 +12,18 @@ from .base import AdapterError
 from .bulk_read import OPEN, flag
 from .bulk_wire import base58, native_decimal, uint, text
 
+# The per-order gate reads the same paced fullAccount snapshot as the
+# activation manager, whose window was already widened to 30s because the
+# read "can take well over the HL-era 5s" (bulk_protection_manager.py
+# VERIFY_WINDOW_MS). The hard-coded 5s here made every RETRY of an entry
+# whose first confirmation came back late fail outright under slow reads:
+# the re-prepare ran past 5s and raised PROTECTION_FIXED_OBSERVATION_STALE,
+# freezing the whole grid (2026-11-03: three starts died on their 2nd-3rd
+# order this way). Journal consistency during the read is still enforced by
+# the digest re-check (PROTECTION_FIXED_OBSERVATION_CHANGED); only the read
+# latency allowance changes.
+VERIFY_WINDOW_MS = 30000
+
 
 @dataclass(frozen=True)
 class BulkStopBinding:
@@ -240,13 +252,14 @@ class BulkFixedStopGate:
             native_positions=native['positions'],native_open_orders=native['openOrders'],
             owned_qty=current['owned_qty'],pending=current['pending'],bindings=current['bindings'],
             candidate=request,phase=phase,observed_from_ms=started,now_ms=uint(self.clock_ms()),
+            max_age_ms=VERIFY_WINDOW_MS,
             additional_stops=current.get('additional_stops',()))
         verdict=await self.base_gate(kind,copy.deepcopy(context),phase=phase)
         if verdict is not None:return verdict
         if digest(self.view(copy.deepcopy(context)))!=before:
             raise AdapterError('PROTECTION_FIXED_OBSERVATION_CHANGED')
-        if not started<=uint(self.clock_ms())<=started+5000:
+        if not started<=uint(self.clock_ms())<=started+VERIFY_WINDOW_MS:
             raise AdapterError('PROTECTION_FIXED_OBSERVATION_STALE')
-        if not started_mono<=uint(self.monotonic_ms())<=started_mono+5000:
+        if not started_mono<=uint(self.monotonic_ms())<=started_mono+VERIFY_WINDOW_MS:
             raise AdapterError('PROTECTION_FIXED_OBSERVATION_STALE')
         return None
