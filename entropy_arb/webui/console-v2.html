@@ -6,12 +6,17 @@
 <title>entropy-arb — strategy workbench</title>
 <link rel="stylesheet" href="/static/style.css">
 <link rel="stylesheet" href="/static/v2/style.css">
+<link rel="stylesheet" href="/static/v2/grid/style.css">
 </head>
 <body>
 <div class="v2-shell">
   <nav class="v2-nav">
     <div class="v2-brand">entropy-arb <span class="pair" data-i18n="v2.brand">strategy workbench</span></div>
-    <div class="v2-navgroup" data-i18n="v2.nav.decisions">Strategy judgement</div>
+    <div class="v2-navgroup" data-i18n="v2.nav.grid">Grid trading</div>
+    <a href="#/grid" data-nav="grid" data-i18n="v2.grid.title">My grids</a>
+    <a href="#/grid/create" data-nav="grid-create" data-i18n="v2.grid.create">Create grid</a>
+    <a href="#/grid/accounts" data-nav="grid-accounts" data-i18n="v2.grid.accounts">Grid accounts</a>
+    <div class="v2-navgroup" data-i18n="v2.nav.arbitrage">Arbitrage trading</div>
     <a href="#/strategies" data-nav="strategies" data-i18n="v2.nav.strategies">Overview</a>
     <a href="#/pnl" data-nav="pnl" data-i18n="v2.nav.pnl">P&amp;L board</a>
     <a href="#/ledger-health" data-nav="ledger" data-i18n="v2.nav.ledger_health">Ledger health</a>
@@ -19,7 +24,7 @@
     <a href="#/detail" data-nav="detail" data-i18n="v2.nav.detail">Strategy review</a>
     <a href="#/experiments" data-nav="experiments" data-i18n="v2.nav.experiments">Adjust &amp; verify</a>
     <a href="#/accounts" data-nav="accounts" data-i18n="v2.nav.accounts">Accounts &amp; risk</a>
-    <div class="v2-navgroup" data-i18n="v2.nav.ops">Operations &amp; access</div>
+    <div class="v2-navgroup" data-i18n="v2.nav.arbitrageOps">Arbitrage operations &amp; access</div>
     <a href="#/runs" data-nav="runs" data-i18n="v2.nav.runs">Runs</a>
     <a href="#/connections" data-nav="connections" data-i18n="v2.nav.connections">Exchange access / API Keys</a>
     <a href="#/profiles" data-nav="profiles" data-i18n="v2.nav.profiles">Strategy config</a>

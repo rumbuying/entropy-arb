@@ -48,6 +48,12 @@ def test_operations_lifecycle():
         sup.build_argv = lambda w: [sys.executable, "-c",
                                     "import time; time.sleep(30)"]
         app = create_app(sup, profiles, secrets, token="t0k", storage=storage)
+        # Arbitrage operations must work independently of the grid service.
+        grid_calls = []
+        async def unavailable_grid(method, params=None):
+            grid_calls.append(method)
+            raise AssertionError("arbitrage must not query grid runtime")
+        app["grid_proxy"].call = unavailable_grid
         server = TestServer(app)
         await server.start_server()
         svc = app["ops_service"]
@@ -106,6 +112,7 @@ def test_operations_lifecycle():
                     assert r.status == 200
                     preview = await r.json()
                 assert preview["allowed"] is True
+                assert "grid_claims" not in preview and grid_calls == []
                 assert preview["legs"][0]["position"] == 0.5
                 assert preview["legs"][0]["unrealized"] == 3.35
                 assert preview["legs"][1]["unrealized"] == -0.98
@@ -336,6 +343,7 @@ def test_operations_lifecycle():
                 # operations survived in storage
                 rows = storage.list_operations(op_type="flatten", limit=50)
                 assert len(rows) >= 4
+                assert grid_calls == []
         finally:
             svc.shutdown()
             await sup.shutdown()

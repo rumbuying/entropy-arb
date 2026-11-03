@@ -2719,6 +2719,9 @@ def create_app(supervisor: Supervisor, profiles: ProfilesManager,
         })
 
     # ------------------------------------------------------------- routes
+    from . import grid as grid_routes
+    grid_routes.register(app, token=token)
+
 
     app.router.add_get("/", index)
     app.router.add_get("/console-v2", index_v2)

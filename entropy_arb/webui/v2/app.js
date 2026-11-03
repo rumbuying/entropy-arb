@@ -11,6 +11,21 @@ import { store } from "./store.js";
 
 const ROUTES = [  { name: "strategies", re: /^#\/strategies$/i,
     mod: () => import("./strategies.js"), title: () => t("v2.nav.strategies") },
+  { name: "grid", re: /^#\/grid$/i,
+    mod: () => import("./grid/list.js"), title: () => t("v2.nav.grid"),
+    nav: "grid" },
+  { name: "grid", re: /^#\/grid\/create$/i,     // static: before :id
+    mod: () => import("./grid/create.js"),
+    title: () => t("v2.grid.create"), nav: "grid-create" },
+  { name: "grid", re: /^#\/grid\/accounts$/i,
+    mod: () => import("./grid/accounts.js"), title: () => t("v2.grid.accounts"), nav: "grid-accounts" },
+  { name: "grid", re: /^#\/grid\/([^/?]+)\/adjust$/i,
+    mod: () => import("./grid/detail.js"),      // G16 lands the adjust saga
+    title: () => t("v2.grid.detail"),
+    params: m => ({ gridId: decodeURIComponent(m[1]) }), nav: "grid" },
+  { name: "grid", re: /^#\/grid\/([^/?]+)$/i,
+    mod: () => import("./grid/detail.js"), title: () => t("v2.grid.detail"),
+    params: m => ({ gridId: decodeURIComponent(m[1]) }), nav: "grid" },
   { name: "pnl", re: /^#\/pnl$/i,
     mod: () => import("./pnl.js"), title: () => t("v2.nav.pnl") },
   { name: "ledger", re: /^#\/ledger-health$/i,
@@ -48,9 +63,11 @@ const ROUTES = [  { name: "strategies", re: /^#\/strategies$/i,
 const content = document.getElementById("v2-content");
 const titleNode = document.getElementById("v2-title");
 const apiBadge = document.getElementById("api-badge");
+const gridOnly = document.body.dataset.gridOnly === "true";
+const defaultHash = gridOnly ? "#/grid" : "#/strategies";
 let currentPage = null;                     // {destroy?} of the live page
 let navSeq = 0;
-let currentHash = location.hash || "#/strategies";
+let currentHash = location.hash || defaultHash;
 
 /* In-page leave guard (spec §4.3): keeps / gives up the dirty form. A
    promise-based page dialog, not a native confirm — the router can await
@@ -81,8 +98,9 @@ export function leaveGuard() {
 }
 
 function parseHash() {
-  const h = location.hash || "#/strategies";
+  const h = location.hash || defaultHash;
   for (const r of ROUTES) {
+    if (gridOnly && r.name !== "grid") continue;
     const m = h.match(r.re);
     if (m) {
       const qIndex = h.indexOf("?");
@@ -102,7 +120,7 @@ async function navigate() {
   const seq = ++navSeq;
   const parsed = parseHash();
   if (!parsed) {
-    location.replace("#/strategies");
+    location.replace(defaultHash);
     return;
   }
   const { route, params, query } = parsed;
@@ -149,7 +167,7 @@ async function navigate() {
 /* --- header: API status + language switch --------------------------------- */
 async function pingApi() {
   try {
-    await getJSON("/api/meta");
+    await getJSON(gridOnly ? "/api/grid/status" : "/api/meta");
     apiBadge.textContent = "API ✓";
     apiBadge.className = "badge running";
   } catch (e) {
@@ -164,7 +182,7 @@ document.getElementById("lang-btn").addEventListener("click", () => {
 });
 document.getElementById("lang-btn").textContent = t("lang.switch");
 applyStatic();
-document.title = `entropy-arb — ${t("v2.brand")}`;
+document.title = gridOnly ? `entropy-grid — ${t("v2.nav.grid")}` : `entropy-arb — ${t("v2.brand")}`;
 
 window.addEventListener("hashchange", navigate);
 pingApi();

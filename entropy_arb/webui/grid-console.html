@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>entropy-grid — 网格交易</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/v2/style.css">
+<link rel="stylesheet" href="/static/v2/grid/style.css">
+</head>
+<body data-grid-only="true">
+<div class="v2-shell">
+  <nav class="v2-nav">
+    <div class="v2-brand">entropy-grid <span class="pair" data-i18n="v2.nav.grid">网格交易</span></div>
+    <a href="#/grid" data-nav="grid" data-i18n="v2.grid.title">我的网格</a>
+    <a href="#/grid/create" data-nav="grid-create" data-i18n="v2.grid.create">创建网格</a>
+    <a href="#/grid/accounts" data-nav="grid-accounts" data-i18n="v2.grid.accounts">网格账户与凭证</a>
+    <div class="spacer"></div>
+    <div class="v2-navfoot"><button id="lang-btn">English</button></div>
+  </nav>
+  <div class="v2-main">
+    <div class="v2-topbar">
+      <span class="title" id="v2-title"></span>
+      <span class="spacer"></span>
+      <span id="api-badge" class="badge dim">API …</span>
+    </div>
+    <div class="v2-content" id="v2-content"></div>
+  </div>
+</div>
+<script type="module" src="/static/v2/app.js"></script>
+</body>
+</html>
