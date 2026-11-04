@@ -154,15 +154,25 @@ class BulkStreamDecoder:
             return dict(order_id=oid,trigger_price=text(px),qty_bound='0',
                 trigger_direction='below',native_type='stop',coverage_verified=False,zero_size=True)
         if qty>0:
-            # Unknown sign convention for update frames; never guess. Emit the
-            # value-free shape marker (field names and sign classes only) so a
-            # false refusal is diagnosable without logging order economics.
+            # Unknown sign convention for positive update sizes; never guess
+            # coverage from it. But this is not a stream fault either: an
+            # amend, a re-send, or a triggerFailed stop all arrive as
+            # positive-size UPDATE frames, and refusing them closed the
+            # socket and reconnected the whole account feed exactly when the
+            # stop was doing something. Emit the protection reconciliation
+            # event with NO size assertion — the snapshot stays the coverage
+            # authority — and keep the value-free shape marker so the shape
+            # is diagnosable without logging order economics.
             log.warning('BULK_STREAM_STOP_SIZE_SHAPE update=%s size_field=%s '
                         'size_sign=positive px_sign=%s trigger_keys=%s row_keys=%s',
                         update, 'origSz' if update else 'originalSize',
                         'zero' if px == 0 else ('positive' if px > 0 else 'negative'),
                         sorted(str(k) for k in trigger), sorted(str(k) for k in row))
-            raise AdapterError('BULK_STREAM_STOP_SIZE_UNVERIFIED')
+            if not update:
+                raise AdapterError('BULK_STREAM_STOP_SIZE_UNVERIFIED')
+            return dict(order_id=oid,trigger_price=text(px),
+                trigger_direction='below',native_type='stop',
+                coverage_verified=False,unverified_size=True)
         # r is not sufficient for native stop roots; protocol stop semantics
         # are intrinsically reducing. This observation still confers no grant.
         return dict(order_id=oid,trigger_price=text(px),qty_bound=text(qty.copy_abs()),

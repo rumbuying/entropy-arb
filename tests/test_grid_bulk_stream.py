@@ -371,3 +371,30 @@ def test_cancelled_ordinary_order_zero_size_update_is_consumed_not_refused():
     with pytest.raises(AdapterError,match='QUANTITY_CONFLICT'):
         d2=decoder()
         d2.ingest(frame(ws_order(status='filled',origSz='0',sz='0',fillSz='0.04')))
+
+
+def test_positive_size_stop_update_is_reconciled_without_a_size_assertion():
+    """An amend, a re-send, or a triggerFailed all arrive as positive-size
+    stop UPDATE frames with an unknown sign convention. Refusing them closed
+    the socket and reconnected the whole account feed exactly when the stop
+    was doing something. The frame is now a protection reconciliation event
+    with no size assertion (the snapshot stays the coverage authority); a
+    positive size inside a SNAPSHOT stays refused."""
+    d=decoder()
+    row=ws_order(ot='stop',status='working',origSz='-0.007',sz='-0.007',fillSz='0',px='0',
+        trigger=dict(isAbove=False,px='2200',lim=None))
+    row['origSz']=row['sz']='0.007'
+    event=d.ingest(frame(row))
+    assert event is not None and event.kind=='protection_requires_reconciliation'
+    assert event.data['unverified_size'] is True and event.data['coverage_verified'] is False
+    assert 'qty_bound' not in event.data
+    # A repeated identical frame dedups to nothing.
+    assert d.ingest(frame(row))is None
+    # A positive-size stop inside a snapshot is still an unverified shape.
+    with pytest.raises(AdapterError,match='STOP_SIZE_UNVERIFIED'):
+        d2=decoder()
+        snap=dict(symbol='ETH-USD',orderId=OID,orderType='stop',
+            trigger=dict(isAbove=False,px='2200',lim=None),originalSize='0.007',size='0.007',
+            filledSize='0',price='0',maker=True,reduceOnly=True,iso=False,tif='gtc',
+            status='resting',timestamp=NS)
+        d2.ingest(frame(snapshot(openOrders=[snap])))
