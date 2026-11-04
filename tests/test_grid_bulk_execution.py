@@ -202,7 +202,11 @@ def test_only_explicit_native_auth_rejection_is_definitive(message,state):
     assert result.state==state and message not in str(result)
 
 
-def test_cancel_unknown_request_is_not_reissued_and_shares_account_nonce(tmp_path):
+def test_cancel_unknown_request_is_reissued_under_a_fresh_nonce_once_proven_open(tmp_path):
+    """A lost cancel send must not poison its deterministic request id: while
+    the ORIGINAL order is proven open, re-issue under a fresh nonce. The old
+    behaviour returned UNKNOWN forever without sending and a residual entry
+    order could never be cancelled (2026-11-04)."""
     async def run():
         st,j,native,p,sender,e=build(tmp_path)
         try:
@@ -211,13 +215,15 @@ def test_cancel_unknown_request_is_not_reissued_and_shares_account_nonce(tmp_pat
             assert first.state=='UNKNOWN' and len(sender.calls)==2
             assert sender.calls[1]['nonce']==1001 and set(sender.calls[1]['actions'][0])=={'cx'}
             second=await e.cancel(REQUEST.client_id,request_id='cancel-original')
-            assert second.state=='UNKNOWN' and len(sender.calls)==2
+            assert second.state=='UNKNOWN' and len(sender.calls)==3
+            assert sender.calls[2]['nonce']==1002 and set(sender.calls[2]['actions'][0])=={'cx'}
             native.state='canceled'
             final=await e.cancel(REQUEST.client_id,request_id='cancel-original')
-            assert final.state=='TERMINAL' and final.final_state=='CANCELED' and len(sender.calls)==2
+            assert final.state=='TERMINAL' and final.final_state=='CANCELED' and len(sender.calls)==3
             saved=st.read(lambda c:json.loads(c.execute('SELECT value FROM runtime_state WHERE key=?',
                 ('bulk-cancel:'+j.scope+':cancel-original',)).fetchone()[0]))
             assert saved['state']=='ORIGINAL_TERMINAL' and not saved['acknowledged']
+            assert saved['superseded']==1
         finally:st.close()
     asyncio.run(run())
 

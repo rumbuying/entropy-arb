@@ -578,6 +578,35 @@ class BulkIntentJournal:
             return row
         return await self.store.write(write)
 
+    async def supersede_cancel(self, request_id):
+        """Re-allocate the nonce of a cancel whose send outcome was lost.
+
+        Only legal when the caller has JUST proven the original order still
+        open: an applied cancel makes the order terminal, so the earlier
+        unknown send cannot have taken effect. A fresh nonce keeps request
+        identity unique; a duplicate cancel of an already-terminal order is
+        rejected harmlessly and the following lookup proves the outcome.
+        Without this, one lost cancel send poisoned the deterministic
+        request id forever: every retry returned BULK_CANCEL_ORIGINAL_PENDING
+        without sending, and the residual entry order could never be
+        cancelled (2026-11-04, g000000000186 stuck MAY_HAVE_SENT).
+        """
+        key='bulk-cancel:'+self.scope+':'+request_id
+        def write(c):
+            row=self._load(c,key)
+            if row is None or row['account']!=self.account:
+                raise AdapterError('BULK_CANCEL_MUST_BE_QUERIED')
+            if row['state']!='MAY_HAVE_SENT' or row.get('acknowledged'):
+                raise AdapterError('BULK_CANCEL_MUST_BE_QUERIED')
+            counter='bulk-nonce:'+self.scope
+            last=self._load(c,counter)
+            nonce=uint(max(uint(self.clock_ns()),(uint(last) if last is not None else 0)+1))
+            row['nonce']=nonce;row['state']='ALLOCATED'
+            row['superseded']=int(row.get('superseded') or 0)+1
+            self._put(c,counter,nonce);self._put(c,key,row)
+            return row
+        return await self.store.write(write)
+
     async def claim_cancel(self, request_id):
         key='bulk-cancel:'+self.scope+':'+request_id
         def write(c):

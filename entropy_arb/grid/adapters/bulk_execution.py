@@ -9,6 +9,7 @@ import asyncio
 import copy
 from decimal import localcontext
 import json
+import logging
 import re
 import time
 
@@ -19,6 +20,9 @@ from .base import AdapterError, CancelResult, SubmitResult
 from .bulk_read import BulkReply, BulkEvidenceReader, OPEN, CANCELED, REJECTED
 from .bulk_wire import base58, uint, native_decimal, text
 from .observation import ORIGINS
+
+
+log = logging.getLogger('grid.bulk_execution')
 
 
 class BulkNotSent(AdapterError):
@@ -272,7 +276,9 @@ class BulkExecution:
     async def cancel(self, client_id, exchange_order_id=None, *, request_id):
         async with self.lock:
             try:proof=await self.lookup(client_id,exchange_order_id)
-            except Exception:return CancelResult('UNKNOWN',detail='BULK_ORIGINAL_QUERY_UNAVAILABLE')
+            except Exception as error:
+                log.warning('BULK_CANCEL_LOOKUP_UNAVAILABLE error_type=%s', type(error).__name__)
+                return CancelResult('UNKNOWN',detail='BULK_ORIGINAL_QUERY_UNAVAILABLE')
             if proof.state=='FOUND_TERMINAL':
                 await self.journal.record_cancel(request_id,client_id=client_id,terminal=proof.terminal_state)
                 return CancelResult('TERMINAL',final_state=proof.terminal_state)
@@ -283,7 +289,17 @@ class BulkExecution:
             except Exception:return CancelResult('UNKNOWN',detail='REAL_DISPATCH_DISABLED' if self.gate is None else 'BULK_GATE_REFUSED')
             op=await self.journal.reserve_cancel(request_id=request_id,client_id=client_id,
                 order_id=proof.exchange_order_id,symbol=self.rules.symbol)
-            if op['state']=='MAY_HAVE_SENT':return CancelResult('UNKNOWN',detail='BULK_CANCEL_ORIGINAL_PENDING')
+            if op['state']=='MAY_HAVE_SENT':
+                if op.get('acknowledged'):
+                    return CancelResult('UNKNOWN',detail='BULK_CANCEL_ORIGINAL_PENDING')
+                # The lookup above just proved the ORIGINAL order open, so the
+                # earlier unknown send cannot have taken effect (an applied
+                # cancel makes it terminal). Re-issue under a fresh nonce
+                # instead of deadlocking on the deterministic request id; a
+                # duplicate cancel of an already-terminal order is rejected
+                # harmlessly and the following lookup proves the outcome.
+                log.warning('BULK_CANCEL_SUPERSEDE')
+                op=await self.journal.supersede_cancel(request_id)
             prepared=self.protocol.prepare_cancel(self.rules.symbol,op['order_id'],op['nonce'])
             signed=self.protocol.sign(prepared)
             context.update(nonce=op['nonce'],payload_hash=models.sha256_hex(signed_body(signed)))
