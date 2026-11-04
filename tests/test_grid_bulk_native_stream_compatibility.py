@@ -129,7 +129,10 @@ def test_account_ingests_real_stream_and_confirms_only_native_rest_fills_without
             async def account(self,kind,owner,**params):
                 assert kind=='fills' and owner==OWNER
                 end=REST['order_history'][0]['slot']
-                return history(copy.deepcopy(REST['fills']),startSlot=0,endSlot=end,asOfSlot=end,coverage='unknown',minAvailableSlot=None)
+                # The confirm scan anchors at the oldest pending fill's slot
+                # and echoes it back as the window start.
+                start=params.get('start_slot',0)
+                return history(copy.deepcopy(REST['fills']),startSlot=start,endSlot=end,asOfSlot=end,coverage='unknown',minAvailableSlot=None)
         root=BulkAccountVenue(Read(),store=st,owner=OWNER,network='mainnet',credential_revision='revision',
             credential_ref='no-credentials',history_start_slot=0)
         d=decoder()

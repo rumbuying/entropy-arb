@@ -21,6 +21,11 @@ from .bulk_read import flag, ns_iso, OPEN, CANCELED, REJECTED
 from .bulk_wire import base58, uint, native_decimal, text
 
 WS_ORIGINS = {'mainnet':'wss://mainnet-ws1.bulk.trade', 'testnet':'wss://exchange-ws1.bulk.trade'}
+# A provisional stream fill older than this is retired from the pending set:
+# the fills barrier re-derives booked fills from native REST history, so the
+# provisional copy cannot be lost — it only stops the pending set from growing
+# into the 1024 buffer overflow.
+CONFIRM_PENDING_TTL_SEC=900.0
 TERMINAL = CANCELED | REJECTED | {'filled','partiallyFilled','siblingCancelled','triggerFailed'}
 
 log = logging.getLogger('grid.bulk_stream')
@@ -324,6 +329,11 @@ class BulkAccountStream:
     # fresh read timeout each time, so a socket kept alive by venue pings
     # but silent at the application level never trips ClientWSTimeout —
     # `connected` stayed True against a stale account view.
+    # A provisional stream fill older than this is retired from the pending
+    # set: the fills barrier re-derives booked fills from native REST history,
+    # so the provisional copy cannot be lost — it only stops the pending set
+    # from growing into the 1024 buffer overflow.
+    CONFIRM_PENDING_TTL_SEC=900.0
     RECEIVE_TICK_SEC=5.0
     HEARTBEAT_IDLE_SEC=45.0
     # Only a sustained healthy stream resets the reconnect backoff: a poison

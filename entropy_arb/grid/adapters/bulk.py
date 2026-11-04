@@ -11,6 +11,7 @@ from decimal import Decimal
 import logging
 import os
 import time
+from datetime import datetime,timezone
 
 from .. import models
 from ..venue_registry import account_identity
@@ -270,7 +271,9 @@ class BulkAccountVenue(GridVenue):
                 for view in list(self.views.values()):
                     if view._pending:await view.confirm_pending()
             except asyncio.CancelledError:raise
-            except Exception:self._state.gap=True
+            except Exception as error:
+                log.warning('BULK_CONFIRM_LOOP_FAILED error_type=%s',type(error).__name__)
+                self._state.gap=True
             try:await asyncio.wait_for(stop.wait(),timeout=1)
             except TimeoutError:pass
 
@@ -598,11 +601,24 @@ class BulkGridVenue(GridVenue):
     async def confirm_pending(self):
         if not self._pending:return
         parent=self.account_parent
-        try:window=await self.reader().history('fills',start_slot=parent.history_start_slot)
-        except Exception:
+        try:
+            # Anchor the scan at the oldest provisional fill instead of the
+            # account origin: the origin scan rode the shared paced transport
+            # through the account's entire fill history every second, starved
+            # the protection reads behind it, and re-flagged stream_gap every
+            # second when the retained window could not cover it — defeating
+            # the recovery that clears that flag.
+            start_slot=min(int(exec.trade_id.split(':')[0]) for exec in self._pending.values())
+            window=await self.reader().history('fills',start_slot=start_slot)
+        except Exception as error:
+            log.warning('BULK_CONFIRM_PENDING_FAILED error_type=%s pending=%s',
+                type(error).__name__,len(self._pending))
             parent.stream_gap=True;return
         final={e.execution_key:e for e in window.records}
-        if not window.complete:parent.stream_gap=True
+        if not window.complete:
+            log.warning('BULK_CONFIRM_PENDING_INCOMPLETE pending=%s records=%s',
+                len(self._pending),len(window.records))
+            parent.stream_gap=True
         for key,event in list(self._pending.items()):
             if key in final:
                 confirmed=confirm_stream_fill(event,final[key])
@@ -611,6 +627,19 @@ class BulkGridVenue(GridVenue):
                     continue
                 self._events.append(VenueEvent('fill',execution=confirmed))
                 del self._pending[key]
+            else:
+                from .bulk_stream import CONFIRM_PENDING_TTL_SEC
+                age=datetime.now(timezone.utc).timestamp()-models.parse_iso_ts(event.received_ts,'confirm-pending').timestamp()
+                if age>CONFIRM_PENDING_TTL_SEC:
+                    # A provisional stream fill that outlives its confirmation
+                    # window is retired, not stranded: the fills barrier
+                    # re-derives every booked fill from native REST history,
+                    # so dropping the provisional copy cannot lose the fill —
+                    # it only stops the pending set from growing until the
+                    # 1024 buffer overflow tripped the stream (recovery then
+                    # re-books it or the ledger already holds it).
+                    del self._pending[key]
+                    log.warning('BULK_CONFIRM_PENDING_EXPIRED key_age_s=%.0f',age)
     def poll(self):
         events,self._events=self._events,[]
         return events

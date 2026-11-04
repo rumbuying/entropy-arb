@@ -1,5 +1,6 @@
 """Actual GridVenue/engine registration with native-format offline transports."""
 import asyncio,copy
+from types import SimpleNamespace
 from dataclasses import replace
 import pytest
 import aiohttp
@@ -125,7 +126,9 @@ def test_stream_fill_waits_for_original_bound_rest_event_and_unknown_history_sta
             read.history=history([],coverage='unknown',minAvailableSlot=None)
             await venue.ingest_events([event]);assert not view.poll() and venue.stream_gap and view._pending
             native=fill(orderIdMaker=oid,orderIdTaker=oid)
-            read.history=history([native]);await view.confirm_pending()
+            # The confirm scan anchors at the pending fill's slot (101), not
+            # the history-start cursor (100).
+            read.history=history([native],startSlot=101);await view.confirm_pending()
             result=view.poll();assert len(result)==1 and result[0].execution.finality=='final'
             assert result[0].execution.order_client_id==request.client_id and not view._pending
             assert venue.stream_gap  # matching one fill cannot certify full account recovery
@@ -352,4 +355,39 @@ def test_run_stream_survives_an_ingest_fault_and_keeps_ingesting(tmp_path, monke
                 assert task.done() and venue._stream is None
         finally:
             await server.close();st.close()
+    asyncio.run(run())
+
+
+def test_confirm_pending_scans_from_the_oldest_pending_fill_and_expires_stale_ones(tmp_path):
+    """The confirm scan started at the immutable account origin every second:
+    on a long-lived account it rode the whole fill history through the paced
+    transport, starved the protection reads, and re-flagged stream_gap every
+    second when the retained window could not cover the origin — defeating
+    the recovery that clears that flag. It now anchors at the oldest pending
+    fill, logs its failures, and retires provisional fills that outlive the
+    confirmation window instead of growing into the 1024 overflow."""
+    async def run():
+        transport=Read();st=Store.open(str(tmp_path/'confirm-scan.sqlite'))
+        try:
+            venue=root(st,transport);await venue.catalog_markets()
+            view=venue.market_venue('bulk:mainnet||ETH-USD|linear_perp|USDC')
+            event=decoder().ingest(frame(ws_fill()))
+            stale=replace(event.execution,received_ts='2026-01-01T00:00:00Z')
+            view._pending[event.execution.execution_key]=stale
+            start_slots=[]
+            async def fake_history(kind,*,start_slot,**kw):
+                start_slots.append(start_slot)
+                from entropy_arb.grid.adapters.bulk_read import BulkHistoryWindow
+                return BulkHistoryWindow((),start_slot=start_slot,end_slot=start_slot,as_of_slot=start_slot,min_available_slot=None,complete=False,pages=1,reason='x')
+            view.__dict__['reader']=lambda:SimpleNamespace(history=fake_history)
+            parent=venue  # the account parent owns stream_gap
+            parent.stream_gap=False
+            await view.confirm_pending()
+            expected=int(event.execution.trade_id.split(':')[0])
+            assert start_slots==[expected],f'scan anchored at {start_slots}, not {expected}'
+            # The stale provisional fill is retired instead of stranded.
+            assert not view._pending
+            # The incomplete window still flags the gap (honest), now with a log.
+            assert parent.stream_gap
+        finally:st.close()
     asyncio.run(run())

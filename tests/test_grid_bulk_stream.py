@@ -242,12 +242,15 @@ def test_queue_overflow_while_connected_forces_a_fresh_subscription(monkeypatch)
                 await stream.start()
                 try:
                     def fresh_start():
-                        """A stream_connected observed after an overflow gap."""
+                        """A fresh subscription snapshot observed after an
+                        overflow gap: the reconnect re-emits stream_connected
+                        and the snapshot is observable again."""
                         gaps=[i for i,e in enumerate(observed) if e.kind=='stream_gap'
                               and e.data.get('code')=='BULK_STREAM_QUEUE_OVERFLOW']
-                        return any(i for i,e in enumerate(observed)
-                                   if e.kind=='stream_connected'
-                                   and any(g<i for g in gaps))
+                        if not gaps:return False
+                        after=observed[gaps[-1]+1:]
+                        return any(e.kind=='stream_connected' for e in after) and \
+                            any(e.kind=='snapshot_requires_reconciliation' for e in after)
                     async def drain():
                         while True:
                             observed.extend(stream.poll())
