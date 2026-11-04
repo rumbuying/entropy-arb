@@ -1073,15 +1073,40 @@ class GridRuntime:
                     if not funding["ok"] and self.lifecycle._grid(grid_id)["status"] in ("RUNNING", "STARTING", "READY"):
                         scoped_event = funding.get("code")
                 except Exception as error:
-                    # Bulk's retained-history funding scan raises instead of
-                    # returning ok=False. Judge it against the account-scoped
-                    # basis exactly like the recovery flow does.
-                    if not (self.execution_mode == 'production'
-                            and isinstance(error, AdapterError)
-                            and str(error) in ("FUNDING_HISTORY_INCOMPLETE", "FUNDING_HISTORY_SCAN_PENDING")):
-                        raise
-                    scoped_event = str(error)
-                    funding = {"ok": False, "code": scoped_event}
+                    code = str(error) if isinstance(error, AdapterError) else type(error).__name__
+                    # Only retryable transport/read failures are "pending".
+                    # Data-quality codes (a certified gap, a floor gap, a
+                    # cursor conflict) still go through the scoped-basis
+                    # judgment below.
+                    transient = isinstance(error, (TimeoutError, OSError)) or (
+                        isinstance(error, AdapterError) and (
+                            code.startswith('BULK_READ_')
+                            or code in ('BULK_HISTORY_HTTP_FAILED', 'BULK_HISTORY_BUSY',
+                                        'BULK_CURSOR_EXPIRED', 'BULK_HISTORY_PAGE_BUDGET_EXHAUSTED',
+                                        'FUNDING_HISTORY_UNAVAILABLE', 'HL_INFO_BUDGET_WAIT')))
+                    if transient:
+                        # A background funding reconciliation read failed. It
+                        # is a pending read, not a state change: the next tick
+                        # resyncs and the recovery barrier re-folds the
+                        # economics. Raising here fails the pump, and the pump
+                        # scheduler pauses the whole grid silently (2026-11-04
+                        # 21:03: one BULK_READ_HTTP_FAILED paused a RUNNING
+                        # grid with no epoch bump and no event).
+                        await self.store.write(lambda c: store.register_event(c,
+                            event_key=f"funding-scan-transient:{grid_id}:{code}",
+                            scope=grid_id, event_type='funding_scan_transient',
+                            payload={'code': code}))
+                        scoped_event = None   # a pending read, not a state change
+                    else:
+                        # Bulk's retained-history funding scan raises instead
+                        # of returning ok=False. Judge it against the
+                        # account-scoped basis exactly like recovery does.
+                        if not (self.execution_mode == 'production'
+                                and isinstance(error, AdapterError)
+                                and str(error) in ("FUNDING_HISTORY_INCOMPLETE", "FUNDING_HISTORY_SCAN_PENDING")):
+                            raise
+                        scoped_event = str(error)
+                        funding = {"ok": False, "code": scoped_event}
                 if scoped_event is not None and self.lifecycle._grid(grid_id)["status"] in ("RUNNING", "STARTING", "READY"):
                     if not self.scoped_recovery_current(actor.account.account_id):
                         # A private-stream reconnect starts a new era and

@@ -248,3 +248,32 @@ def test_uncertified_window_is_accepted_provisionally_and_declares_its_gap(tmp_p
         finally:
             rt.close()
     asyncio.run(run())
+
+
+def test_transient_funding_read_failure_does_not_pause_the_grid(tmp_path):
+    """A single retryable funding-sync read failure must stay pending: the
+    pump scheduler pauses the whole grid on any pump exception (silently, no
+    epoch bump) — 2026-11-04 21:03 one BULK_READ_HTTP_FAILED paused a RUNNING
+    grid. Data-quality refusals must still propagate."""
+    async def run():
+        rt, venue = make_runtime(tmp_path)
+        try:
+            gid, _, _ = await create_ready(rt, venue)
+            before = rt.lifecycle._grid(gid)['status']
+            assert before in ('RUNNING', 'READY')
+            async def flaky(*args, **kwargs):
+                raise AdapterError('BULK_READ_HTTP_FAILED')
+            rt.sync_funding = flaky
+            await rt.pump_events(gid)
+            assert rt.lifecycle._grid(gid)['status'] == before
+            events = rt.store.read(lambda c: [r[0] for r in c.execute(
+                "SELECT event_type FROM events WHERE scope=? AND event_type='funding_scan_transient'", (gid,))])
+            assert events == ['funding_scan_transient']
+            async def refusal(*args, **kwargs):
+                raise AdapterError('FUNDING_ECONOMICS_MISMATCH')
+            rt.sync_funding = refusal
+            with pytest.raises(AdapterError, match='FUNDING_ECONOMICS_MISMATCH'):
+                await rt.pump_events(gid)
+        finally:
+            rt.close()
+    asyncio.run(run())
