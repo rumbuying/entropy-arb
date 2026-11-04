@@ -393,18 +393,18 @@ def test_confirm_pending_scans_from_the_oldest_pending_fill_and_expires_stale_on
     asyncio.run(run())
 
 
-def test_reader_bindings_are_cached_per_symbol_for_one_second(tmp_path):
+def test_reader_bindings_are_cached_until_the_journal_changes(tmp_path):
     """The decoder constructs a reader per WS frame; each used to run two
     full LIKE scans over every intent ever placed (runtime_state grows
     forever), so ingest cost grew with account history until the consumer
-    fell behind and the overflow forced a reconnect. Bindings are cached
-    with a one-second TTL per symbol."""
+    fell behind and the overflow forced a reconnect. The cache keys on the
+    journal revision, so any write invalidates it immediately — a lookup
+    right after attach must never serve a stale map."""
     async def run():
         transport=Read();st=Store.open(str(tmp_path/'bindings-cache.sqlite'))
         try:
             venue=root(st,transport);await venue.catalog_markets()
             view=venue.market_venue('bulk:mainnet||ETH-USD|linear_perp|USDC')
-            other=venue.market_venue('bulk:mainnet||BTC-USD|linear_perp|USDC')
             calls={'n':0}
             def scan():
                 calls['n']+=1
@@ -414,10 +414,12 @@ def test_reader_bindings_are_cached_per_symbol_for_one_second(tmp_path):
             for _ in range(8):
                 view.reader()
             assert calls['n']==2, f'one scan per query expected, got {calls["n"]}'
-            other.reader()
-            assert calls['n']==4, 'per-symbol caching must not merge markets'
-            await asyncio.sleep(1.05)
+            # A journal write bumps the revision: the very next reader
+            # rescan must observe the new binding, not the cached map.
+            request=replace(REQUEST,account=venue._account.account_id)
+            await venue.journal.reserve(request,RULES,history_start_slot=100)
+            assert venue.journal.revision>0
             view.reader()
-            assert calls['n']==6, 'the TTL must expire and refresh'
+            assert calls['n']==4, 'a journal write must invalidate the cache'
         finally:st.close()
     asyncio.run(run())

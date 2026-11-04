@@ -300,6 +300,11 @@ class BulkIntentJournal:
         self.clock_ns = clock_ns
         self.require_core = require_core
         self.scope = models.sha256_hex([network, owner])
+        # Bumped by every durable journal write (all of them route through
+        # _put). The account-level bindings cache keys on this, so a submit
+        # or cancel invalidates the cached oid->client-id maps immediately —
+        # a lookup right after attach must never serve a stale map.
+        self.revision = 0
 
     def _key(self, cid):
         if not isinstance(cid, str) or not re.fullmatch('[a-zA-Z0-9:_-]{1,128}', cid):
@@ -311,8 +316,8 @@ class BulkIntentJournal:
         row = c.execute('SELECT value FROM runtime_state WHERE key=?', (key,)).fetchone()
         return json.loads(row[0]) if row else None
 
-    @staticmethod
-    def _put(c, key, value):
+    def _put(self, c, key, value):
+        self.revision += 1
         c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                   (key, json.dumps(value, sort_keys=True, separators=(',', ':'))))
 

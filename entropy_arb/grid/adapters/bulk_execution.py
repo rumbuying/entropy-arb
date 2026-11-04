@@ -229,7 +229,9 @@ class BulkExecution:
                 if old['state']=='MAY_HAVE_SENT':
                     # Keep the original nonce and ID even after rules change.
                     try:proof=await self.lookup(request.client_id,old['order_id'])
-                    except Exception:
+                    except Exception as error:
+                        log.warning('BULK_ORIGINAL_QUERY_UNAVAILABLE error_type=%s client_id=%s',
+                            type(error).__name__,request.client_id)
                         return SubmitResult('UNKNOWN',exchange_order_id=old['order_id'],stage='bulk_original_query_unavailable')
                     if proof.state not in ('FOUND_OPEN','FOUND_TERMINAL'):
                         return SubmitResult('UNKNOWN',exchange_order_id=old['order_id'],stage='bulk_original_pending')
@@ -266,7 +268,13 @@ class BulkExecution:
                 return SubmitResult('REJECTED',reject_code=str(error),stage='final_gate_not_sent')
             except asyncio.CancelledError:
                 raise  # MAY_HAVE_SENT remains durable for restart reconciliation
-            except Exception:
+            except Exception as error:
+                # A lost send must be visible: the journal row stays
+                # MAY_HAVE_SENT and recovery must reconcile it, but without
+                # a log line nobody could tell a transport fault from a
+                # quiet venue.
+                log.warning('BULK_SUBMIT_TRANSPORT_UNCERTAIN error_type=%s client_id=%s',
+                    type(error).__name__,request.client_id)
                 result=SubmitResult('UNKNOWN',exchange_order_id=bound['order_id'],stage='bulk_transport_uncertain')
             else:
                 result=submit_receipt(reply,request=request,order_id=bound['order_id'])

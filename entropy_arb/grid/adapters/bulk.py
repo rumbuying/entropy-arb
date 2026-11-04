@@ -69,9 +69,9 @@ class BulkAccountVenue(GridVenue):
         self.journal=BulkIntentJournal(store,account=self._account.account_id,owner=owner,network=network,require_core=True)
         # Per-frame reader construction used to run two full LIKE scans over
         # every intent ever placed (runtime_state grows forever). Bindings
-        # change only on engine writes, so a one-second TTL cache bounds the
-        # scan cost without stale-mapping risk: a frame for a brand-new
-        # binding falls back to the REST confirmation path by design.
+        # change only on journal writes, so the cache keys on the journal
+        # revision: any submit/cancel invalidates it immediately — a lookup
+        # right after attach must never serve a stale map.
         self._bindings_cache={}
         self.execution_lock=asyncio.Lock();self.views={};self.catalog={};self._state=BulkStreamState()
         self._stream=None
@@ -83,20 +83,21 @@ class BulkAccountVenue(GridVenue):
             raise AdapterError('BULK_EXECUTION_SCOPE_MISMATCH')
 
     def cached_bindings(self,symbol):
-        """(bindings, action_bindings) with a one-second TTL per symbol.
+        """(bindings, action_bindings) valid until the next journal write.
 
         The journal's LIKE scans are O(all intents ever placed); the decoder
         constructed a reader per WS frame, so ingest cost grew with account
         history until the consumer fell behind and the overflow forced a
-        reconnect. A frame for a binding attached mid-window falls back to
-        the REST confirmation path, so a one-second staleness bound is safe.
+        reconnect. The journal revision (bumped by _put, i.e. by every
+        durable write) keys the cache, so a submit or cancel invalidates it
+        immediately and a lookup right after attach always rescans.
         """
-        now=time.monotonic()
+        revision=self.journal.revision
         entry=self._bindings_cache.get(symbol)
-        if entry is not None and now-entry[0]<1.0:
+        if entry is not None and entry[0]==revision:
             return entry[1],entry[2]
         bindings=self.journal.bindings(symbol);actions=self.journal.action_bindings(symbol)
-        self._bindings_cache[symbol]=(now,bindings,actions)
+        self._bindings_cache[symbol]=(revision,bindings,actions)
         if len(self._bindings_cache)>64:self._bindings_cache.clear()
         return bindings,actions
 
