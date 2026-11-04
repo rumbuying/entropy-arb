@@ -760,6 +760,9 @@ class GridRuntime:
         fresh = await self.preview(cfg, purpose="activate", fixed_qty_base=stored_plan["qty_per_grid"], grid_id=grid_id)
         plan = fresh.get("plan")
         if not plan or plan.validation_status != "VALID":
+            sizing = fresh.get("sizing") or {}
+            log.warning('GRID_ACTIVATE_PLAN_BLOCKED plan=%s sizing_status=%s sizing_code=%s',
+                getattr(plan, 'validation_status', None), sizing.get('validation_status'), sizing.get('code'))
             raise RuntimeError_("PLAN_NOT_VALID", "current risk or price plan is blocked", 422)
         if (self.execution_mode=='production' and getattr(getattr(venue,'account_parent',None),'live_release',None) is not None
                 and not (self.live_release is not None and self.live_release.permits_grid(grid_id)

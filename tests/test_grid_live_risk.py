@@ -649,3 +649,32 @@ def test_stable_owned_order_mismatch_keeps_its_safe_diagnostic_in_freeze_event(t
             assert not event['risk_observation'].get('owned_orders_changed_during_collection')
         finally:rt.close()
     asyncio.run(run())
+
+
+def test_transient_observation_failure_is_retried_before_pausing(tmp_path, monkeypatch):
+    """One failed collection is blindness, not confirmed danger (2026-11-04:
+    a single BULK_READ_HTTP_FAILED paused a RUNNING grid after 1h47m). The
+    guard must leave the grid running and let the next tick recollect, and
+    only pause after a bounded blind window."""
+    monkeypatch.setenv('GRID_REAL_DISPATCH', '1')
+    async def run():
+        rt = GridRuntime.open(str(tmp_path/'blind.db'), execution_mode='production')
+        try:
+            gid,cfg,venue,mock,signer,qty = await running(rt)
+            epoch = rt.lifecycle._grid(gid)['epoch']
+            guard = rt.live_risk
+            base = guard.clock()
+            await guard.freeze(gid, epoch=epoch, code='RISK_OBSERVATION_UNAVAILABLE')
+            assert rt.lifecycle._grid(gid)['status'] == 'RUNNING'
+            # A clean observation clears the blind window.
+            await guard.record(gid, {'code': None, 'epoch': epoch})
+            await guard.freeze(gid, epoch=epoch, code='RISK_OBSERVATION_UNAVAILABLE')
+            assert rt.lifecycle._grid(gid)['status'] == 'RUNNING'
+            # Sustained blindness past the grace still pauses.
+            guard.clock = lambda: base + 121
+            await guard.freeze(gid, epoch=epoch, code='RISK_OBSERVATION_UNAVAILABLE')
+            assert rt.lifecycle._grid(gid)['status'] == 'NEEDS_ATTENTION'
+            assert rt.lifecycle._grid(gid)['desired_mode'] == 'PAUSED'
+        finally:
+            rt.close()
+    asyncio.run(run())

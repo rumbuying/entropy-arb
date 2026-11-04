@@ -19,6 +19,13 @@ from .lifecycle import LifecycleError
 
 log = logging.getLogger("grid.live_risk")
 
+# Consecutive-blindness grace before a transient collection failure pauses a
+# running grid. One failed read is not confirmed danger: the position and its
+# native stop are untouched, and the send that needed the observation simply
+# stays unsent (retried next tick). Longer blindness still pauses, so an
+# account that cannot be observed at all never sends blind.
+RISK_BLIND_GRACE_S = 120
+
 
 class LiveRiskGuard:
     def __init__(self, runtime, *, clock=time.monotonic, max_age=5.0, collection_timeout=10.0):
@@ -364,6 +371,9 @@ class LiveRiskGuard:
             if current[0] == result["epoch"]:
                 c.execute("INSERT INTO runtime_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     (f"risk-watch:{grid_id}", json.dumps(public, sort_keys=True)))
+                if result.get('code') is None:
+                    c.execute('DELETE FROM runtime_state WHERE key=?',
+                        ('risk-observation-blind:' + grid_id,))
         await self.rt.store.write(commit)
 
     async def refuse(self, intent, code):
@@ -412,6 +422,24 @@ class LiveRiskGuard:
         if code in ('PROFIT_TAKE_REACHED', 'PROFIT_LOSS_REACHED'):
             await self.rt.profit_protection.request_exit(grid_id, epoch=epoch, code=code)
             return
+        if code in ('RISK_OBSERVATION_UNAVAILABLE', 'RISK_COLLECTION_TIMEOUT'):
+            now_ms = int(self.clock() * 1000)
+            key = 'risk-observation-blind:' + grid_id
+            def mark(c):
+                row = c.execute('SELECT value FROM runtime_state WHERE key=?', (key,)).fetchone()
+                first = None
+                if row is not None:
+                    try: first = int(json.loads(row[0]))
+                    except (TypeError, ValueError): first = None
+                if first is None or now_ms < first or now_ms - first > 3_600_000:
+                    first = now_ms
+                    c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '
+                              'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                        (key, json.dumps(now_ms)))
+                return first
+            first = await self.rt.store.write(mark)
+            if now_ms - first < RISK_BLIND_GRACE_S * 1000:
+                return  # unsent stays unsent; next tick recollects
         row = self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
             ('risk-watch:'+grid_id,)).fetchone())
         observation = json.loads(row[0]) if row else None
