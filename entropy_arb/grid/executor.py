@@ -470,7 +470,13 @@ class AccountExecutor:
             return {"intent_id": intent_id, "outcome": "BLOCKED", "reject_code": refuse,
                     "risk_blocked": refuse.startswith(("RISK_",'PROTECTION_'))}
         try:
-            result = await asyncio.wait_for(self.market_venue(req.market).submit(req), VENUE_TIMEOUT_SEC)
+            venue = self.market_venue(req.market)
+            # Venues whose gate/sends ride a shared paced transport (bulk)
+            # declare their own submit budget; the flat 10s send bound can
+            # fire after claim_send and strand the journal row MAY_HAVE_SENT
+            # with the request possibly already on the wire.
+            submit_timeout = getattr(venue, 'submit_timeout_sec', VENUE_TIMEOUT_SEC)
+            result = await asyncio.wait_for(venue.submit(req), submit_timeout)
         except (AdapterError, TimeoutError, OSError) as e:
             result = SubmitResult(state="UNKNOWN", stage="adapter_error",
                                   detail=repr(e))
@@ -579,7 +585,7 @@ class AccountExecutor:
                 async with transport.read_sequence(2):
                     return await venue.lookup(client_id)
             return await venue.lookup(client_id)
-        return await asyncio.wait_for(query(), VENUE_TIMEOUT_SEC)
+        return await asyncio.wait_for(query(), LOOKUP_TIMEOUT_SEC)
 
     async def resolve_unknown(self, intent_id: str, *,
                               client_id: Optional[str] = None) -> str:

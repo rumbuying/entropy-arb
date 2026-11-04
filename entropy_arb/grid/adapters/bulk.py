@@ -283,6 +283,11 @@ class BulkGridVenue(GridVenue):
     dispatch_gate=None
     live_qualified=False
     write_enabled=False
+    # submit rides the shared 1 req/s paced transport twice (gate fullAccount
+    # read, then the signed POST); the flat 10s executor send bound firing
+    # after claim_send strands the journal row MAY_HAVE_SENT with the request
+    # possibly already on the wire.
+    submit_timeout_sec=30
 
     def __init__(self,parent,market_ref):
         self.account_parent=parent;self.transport=parent.transport;self.network=parent.network
