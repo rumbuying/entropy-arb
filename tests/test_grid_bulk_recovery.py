@@ -602,3 +602,54 @@ def test_stream_loss_does_not_freeze_a_grid_owned_by_an_in_flight_recovery(tmp_p
             assert rt.lifecycle._grid(gid)['epoch']==before['epoch']+1
         finally:rt.close()
     asyncio.run(run())
+
+def test_bulk_read_failure_retries_instead_of_abandoning_recovery(tmp_path,monkeypatch):
+    """The recovery layer's transient vocabulary was HL-only: one bulk-shaped
+    read failure produced FILL_HISTORY_UNAVAILABLE detail=BULK_READ_HTTP_FAILED,
+    transient() refused it and the grid landed NEEDS_ATTENTION on attempt 1.
+    The bulk read codes are now retryable like the pump treats them."""
+    async def run():
+        parts,actor,iid=await ready(tmp_path,monkeypatch)
+        rt,gid,cfg,parent,view,native,p,sender,_=parts
+        try:
+            calls={'n':0}
+            original=type(view).fills.__get__(view)
+            async def flaky_fills(*a,**kw):
+                calls['n']+=1
+                if calls['n']<=2:raise AdapterError('BULK_READ_HTTP_FAILED')
+                return await original(*a,**kw)
+            view.__dict__['fills']=flaky_fills
+            parent._state.gap=True
+            await rt.on_stream_loss(cfg.account_ref)
+            parent._state.connected=True;parent._state.gap=False
+            report=await rt.recover(gid,restore=True,expected_epoch=2)
+            assert report['ok'],json.dumps(report,default=str)[:400]
+            assert calls['n']>=3
+            assert rt.lifecycle._grid(gid)['status']=='RUNNING'
+        finally:rt.close()
+    asyncio.run(run())
+
+
+def test_funding_read_inside_recovery_is_retried(tmp_path,monkeypatch):
+    """recovery_read received an already-created awaitable, so its 3-attempt
+    retry never engaged: one failed funding read inside recovery appended a
+    FUNDING_HISTORY_UNAVAILABLE gap immediately."""
+    async def run():
+        parts,actor,iid=await ready(tmp_path,monkeypatch)
+        rt,gid,cfg,parent,view,native,p,sender,_=parts
+        try:
+            calls={'n':0}
+            original=type(view).funding_history.__get__(view)
+            async def flaky_funding(*a,**kw):
+                calls['n']+=1
+                if calls['n']<=2:raise AdapterError('BULK_HISTORY_BUSY')
+                return await original(*a,**kw)
+            view.__dict__['funding_history']=flaky_funding
+            parent._state.gap=True
+            await rt.on_stream_loss(cfg.account_ref)
+            parent._state.connected=True;parent._state.gap=False
+            report=await rt.recover(gid,restore=True,expected_epoch=2)
+            assert calls['n']>=3,'the funding read retry never engaged'
+            assert report['ok'],json.dumps(report,default=str)[:400]
+        finally:rt.close()
+    asyncio.run(run())

@@ -1082,6 +1082,7 @@ class GridRuntime:
                         isinstance(error, AdapterError) and (
                             code.startswith('BULK_READ_')
                             or code in ('BULK_HISTORY_HTTP_FAILED', 'BULK_HISTORY_BUSY',
+                                        'BULK_HISTORY_STORAGE_ERROR', 'BULK_HISTORY_STATE_NOT_READY',
                                         'BULK_CURSOR_EXPIRED', 'BULK_HISTORY_PAGE_BUDGET_EXHAUSTED',
                                         'FUNDING_HISTORY_UNAVAILABLE', 'HL_INFO_BUDGET_WAIT')))
                     if transient:
@@ -1289,7 +1290,10 @@ class GridRuntime:
                 report["ok"] = False
                 report["gaps"].append({"code": "OLD_ORDERS_NOT_TERMINAL"})
             try:
-                await recovery_read(self.sync_funding(grid_id))
+                # A callable, not an awaitable: recovery_read's 3-attempt
+                # retry only engages for callables — an already-created
+                # awaitable silently skipped every retry.
+                await recovery_read(lambda: self.sync_funding(grid_id))
             except Exception as error:
                 scoped_funded = (report.get("scoped_basis") is not None
                     and isinstance(error, AdapterError)

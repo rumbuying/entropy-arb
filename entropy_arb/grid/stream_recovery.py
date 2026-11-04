@@ -16,6 +16,16 @@ from .adapters.base import AdapterError
 
 log = logging.getLogger("grid.stream_recovery")
 NETWORK_ERRORS = {"HL_TRANSPORT_UNCERTAIN", "HL_HTTP_408", "HL_HTTP_429", "HL_HTTP_500", "HL_HTTP_502", "HL_HTTP_503", "HL_HTTP_504"}
+# Bulk transient read failures. One failed HTTP read is not proof of missing
+# history: the same incident class the pump already treats as pending must
+# not abort an automatic recovery on attempt 1 (2026-11-04: a bulk-shaped
+# read failure landed NEEDS_ATTENTION immediately because this vocabulary
+# was HL-only).
+BULK_READ_ERRORS = frozenset((
+    'BULK_READ_RATE_LIMITED', 'BULK_READ_HTTP_FAILED', 'BULK_READ_UNCERTAIN', 'BULK_READ_FAILED',
+    'BULK_HISTORY_BUSY', 'BULK_HISTORY_HTTP_FAILED', 'BULK_HISTORY_STORAGE_ERROR',
+    'BULK_HISTORY_STATE_NOT_READY'))
+NETWORK_ERRORS |= BULK_READ_ERRORS
 
 
 def transient(report):
@@ -36,6 +46,11 @@ def transient(report):
         if wrapped:
             detail = wrapped.group(1)
         if gap["code"].endswith("_UNAVAILABLE") and (detail in NETWORK_ERRORS or detail in ("", "TimeoutError()", "TimeoutError")):
+            continue
+        # A bulk bound stop that changed between journal binding and venue
+        # read is re-read on the next recovery attempt; a persistent change
+        # exhausts the bounded retry budget instead of dying on attempt 1.
+        if gap["code"] == "OPEN_ORDERS_UNAVAILABLE" and detail == "BULK_BOUND_STOP_CHANGED":
             continue
         return False
     return True
@@ -101,7 +116,8 @@ class StreamRecoveryScheduler:
     def _error_report(error):
         retry = isinstance(error, TimeoutError) or (isinstance(error, AdapterError) and str(error) in NETWORK_ERRORS)
         return {"ok": False, "drift": [], "gaps": [{"code": "RECOVERY_IO_UNAVAILABLE",
-                "detail": "HL_TRANSPORT_UNCERTAIN" if retry else type(error).__name__}]}
+                "detail": str(error) if retry and isinstance(error, AdapterError) else
+                          ("HL_TRANSPORT_UNCERTAIN" if retry else type(error).__name__)}]}
 
     async def _attempt_account(self, rows, venue):
         """Cancel and prove every frozen market before rebuilding any of them."""
