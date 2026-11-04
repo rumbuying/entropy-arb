@@ -1,20 +1,42 @@
 # Include inside the taoli.coinfetcher.xyz HTTPS server.
 # The password file must be readable by nginx workers (root:nginx 0640).
-location = /grid {
-    return 308 /grid/;
-}
 
-# Unified entry portal: static page linking to every grid service.
-location = /grid/ {
+# Unified homepage for the three services (arb console, HL grid, bulk grid).
+# The arbitrage console keeps its canonical tokened URL: a request to / with
+# a token query is proxied straight to it (behind the same password); every
+# other request to / is the basic-auth navigation portal. deploy/home-portal/
+# carries an __ARB_TOKEN__ placeholder that the deploy step substitutes from
+# the server-side console-token.env, so the secret never enters the repo.
+location = / {
     if ($entropy_grid_origin_allowed = 0) {
         return 403;
     }
-    auth_basic "Entropy Grid";
+    if ($arg_token != "") {
+        proxy_pass http://127.0.0.1:8788;
+    }
+    auth_basic "Entropy";
     auth_basic_user_file /etc/nginx/entropy-grid.htpasswd;
     auth_delay 1s;
-    root /var/www/entropy-grid-portal;
+    root /var/www/entropy-home-portal;
     try_files /index.html =404;
     access_log off;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+location = /grid {
+    return 308 /;
+}
+
+# The homepage above replaces this portal; old bookmarks land on it.
+location = /grid/ {
+    return 308 /;
 }
 
 # The Hyperliquid console keeps its backend untouched; only its public

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>entropy — 服务导航</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #111820; --panel-2: #0e141b; --border: #1e2a36;
+    --text: #d7e2ec; --dim: #7a8b9c; --accent: #35c4dc;
+    --green: #2ecc71; --amber: #e8b339;
+    --mono: "SFMono-Regular", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 30px 24px 4px; max-width: 1080px; margin: 0 auto; width: 100%;
+  }
+  header .brand { font-weight: 700; font-size: 19px; }
+  header .brand .accent { color: var(--accent); }
+  header .sub { color: var(--dim); font-size: 13px; }
+  main {
+    flex: 1; max-width: 1080px; width: 100%; margin: 0 auto;
+    padding: 20px 24px 30px;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-content: start;
+  }
+  a.card {
+    display: flex; flex-direction: column; gap: 10px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 22px 20px 18px; text-decoration: none; color: var(--text);
+    transition: border-color .15s, transform .15s;
+  }
+  a.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card .head { display: flex; align-items: center; gap: 10px; }
+  .card .icon { font-size: 22px; }
+  .card .name { font-size: 16.5px; font-weight: 700; }
+  .card .venue { color: var(--accent); font-size: 12px; font-family: var(--mono); }
+  .card p { margin: 0; color: var(--dim); font-size: 13px; }
+  .card .go { margin-top: auto; padding-top: 6px; color: var(--accent); font-size: 13px; font-weight: 600; }
+  .card .go::after { content: " →"; }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .facts span {
+    font-size: 11.5px; color: var(--dim); font-family: var(--mono);
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px;
+    padding: 2px 7px;
+  }
+  .facts span.ok { color: var(--green); border-color: rgba(46,204,113,.35); }
+  .facts span.live { color: var(--amber); border-color: rgba(232,179,57,.35); }
+  footer {
+    max-width: 1080px; width: 100%; margin: 0 auto;
+    padding: 0 24px 22px; color: var(--dim); font-size: 12px;
+  }
+  footer b { color: var(--text); font-weight: 600; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">entropy <span class="accent">服务导航</span></div>
+  <div class="sub">套利 · HL 网格 · Bulk 网格</div>
+</header>
+<main>
+  <a class="card" href="/?token=__ARB_TOKEN__">
+    <div class="head"><span class="icon">⇄</span><span class="name">套利</span><span class="venue">多所套利</span></div>
+    <p>套利控制台：行情采集、策略运行（Runs）、配置管理、收益分析与资金费归因。</p>
+    <div class="facts"><span class="ok">运行中</span><span>console :8788</span><span class="live">令牌校验数据</span></div>
+    <div class="go">打开控制台</div>
+  </a>
+  <a class="card" href="/grid/hl/">
+    <div class="head"><span class="icon">⚡</span><span class="name">HL 网格</span><span class="venue">Hyperliquid</span></div>
+    <p>Hyperliquid 永续网格控制台。独立 worker 与看护，与 Bulk 服务互不影响。</p>
+    <div class="facts"><span class="ok">运行中</span><span>worker + web + watchdog</span><span>策略账号</span></div>
+    <div class="go">打开控制台</div>
+  </a>
+  <a class="card" href="/grid/bulk/">
+    <div class="head"><span class="icon">▦</span><span class="name">Bulk 网格</span><span class="venue">bulk.trade</span></div>
+    <p>Bulk 永续网格控制台。13 个币种已开放，原生止损保护与自愈恢复屏障。</p>
+    <div class="facts"><span class="ok">运行中</span><span>worker + web + watchdog</span><span>13 币种</span></div>
+    <div class="go">打开控制台</div>
+  </a>
+</main>
+<footer>
+  三个入口共用同一登录凭据（本页的浏览器会自动带上）。运行时相互独立：一个服务的重启、看护或网络问题不影响其余两个。套利控制台的数据访问另受令牌校验。
+</footer>
+</body>
+</html>
