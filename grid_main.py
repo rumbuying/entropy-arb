@@ -35,10 +35,25 @@ log = logging.getLogger("grid.main")
 
 
 async def supervision_step(name, step):
+    """One scheduler fault must not end the whole runtime process.
+
+    Any exception escaping a tick used to kill the main loop; the watchdog
+    then SIGKILL-restarted the worker and the fresh instance ran
+    close_interrupted, which request_exit(PROTECTION_SERVICE_RESTART) every
+    protected grid — so a single transient store error protective-closed
+    every RUNNING grid at once. The schedulers isolate per-grid failures
+    internally; this barrier is the last resort for faults they leak.
+    CancelledError still propagates: graceful shutdown depends on it.
+    """
     loop = asyncio.get_running_loop()
     started = loop.time()
     try:
         return await step
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        log.exception('supervision step failed: %s', name)
+        return None
     finally:
         elapsed = loop.time() - started
         if elapsed >= 1:
