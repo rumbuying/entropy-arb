@@ -378,6 +378,17 @@ class LiveRiskGuard:
             venue=self.rt.venue_for(self.rt.config(grid_id).account_ref,self.rt.config(grid_id).market_ref)
             if (backend.observation_can_wait(code) and backend.check_lease(grid_id,now_ms=venue.clock_ms()) is None):
                 return  # No send permit; the independently checked original deadline still runs.
+            # A proof that expired DURING a stream-loss recovery is not a new
+            # danger: the barrier is already re-proving the fixed stop and the
+            # native trigger keeps resting on the venue. Exiting here also
+            # bumps the epoch and interrupts that recovery, so the proof could
+            # never be renewed and the grid was closed ~2 minutes after every
+            # stream gap (2026-11-04: 5-min recovery vs 60s proof TTL). A
+            # failed recovery lands NEEDS_ATTENTION, where this path exits
+            # again against the then-current epoch.
+            current = self.rt.lifecycle._grid(grid_id)
+            if current['status'] in ('STARTING', 'RECOVERING'):
+                return
             await self.rt.protection.request_exit(grid_id,expected_epoch=epoch,
                 reason=code if code.startswith('PROTECTION_SERVICE_') else 'PROTECTION_SERVICE_FIXED_UNVERIFIED')
             return
