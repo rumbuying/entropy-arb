@@ -5,7 +5,7 @@ from entropy_arb.grid.adapters.base import AdapterError
 from entropy_arb.grid.adapters.bulk_protection import VERIFY_WINDOW_MS
 from entropy_arb.grid.adapters.bulk_protection_manager import PROOF_MAX_SECONDS
 from entropy_arb.grid.service_coverage import GUARDIAN_EXIT_GRACE_S
-from entropy_arb.grid.protection_watch import ProtectionWatchScheduler
+from entropy_arb.grid.protection_watch import ProtectionWatchScheduler, PROTECTION_BLIND_TOLERANCE_MS
 from entropy_arb.grid.runtime import GridRuntime
 from test_grid_bulk_protection_manager import setup,planned_entry
 from test_grid_bulk_venue import root
@@ -293,4 +293,30 @@ def test_credential_revision_change_cannot_renew_old_protection_scope(tmp_path,m
             await backend.observe(dict(grid_id=gid,epoch=1))
             assert rt.lifecycle._grid(gid)['status']=='STOPPING' and len(sender.calls)==1
         finally:rt.close()
+    asyncio.run(run())
+
+
+def test_blind_proof_expiry_is_pending_until_the_read_outage_window_is_exhausted(tmp_path,monkeypatch):
+    """A proof that expires while account reads keep failing is pending, not a
+    confirmed protection loss: the native stop keeps resting on the venue.
+    2026-11-04 13:21: a ~6-minute exchange read outage expired the proof and
+    closed a RUNNING grid ~90 seconds in. Sustained blindness still exits."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        watcher=ProtectionWatchScheduler(rt,clock=lambda:mono[0]/1000)
+        try:
+            # Continuous blindness began at the current venue clock.
+            await rt.store.write(lambda c:c.execute("INSERT INTO runtime_state(key,value) VALUES(?,?)",
+                ('protection-blind:'+gid,json.dumps(clock[0]))))
+            clock[0]+=PROOF_MAX_SECONDS*1000+1;mono[0]+=PROOF_MAX_SECONDS*1000+1
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED','NEEDS_ATTENTION')
+            assert rt.store.read(lambda c:c.execute("SELECT 1 FROM runtime_state WHERE key=?",
+                ('protection-exit:'+gid,)).fetchone()) is None
+            # Sustained blindness past the tolerance window runs the contract.
+            clock[0]+=PROTECTION_BLIND_TOLERANCE_MS+1;mono[0]+=PROTECTION_BLIND_TOLERANCE_MS+1
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+        finally:
+            await watcher.close();rt.close()
     asyncio.run(run())

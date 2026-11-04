@@ -11,6 +11,16 @@ from .inventory import Inventory
 log = logging.getLogger('grid.protection_watch')
 
 
+# A proof that expires while the account could not be read is pending, not a
+# confirmed protection loss: the native stop keeps resting on the venue. The
+# bulk backend records when continuous blindness began; the watch tolerates an
+# expiry inside this window while it keeps trying to re-prove, and runs the
+# exit contract once the window is exhausted (2026-11-04 13:21: a ~6-minute
+# exchange read outage expired the proof and closed a RUNNING grid ~90s in).
+PROTECTION_BLIND_KEY = 'protection-blind:'
+PROTECTION_BLIND_TOLERANCE_MS = 180_000
+
+
 class ProtectionLease:
     def __init__(self,runtime):self.rt=runtime
 
@@ -334,22 +344,52 @@ class ProtectionWatchScheduler:
             # absent while the engine re-proves control.
             return
         if code:
-            await self.rt.protection.request_exit(gid,expected_epoch=row['epoch'],reason=code)
-            running=self.tasks.get(gid)
-            if running:
-                from .task_retirement import cancel_once
-                await cancel_once(running[1],self._cancel_requested)
-                if running[1].done():
-                    await asyncio.gather(running[1],return_exceptions=True)
-                    self._cancel_requested.discard(running[1])
-                    self.tasks.pop(gid,None)
-            return
+            if not self._blind_tolerated(row,code):
+                await self.rt.protection.request_exit(gid,expected_epoch=row['epoch'],reason=code)
+                running=self.tasks.get(gid)
+                if running:
+                    from .task_retirement import cancel_once
+                    await cancel_once(running[1],self._cancel_requested)
+                    if running[1].done():
+                        await asyncio.gather(running[1],return_exceptions=True)
+                        self._cancel_requested.discard(running[1])
+                        self.tasks.pop(gid,None)
+                return
+            # Pending blindness: fall through and schedule another observation
+            # so the proof is renewed the moment account reads recover.
         window=self.rt.service_coverage.snapshot(gid)
         if window and window['epoch']==row['epoch'] and window['phase']=='rearming':return
         if gid in self.tasks or self.clock()<self.next_attempt.get(gid,0) or len(self.tasks)>=self.concurrency:return
         policy=self.rt.service_coverage.policy(gid)
         self.next_attempt[gid]=self.clock()+(min(2,policy.max_seconds/3) if policy is not None else 2)
         self.tasks[gid]=(row['epoch'],asyncio.create_task(self.observe(row),name='grid-native-protection:'+gid))
+
+    def _blind_tolerated(self,row,code):
+        """Tolerate a proof expiry that happened during continuous blindness.
+
+        Pure durable read: no venue I/O, so a stalled account read cannot hold
+        the supervisor. The marker is written by the backend after a failed
+        verify and cleared by any successful one, so a confirmed bad stop still
+        exits immediately and sustained blindness still runs the exit contract.
+        """
+        if not (isinstance(code,str) and code.endswith('_PROOF_EXPIRED')):
+            return False
+        key=PROTECTION_BLIND_KEY+row['grid_id']
+        saved=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',(key,)).fetchone())
+        if saved is None:
+            return False
+        try:
+            first=int(json.loads(saved[0]))
+        except (TypeError,ValueError):
+            return False
+        try:
+            now_ms=self.rt.venue_for(row['account_id'],row['market_key']).clock_ms()
+        except Exception:
+            return False
+        if 0<=now_ms-first<=PROTECTION_BLIND_TOLERANCE_MS:
+            log.warning('PROTECTION_BLIND_WAIT code=%s blind_ms=%s',code,now_ms-first)
+            return True
+        return False
 
     async def observe(self,row):
         gid=row['grid_id'];config=self.rt.config(gid);venue=self.rt.venue_for(row['account_id'],row['market_key'])

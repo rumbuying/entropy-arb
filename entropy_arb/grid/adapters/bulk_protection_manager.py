@@ -26,6 +26,13 @@ ACTIVE = ('ACCEPTED','OPEN','PARTIAL','UNKNOWN','DISPATCHING','CANCEL_REQUESTED'
 CONFIRMED = ('ACCEPTED','OPEN','PARTIAL')
 PENDING = ACTIVE + ('PLANNED','BLOCKED_SLOT')
 PROOF_MAX_SECONDS = 60
+# How long a proven native stop may stay unverifiable (blindness) before the
+# expired proof is treated as a real protection loss. The stop keeps resting
+# on the venue the whole time, so this trades a bounded blind window for
+# uptime across exchange read outages (2026-11-04 13:21: a ~6-minute read
+# outage expired the proof and closed a RUNNING grid ~90s in).
+BLIND_TOLERANCE_KEY = 'protection-blind:'
+BLIND_TOLERANCE_MS = 180_000
 OBSERVATION_WAITS = frozenset(('PROTECTION_FIXED_OBSERVATION_UNAVAILABLE',
     'PROTECTION_FIXED_OBSERVATION_CHANGED','PROTECTION_FIXED_OBSERVATION_STALE',
     'PROTECTION_FIXED_POSITION_RECONCILIATION_REQUIRED','PROTECTION_QUOTE_STALE',
@@ -390,6 +397,35 @@ class BulkProtectionManager:
             and self.check_lease(gid,now_ms=self.venue.clock_ms()) is None
             and self.rt.protection_lease.required(gid))
 
+    async def _note_blind(self,gid):
+        """Remember when continuous blindness began (first failed verify).
+
+        Measured on the venue clock, consistent with the lease deadline. A
+        later expiry inside the tolerance window is treated as pending, not
+        as a confirmed protection loss.
+        """
+        now_ms=self.venue.clock_ms()
+        key=BLIND_TOLERANCE_KEY+gid
+        def write(c):
+            row=c.execute('SELECT value FROM runtime_state WHERE key=?',(key,)).fetchone()
+            first=None
+            if row is not None:
+                try:first=int(json.loads(row[0]))
+                except (TypeError,ValueError):first=None
+            if first is None or now_ms<first or now_ms-first>BLIND_TOLERANCE_MS:
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '
+                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                    (key,json.dumps(now_ms)))
+                return now_ms
+            return first
+        return await self.rt.store.write(write)
+
+    async def _clear_blind(self,gid):
+        key=BLIND_TOLERANCE_KEY+gid
+        exists=self.rt.store.read(lambda c:c.execute('SELECT 1 FROM runtime_state WHERE key=?',(key,)).fetchone())
+        if exists:
+            await self.rt.store.write(lambda c:c.execute('DELETE FROM runtime_state WHERE key=?',(key,)))
+
     async def observe(self,row):
         gid=row['grid_id']
         if self.rt.store.read(lambda c: c.execute('SELECT 1 FROM runtime_state WHERE key=?',
@@ -399,7 +435,14 @@ class BulkProtectionManager:
             # check carries the RECOVERING case. Nothing to verify against.
             return
         code=await self.verify(gid)
-        if code is None or code in OBSERVATION_WAITS or code=='PROTECTION_OPERATION_INTERRUPTED':return
+        if code is None:
+            await self._clear_blind(gid)
+            return
+        if code in OBSERVATION_WAITS or code=='PROTECTION_OPERATION_INTERRUPTED':
+            if code in OBSERVATION_WAITS and (
+                    code in ('PROTECTION_FIXED_OBSERVATION_UNAVAILABLE','PROTECTION_FIXED_SNAPSHOT_INCOMPLETE')):
+                await self._note_blind(gid)
+            return
         inflight=self.rt.store.read(lambda c:c.execute("SELECT 1 FROM operations WHERE grid_id=? "
             "AND status='running' LIMIT 1",(gid,)).fetchone()) is not None
         if (code in ('PROTECTION_FIXED_OBSERVATION_UNAVAILABLE','PROTECTION_FIXED_SNAPSHOT_INCOMPLETE')
