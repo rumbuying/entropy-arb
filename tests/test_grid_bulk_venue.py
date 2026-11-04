@@ -391,3 +391,33 @@ def test_confirm_pending_scans_from_the_oldest_pending_fill_and_expires_stale_on
             assert parent.stream_gap
         finally:st.close()
     asyncio.run(run())
+
+
+def test_reader_bindings_are_cached_per_symbol_for_one_second(tmp_path):
+    """The decoder constructs a reader per WS frame; each used to run two
+    full LIKE scans over every intent ever placed (runtime_state grows
+    forever), so ingest cost grew with account history until the consumer
+    fell behind and the overflow forced a reconnect. Bindings are cached
+    with a one-second TTL per symbol."""
+    async def run():
+        transport=Read();st=Store.open(str(tmp_path/'bindings-cache.sqlite'))
+        try:
+            venue=root(st,transport);await venue.catalog_markets()
+            view=venue.market_venue('bulk:mainnet||ETH-USD|linear_perp|USDC')
+            other=venue.market_venue('bulk:mainnet||BTC-USD|linear_perp|USDC')
+            calls={'n':0}
+            def scan():
+                calls['n']+=1
+                return {}
+            venue.journal.__dict__['bindings']=lambda symbol:scan()
+            venue.journal.__dict__['action_bindings']=lambda symbol:scan()
+            for _ in range(8):
+                view.reader()
+            assert calls['n']==2, f'one scan per query expected, got {calls["n"]}'
+            other.reader()
+            assert calls['n']==4, 'per-symbol caching must not merge markets'
+            await asyncio.sleep(1.05)
+            view.reader()
+            assert calls['n']==6, 'the TTL must expire and refresh'
+        finally:st.close()
+    asyncio.run(run())

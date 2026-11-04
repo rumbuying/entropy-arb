@@ -67,6 +67,12 @@ class BulkAccountVenue(GridVenue):
         # views share it; closing one private stream must not close this feed.
         self.risk_feed=risk_feed
         self.journal=BulkIntentJournal(store,account=self._account.account_id,owner=owner,network=network,require_core=True)
+        # Per-frame reader construction used to run two full LIKE scans over
+        # every intent ever placed (runtime_state grows forever). Bindings
+        # change only on engine writes, so a one-second TTL cache bounds the
+        # scan cost without stale-mapping risk: a frame for a brand-new
+        # binding falls back to the REST confirmation path by design.
+        self._bindings_cache={}
         self.execution_lock=asyncio.Lock();self.views={};self.catalog={};self._state=BulkStreamState()
         self._stream=None
         if risk is not None and hasattr(risk,'validate_account'):
@@ -75,6 +81,24 @@ class BulkAccountVenue(GridVenue):
             raise AdapterError('BULK_EXECUTION_SCOPE_MISMATCH')
         if order_transport is not None and (order_transport.owner!=owner or order_transport.network!=network):
             raise AdapterError('BULK_EXECUTION_SCOPE_MISMATCH')
+
+    def cached_bindings(self,symbol):
+        """(bindings, action_bindings) with a one-second TTL per symbol.
+
+        The journal's LIKE scans are O(all intents ever placed); the decoder
+        constructed a reader per WS frame, so ingest cost grew with account
+        history until the consumer fell behind and the overflow forced a
+        reconnect. A frame for a binding attached mid-window falls back to
+        the REST confirmation path, so a one-second staleness bound is safe.
+        """
+        now=time.monotonic()
+        entry=self._bindings_cache.get(symbol)
+        if entry is not None and now-entry[0]<1.0:
+            return entry[1],entry[2]
+        bindings=self.journal.bindings(symbol);actions=self.journal.action_bindings(symbol)
+        self._bindings_cache[symbol]=(now,bindings,actions)
+        if len(self._bindings_cache)>64:self._bindings_cache.clear()
+        return bindings,actions
 
     async def resolve_account(self):return self._account
 
@@ -323,9 +347,10 @@ class BulkGridVenue(GridVenue):
 
     def reader(self):
         from .bulk_bound_read import BulkBoundEvidenceReader
+        bindings,actions=self.account_parent.cached_bindings(self.symbol)
         return BulkBoundEvidenceReader(self.transport,account=self._account.account_id,owner=self.owner,
-            market_ref=self.market.market_key,client_bindings=self.account_parent.journal.bindings(self.symbol),
-            action_bindings=self.account_parent.journal.action_bindings(self.symbol))
+            market_ref=self.market.market_key,client_bindings=bindings,
+            action_bindings=actions)
 
     async def load_instrument(self,market_ref):
         if market_ref!=self.market.market_key:raise AdapterError('BULK_MARKET_SCOPE_MISMATCH')
