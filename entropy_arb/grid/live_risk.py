@@ -387,7 +387,7 @@ class LiveRiskGuard:
             # failed recovery lands NEEDS_ATTENTION, where this path exits
             # again against the then-current epoch.
             current = self.rt.lifecycle._grid(grid_id)
-            if current['status'] in ('STARTING', 'RECOVERING'):
+            if current['status'] == 'RECOVERING':
                 return
             await self.rt.protection.request_exit(grid_id,expected_epoch=epoch,
                 reason=code if code.startswith('PROTECTION_SERVICE_') else 'PROTECTION_SERVICE_FIXED_UNVERIFIED')

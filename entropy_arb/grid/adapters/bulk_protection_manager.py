@@ -8,6 +8,7 @@ import asyncio
 from dataclasses import asdict
 from decimal import Decimal, localcontext, ROUND_CEILING
 import json
+import logging
 import re
 import time
 import uuid
@@ -18,6 +19,8 @@ from ..journal import is_native_protection
 from .base import AdapterError, OrderRequest
 from .bulk_protection import BulkStopBinding, BulkFixedStopGate, verify_fixed_stop
 from .bulk_read import BulkEvidenceReader, OPEN
+
+log = logging.getLogger('grid.bulk_protection')
 
 ACTIVE = ('ACCEPTED','OPEN','PARTIAL','UNKNOWN','DISPATCHING','CANCEL_REQUESTED','CANCEL_PENDING')
 CONFIRMED = ('ACCEPTED','OPEN','PARTIAL')
@@ -397,4 +400,22 @@ class BulkProtectionManager:
             return
         code=await self.verify(gid)
         if code is None or code in OBSERVATION_WAITS or code=='PROTECTION_OPERATION_INTERRUPTED':return
+        inflight=self.rt.store.read(lambda c:c.execute("SELECT 1 FROM operations WHERE grid_id=? "
+            "AND status='running' LIMIT 1",(gid,)).fetchone()) is not None
+        if (code in ('PROTECTION_FIXED_OBSERVATION_UNAVAILABLE','PROTECTION_FIXED_SNAPSHOT_INCOMPLETE')
+                and self.check_lease(gid,now_ms=self.venue.clock_ms()) is None) or (
+                code=='PROTECTION_FIXED_PROOF_EXPIRED' and inflight):
+            # A proof that expires while an operation is still placing or
+            # retiring orders is the operation's own window: its fences own
+            # it and it renews the lease on completion. Exiting here closed
+            # a protected grid during initialization (2026-11-04 16:10).
+            # A transient observation read failure is not by itself proof of
+            # a broken stop: the fixed-stop lease is the independent
+            # certificate and it is still live. Retry on the next tick; the
+            # proof deadline (and the watchdog) still exit once it really
+            # expires. Exiting on one flaky read closed a protected, running
+            # grid 8 minutes after start (2026-11-04 16:10).
+            log.warning('PROTECTION_OBSERVE_TOLERATED code=%s', code)
+            return
+        log.warning('PROTECTION_OBSERVE_EXIT code=%s', code)
         await self.rt.protection.request_exit(gid,expected_epoch=row['epoch'],reason='PROTECTION_SERVICE_FIXED_UNVERIFIED')

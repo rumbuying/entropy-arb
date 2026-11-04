@@ -335,3 +335,56 @@ def test_funding_display_rounding_drift_stays_within_the_scaled_bound(tmp_path, 
         finally:
             rt.close()
     asyncio.run(run())
+
+
+def test_unacknowledged_lost_send_is_declared_absent_against_truncated_history(tmp_path, monkeypatch):
+    """The production blocker after the fixes: one entry order was sent but
+    never acknowledged (MAY_HAVE_SENT, no receipt), it is not resting on the
+    venue, and the retained history cannot certify its absence (truncated
+    page). Recovery looped forever and the account could not be closed.
+    The declared-absence path must prove it via the counter folds instead."""
+    async def run():
+        stack=build(monkeypatch,tmp_path);rt=stack.rt
+        try:
+            venue,gid=await create_and_start(stack,monkeypatch)
+            parent=venue
+            gid_cid='g000000000199';oid='7LkF5eszC1tPJzRBQq7rwSpiT4hKR6b7LkBdWJCo2s2e'
+            await rt.journal.create_intent(grid_id=gid,cause_key='phantom-lost-send',revision=1,
+                level_index=2,side='buy',qty_base='0.00027892',price='76900',policy='post_only',
+                reduce_only=False,epoch=1,expected_epoch=1)
+            def plant(c):
+                c.execute("UPDATE order_intents SET client_id=?,state='UNKNOWN' WHERE cause_key='phantom-lost-send'",(gid_cid,))
+                evidence=dict(account=parent._account.account_id,client_id=gid_cid,
+                    action=dict(type='order',symbol='BTC-USD',is_buy=True,size='0.00027892',
+                        price='76900',reduce_only=False,iso=False,
+                        order_type=dict(tif='ALO',type='limit')),
+                    nonce=999,request_hash='a'*64,order_id=oid,history_start_slot=ANCHOR,
+                    state='MAY_HAVE_SENT')
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?)',
+                    (parent.journal._key(gid_cid),json.dumps(evidence)))
+            await rt.store.write(plant)
+            view=parent.market_venue(BTC_MARKET);reader=view.reader()
+            original=reader.lookup_many
+            async def lookup_many(pairs,**kw):
+                others=[p for p in pairs if p[0]!=gid_cid]
+                proofs=await original(others,**kw) if others else {}
+                for cid,o in pairs:
+                    if cid==gid_cid:
+                        proofs[cid]=LookupResult(state='NOT_FOUND_TRANSIENT',exchange_order_id=o,
+                            native_status=None,terminal_state=None,cumulative_qty='0',cumulative_known=False)
+                return proofs
+            reader.lookup_many=lookup_many
+            report=await rt.recover(gid,restore=False)
+            assert report['ok'] is True and not report['gaps'],report
+            assert report.get('scoped_basis') and gid_cid in (report.get('declared_absences') or [])
+            basis=rt.store.read(lambda c:read_basis(c,venue))
+            assert basis['declared_absences'][0]['client_id']==gid_cid
+            assert basis['global_history_complete'] is False and basis['financial_permission_granted'] is False
+            marker=rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+                ('bulk-declared-absence:'+parent.journal.scope+':'+gid_cid,)).fetchone())
+            assert marker and json.loads(marker[0])['evidence']=='MAY_HAVE_SENT'
+            state=rt.store.read(lambda c:c.execute('SELECT state FROM order_intents WHERE client_id=?',
+                (gid_cid,)).fetchone()[0])
+            assert state=='EXPIRED_EPOCH'
+        finally:rt.close()
+    asyncio.run(run())

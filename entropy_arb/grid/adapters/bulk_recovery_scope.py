@@ -21,6 +21,7 @@ or over-capacity basis refuses. This never grants global history coverage and
 never rewrites a payment.
 """
 import json
+import logging
 import re
 from decimal import Decimal as _Dec
 
@@ -30,6 +31,8 @@ from .base import AdapterError
 from .bulk_account_baseline import read_baseline
 from .bulk_budget import order_matches
 from .bulk_wire import uint, native_decimal
+
+log = logging.getLogger('grid.bulk_scoped_recovery')
 
 PREFIX = 'bulk-scoped-recovery:'
 ECONOMICS_FIELDS = ('totalMargin', 'availableMargin', 'realizedPnl', 'fees', 'funding',
@@ -207,6 +210,7 @@ async def capture_basis(parent, *, max_originals=256):
         # Terminal results are recorded as the same immutable certificates the
         # recovery barrier keeps; parked protection stays explicitly unknown.
         observed = {}
+        declared = {}
         by_symbol = {}
         for cid, (oid, row) in unproven.items():
             by_symbol.setdefault(row['action']['symbol'], []).append(cid)
@@ -218,9 +222,11 @@ async def capture_basis(parent, *, max_originals=256):
             for cid in sorted(cids):
                 proof = proofs[cid]
                 oid, row = unproven[cid]
+                declared_absence = False
                 # The per-original reader is market-scoped and bound to this
                 # account's journal: its bindings already pin account/market.
                 if proof.exchange_order_id != oid:
+                    log.warning('BULK_SCOPED_PROOF_SHAPE refusal=scope cid=%s state=%s', cid, proof.state)
                     raise AdapterError('BULK_SCOPED_BASIS_PROOF_SCOPE_CONFLICT')
                 size = native_decimal(row['action']['size'], negative=False)
                 parked = (proof.state == 'FOUND_OPEN' and proof.conditional_parked is True
@@ -238,20 +244,53 @@ async def capture_basis(parent, *, max_originals=256):
                     if (not (proof.cumulative_known is True or zero_economics)
                             or proof.terminal_state not in ('FILLED', 'CANCELED', 'REJECTED')
                             or qty < 0 or qty > size):
+                        # Value-free shape marker: which original refuses and
+                        # the certificate class, never amounts or ids.
+                        log.warning('BULK_SCOPED_PROOF_SHAPE refusal=terminal cid=%s state=%s terminal=%s '
+                            'known=%s qty_class=%s size_class=%s zero_economics=%s',
+                            cid, proof.state, proof.terminal_state, proof.cumulative_known,
+                            'zero' if qty == 0 else ('negative' if qty < 0 else 'positive'),
+                            'zero' if size == 0 else ('negative' if size < 0 else 'positive'),
+                            zero_economics)
                         raise AdapterError('BULK_SCOPED_BASIS_PROOF_INCOMPLETE')
                     await view.account_parent.journal.record_lookup(cid, proof)
                 elif proof.state == 'FOUND_OPEN' and proof.cumulative_known is True:
                     if (native_decimal(proof.cumulative_qty, negative=False) < 0
                             or native_decimal(proof.cumulative_qty, negative=False) > size):
+                        log.warning('BULK_SCOPED_PROOF_SHAPE refusal=open_cumulative cid=%s terminal=%s',
+                            cid, proof.terminal_state)
                         raise AdapterError('BULK_SCOPED_BASIS_PROOF_INCOMPLETE')
                     await view.account_parent.journal.record_lookup(cid, proof)
                 elif parked:
                     pass  # accepted only if the native open-order check below matches it
+                elif (proof.state in ('UNKNOWN', 'NOT_FOUND_TRANSIENT')
+                        and row.get('state') == 'MAY_HAVE_SENT'
+                        and (row.get('receipt') or {}).get('state') in (None, 'UNKNOWN')
+                        and (row.get('receipt') or {}).get('executed_qty') in (None, '0')
+                        and row['action']['type'] == 'order'):
+                    # Declared absence: the send was never acknowledged, the
+                    # venue's retained history cannot certify absence (its
+                    # page is truncated), and the certified open-orders
+                    # snapshot below must NOT contain it. The fee/funding/
+                    # position folds below are the real proof that no fill
+                    # went unbooked; if one did, the fold refuses. Without
+                    # this, a single lost send poisoned recovery forever and
+                    # the account could never be returned to a flat closed
+                    # state (2026-11-04 g000000000194).
+                    declared[cid] = dict(market=view.market.market_key,
+                        evidence=row.get('state'), proof_state=proof.state)
+                    declared_absence = True
+                    log.warning('BULK_SCOPED_ABSENCE_DECLARED cid=%s proof=%s evidence=%s',
+                        cid, proof.state, row.get('state'))
                 else:
+                    log.warning('BULK_SCOPED_PROOF_SHAPE refusal=unproven cid=%s state=%s terminal=%s '
+                        'known=%s parked=%s stop=%s', cid, proof.state, proof.terminal_state,
+                        proof.cumulative_known, parked, row['action']['type'] == 'stop')
                     raise AdapterError('BULK_SCOPED_BASIS_PROOF_INCOMPLETE')
                 observed[cid] = dict(state=proof.state, terminal_state=proof.terminal_state,
                     cumulative_qty=proof.cumulative_qty, cumulative_known=proof.cumulative_known,
-                    parked=parked, market=view.market.market_key)
+                    parked=parked, market=view.market.market_key,
+                    declared_absence=declared_absence)
         # Positions per market: native vs the account's durable ledger, both ways.
         ledger = {}
         def positions(c):
@@ -289,6 +328,9 @@ async def capture_basis(parent, *, max_originals=256):
             if item['state'] == 'FOUND_OPEN' and not item['parked']:
                 if unproven[cid][0] not in seen_oids:
                     raise AdapterError('BULK_SCOPED_BASIS_ACTIVE_ORDER_MISSING')
+            if item.get('declared_absence') and unproven[cid][0] in seen_oids:
+                # A declared-absent original cannot be resting natively.
+                raise AdapterError('BULK_SCOPED_BASIS_DECLARED_OPEN_CONFLICT')
         # Booked economics: grid-owned executions and staged positive payments.
         # The folds below are self-contained: baseline counter plus booked
         # ledger amounts must reproduce the native counter bit-exactly, so a
@@ -351,6 +393,9 @@ async def capture_basis(parent, *, max_originals=256):
             proven_originals=len(cached) + len(observed),
             open_originals=sum(1 for item in observed.values() if item['state'] == 'FOUND_OPEN'),
             parked_originals=sum(1 for item in observed.values() if item['parked']),
+            declared_absences=[dict(client_id=cid, market=info['market'],
+                evidence=info['evidence'], proof_state=info['proof_state'])
+                for cid, info in sorted(declared.items())],
             markets=markets, pending=False,
             economics=dict(
                 fees=dict(booked_count=len(booked_fees), fold=repr(fees_fold), target=repr(fees_target),
@@ -375,7 +420,24 @@ async def capture_basis(parent, *, max_originals=256):
                 scope=parent._account.account_id, event_type='bulk_scoped_recovery_basis_captured',
                 payload={'fingerprint': value['fingerprint'], 'originals': value['originals'],
                          'open_originals': value['open_originals'], 'markets': len(value['markets']),
+                         'declared_absences': len(declared),
                          'global_coverage_advanced': False})
+            for cid, info in sorted(declared.items()):
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '
+                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                    ('bulk-declared-absence:' + parent.journal.scope + ':' + cid,
+                     json.dumps(dict(schema='bulk-declared-absence-v1',
+                        account=parent._account.account_id, client_id=cid,
+                        market=info['market'], evidence=info['evidence'],
+                        proof_state=info['proof_state'],
+                        declared_through_ms=value['observed_through_ms'],
+                        stream_generation=value['stream_generation'],
+                        basis_fingerprint=value['fingerprint']), sort_keys=True)))
+                store.register_event(c, event_key='bulk-declared-absence:' + value['fingerprint'] + ':' + cid,
+                    scope=parent._account.account_id, event_type='bulk_declared_absence',
+                    payload={'client_id': cid, 'market': info['market'],
+                             'evidence': info['evidence'], 'proof_state': info['proof_state'],
+                             'global_history_complete': False})
             return value
         return await parent.journal.store.write(commit)
 

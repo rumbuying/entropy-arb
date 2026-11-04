@@ -127,6 +127,7 @@ class RecoveryBarrier:
         report: Dict[str, Any] = {"gaps": [], "backfilled": 0,
                                   "unknown_resolved": 0, "drift": [],
                                   "ok": False}
+        declared: Dict[str, dict] = {}
         if position_only:
             row=self.store.read(lambda c:c.execute('SELECT desired_mode FROM grids WHERE grid_id=?',
                 (self.actor.grid_id,)).fetchone())
@@ -156,6 +157,10 @@ class RecoveryBarrier:
             report["gaps"] = [g for g in report["gaps"]
                               if g.get("code") != "OWNED_FILL_RECONCILIATION_UNAVAILABLE"]
             report["scoped_basis"] = scoped.get("fingerprint")
+            declared = {row["client_id"]: row
+                        for row in (scoped.get("declared_absences") or [])}
+            if declared:
+                report["declared_absences"] = sorted(declared)
         for ev in page.records:
             if ev.account != self.actor.account.account_id or ev.market != self.actor.market_key:
                 continue
@@ -178,6 +183,17 @@ class RecoveryBarrier:
         for it in unknowns:
             if it["state"] == "DISPATCHING":
                 await self.journal.transition(it["intent_id"], "UNKNOWN")
+            if it.get("client_id") in declared:
+                # Declared absence: an unacknowledged send that is not resting
+                # natively, proven against the scoped counter folds (no
+                # unbooked fee/funding) while the venue's retained history is
+                # truncated. Retire it explicitly instead of looping forever
+                # on an uncertifiable absence. UNKNOWN only transitions back
+                # to PLANNED, so expire through that step.
+                await self.journal.transition(it["intent_id"], "PLANNED")
+                await self.journal.transition(it["intent_id"], "EXPIRED_EPOCH")
+                report["unknown_resolved"] += 1
+                continue
             resolved = await self.executor.resolve_unknown(it["intent_id"], client_id=it["client_id"])
             if resolved == "STILL_UNKNOWN":
                 report["gaps"].append({"code": "ORDER_STILL_UNKNOWN", "intent_id": it["intent_id"]})
