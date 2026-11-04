@@ -353,3 +353,21 @@ def test_cancelled_stop_update_is_reconciled_instead_of_reconnecting_the_feed():
             trigger=dict(isAbove=False,px='2200',lim=None),originalSize='0',size='0',
             filledSize='0',price='0',maker=True,reduceOnly=True,iso=False,tif='gtc',
             status='resting',timestamp=NS)])))
+
+
+def test_cancelled_ordinary_order_zero_size_update_is_consumed_not_refused():
+    """A cancelled limit order arrives as a zero-size terminal UPDATE — the
+    same captured venue shape as the zero-size stop. reader.order refused it
+    (BULK_ORDER_QUANTITY_CONFLICT), which closed the socket and forced a
+    whole-account reconnect on every grid-order cancel. The snapshot is the
+    reconciliation authority for ordinary order state: the frame is
+    consumed, and an executed zero-size original stays refused."""
+    d=decoder()
+    event=d.ingest(frame(ws_order(status='cancelled',origSz='0',sz='0',fillSz='0')))
+    assert event is None
+    # A second identical frame is equally inert.
+    assert d.ingest(frame(ws_order(status='cancelled',origSz='0',sz='0',fillSz='0')))is None
+    # An executed zero-size original is a contradictory shape: still refused.
+    with pytest.raises(AdapterError,match='QUANTITY_CONFLICT'):
+        d2=decoder()
+        d2.ingest(frame(ws_order(status='filled',origSz='0',sz='0',fillSz='0.04')))

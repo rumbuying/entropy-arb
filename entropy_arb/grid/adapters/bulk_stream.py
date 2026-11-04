@@ -223,6 +223,21 @@ class BulkStreamDecoder:
             return BulkStreamEvent('protection_requires_reconciliation',self.generation,reader.symbol,
                 native_status=status,data=observed|{'source_ts':ns_iso(timestamp)})
         original=native_decimal(row['origSz']);filled=native_decimal(row['fillSz']).copy_abs()
+        if not original and not filled and status in TERMINAL:
+            # A cancelled ordinary order arrives as a zero-size terminal
+            # UPDATE — the same captured venue shape as the zero-size stop
+            # (2026-11-04). It carries no economics, but refusing it raised
+            # BULK_ORDER_QUANTITY_CONFLICT, closed the socket and forced a
+            # whole-account reconnect on every grid-order cancel. The
+            # periodic snapshot is the reconciliation authority for ordinary
+            # order state: consume the frame and move on. An executed
+            # zero-size original is a contradictory shape and stays refused
+            # below; a zero-size row inside a SNAPSHOT is still malformed
+            # state (open protection/order without size).
+            log.info('BULK_STREAM_ZERO_SIZE_ORDER_UPDATE oid_seen=true status_class=%s '
+                     'row_keys=%s', 'terminal' if status in TERMINAL else 'other',
+                     sorted(str(k) for k in row))
+            return None
         native=dict(symbol=reader.symbol,orderId=oid,price=row['px'],originalSize=text(original.copy_abs()) if status in TERMINAL else row['origSz'],
             size=row['sz'],filledSize=text(filled),executedSize=text(filled),side='buy' if original>0 else 'sell',
             reduceOnly=flag(row['r']),orderType=row['ot'],trigger=row.get('trigger'),status=status,iso=False,
