@@ -243,6 +243,9 @@ def test_final_native_send_proof_expires_on_monotonic_clock_even_if_wall_clock_s
 
 @pytest.mark.parametrize('entrypoint',['startup','watch'])
 def test_missing_account_adapter_cannot_hide_persisted_fixed_protection_at_startup(tmp_path,monkeypatch,entrypoint):
+    """A missing adapter must not hide persisted protection. At startup the
+    exit persists immediately (close_interrupted); through the watch it is
+    bounded blindness — tolerated inside the window, exited once exhausted."""
     async def run():
         parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,*_=parts
         rt.close()
@@ -252,8 +255,13 @@ def test_missing_account_adapter_cannot_hide_persisted_fixed_protection_at_start
             assert rt.protection_lease.check(gid,now_ms=clock[0])=='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED'
             if entrypoint=='startup':await asyncio.wait_for(rt.protection_lease.close_interrupted(),.2)
             else:
-                watcher=ProtectionWatchScheduler(rt)
-                try:await asyncio.wait_for(watcher.tick(),.2)
+                now=[1000.0]
+                watcher=ProtectionWatchScheduler(rt,clock=lambda:now[0])
+                try:
+                    await asyncio.wait_for(watcher.tick(),.2)
+                    assert rt.lifecycle._grid(gid)['status'] in ('STARTING','RUNNING')
+                    now[0]+=PROTECTION_BLIND_TOLERANCE_MS/1000+1
+                    await asyncio.wait_for(watcher.tick(),.2)
                 finally:await watcher.close()
             assert rt.lifecycle._grid(gid)['status']=='STOPPING'
         finally:rt.close()
@@ -314,6 +322,27 @@ def test_blind_proof_expiry_is_pending_until_the_read_outage_window_is_exhausted
             assert rt.store.read(lambda c:c.execute("SELECT 1 FROM runtime_state WHERE key=?",
                 ('protection-exit:'+gid,)).fetchone()) is None
             # Sustained blindness past the tolerance window runs the contract.
+            clock[0]+=PROTECTION_BLIND_TOLERANCE_MS+1;mono[0]+=PROTECTION_BLIND_TOLERANCE_MS+1
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+        finally:
+            await watcher.close();rt.close()
+    asyncio.run(run())
+
+
+def test_repeated_failed_verifies_never_refresh_the_blind_onset(tmp_path,monkeypatch):
+    """The blind onset is written once and cleared only by a successful
+    verify. Refreshing it on every failed verify would keep now-first fresh
+    forever, so sustained blindness (verify failing every ~2s for minutes)
+    never exhausted the tolerance window and never exited."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        watcher=ProtectionWatchScheduler(rt,clock=lambda:mono[0]/1000)
+        try:
+            first=await backend._note_blind(gid)
+            for _ in range(3):
+                clock[0]+=60_000;mono[0]+=60_000
+                assert await backend._note_blind(gid)==first
             clock[0]+=PROTECTION_BLIND_TOLERANCE_MS+1;mono[0]+=PROTECTION_BLIND_TOLERANCE_MS+1
             await watcher.tick()
             assert rt.lifecycle._grid(gid)['status']=='STOPPING'

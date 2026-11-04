@@ -19,6 +19,8 @@ log = logging.getLogger('grid.protection_watch')
 # exchange read outage expired the proof and closed a RUNNING grid ~90s in).
 PROTECTION_BLIND_KEY = 'protection-blind:'
 PROTECTION_BLIND_TOLERANCE_MS = 180_000
+# Watch-level blindness (the supervisor itself failed to evaluate a grid).
+PROTECTION_WATCH_BLIND_KEY = 'protection-watch-blind:'
 
 
 class ProtectionLease:
@@ -275,13 +277,77 @@ class ProtectionWatchScheduler:
         except Exception:
             # An unreadable ledger is not proof of an empty position.
             required=True
-        if required:
+        if not required:
+            return
+        try:
+            lease=self.rt.store.read(lambda c:c.execute('SELECT 1 FROM runtime_state WHERE key=?',
+                ('native-protection-lease:'+gid,)).fetchone())
+        except Exception:
+            lease=None
+        if not lease:
+            # Without a proven native lease there is no stop known to rest on
+            # the venue: engine blindness IS protection absence. Exit
+            # immediately, unchanged.
             try:
                 await self.rt.protection.request_exit(gid,expected_epoch=row['epoch'],
                     reason='PROTECTION_SERVICE_OBSERVATION_UNAVAILABLE')
             except Exception:
                 # Other grids still need their own deadlines checked.
                 log.exception('could not persist protection exit for %s',gid)
+            return
+        now_ms=int(self.clock()*1000)
+        first=await self._note_watch_blind(gid,now_ms)
+        if now_ms-first<PROTECTION_BLIND_TOLERANCE_MS:
+            # A supervisor fault (failed eligibility read, venue temporarily
+            # missing, store hiccup) is blindness, not confirmed danger: the
+            # native stop keeps resting on the venue and the send gate still
+            # refuses new risk while blind. One faulting tick used to
+            # request_exit a fully protected grid immediately. Retry on the
+            # next tick; sustained failure past the window still runs the
+            # exit contract below.
+            log.warning('PROTECTION_WATCH_BLIND_TOLERATED grid=%s blind_ms=%s',gid,now_ms-first)
+            return
+        try:
+            await self.rt.protection.request_exit(gid,expected_epoch=row['epoch'],
+                reason='PROTECTION_SERVICE_OBSERVATION_UNAVAILABLE')
+        except Exception:
+            # Other grids still need their own deadlines checked.
+            log.exception('could not persist protection exit for %s',gid)
+
+    async def _note_watch_blind(self,gid,now_ms):
+        """Remember when continuous supervisor blindness began (watch clock).
+
+        Pure durable write. The onset is written once and only cleared by a
+        healthy tick — repeated faults never refresh it, so sustained
+        blindness always exhausts the tolerance window and runs the exit
+        contract. A store that is too broken to record the marker cannot
+        record an exit either; blindness then simply restarts once the
+        store recovers.
+        """
+        key=PROTECTION_WATCH_BLIND_KEY+gid
+        def write(c):
+            row=c.execute('SELECT value FROM runtime_state WHERE key=?',(key,)).fetchone()
+            first=None
+            if row is not None:
+                try:first=int(json.loads(row[0]))
+                except (TypeError,ValueError):first=None
+            if first is None or now_ms<first:
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '
+                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                    (key,json.dumps(now_ms)))
+                return now_ms
+            return first
+        try:
+            return await self.rt.store.write(write)
+        except Exception:
+            return now_ms
+
+    async def _clear_watch_blind(self,gid):
+        try:
+            await self.rt.store.write(lambda c:c.execute('DELETE FROM runtime_state WHERE key=?',
+                (PROTECTION_WATCH_BLIND_KEY+gid,)))
+        except Exception:
+            pass  # A failed cleanup must not fail the tick that just succeeded.
 
     async def tick(self):
         if self.closed:return
@@ -308,6 +374,7 @@ class ProtectionWatchScheduler:
         for row in sorted(eligible.values(),key=lambda r:self.next_attempt.get(r['grid_id'],0)):
             try:
                 await self._tick_grid(row)
+                await self._clear_watch_blind(row['grid_id'])
             except Exception:
                 await self._isolate_failure(row)
 
