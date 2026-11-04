@@ -332,6 +332,44 @@ class RecoveryBarrier:
                 (f"coverage:{self.actor.grid_id}", page.coverage_through or cursor or "")))
         return report
 
+    def _native_identity_evidence(self):
+        """Proven terminal native identity per client id, from the wire journal.
+
+        The accepted-order binding normally persists the exchange order id,
+        but the stream/pending-confirmation paths can record a terminal proof
+        without it. Recovery must still be able to book that original's fill:
+        without this evidence the intent is unbookable, the inventory keeps a
+        phantom lot and every scoped-basis capture refuses a position
+        mismatch forever (2026-11-04 r17c deadlock).
+        """
+        parent = getattr(self.venue, 'account_parent', None)
+        scope = getattr(getattr(parent, 'journal', None), 'scope', None)
+        if not scope:
+            return {}
+
+        def query(c):
+            found = {}
+            for (text,) in c.execute('SELECT value FROM runtime_state WHERE key LIKE ?',
+                                     ('bulk-intent:' + scope + ':%',)).fetchall():
+                try:
+                    row = json.loads(text)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(row, dict) or row.get('account') != self.actor.account.account_id:
+                    continue
+                resolution = row.get('native_evidence') or row.get('terminal_resolution') or {}
+                if not isinstance(resolution, dict) or resolution.get('state') != 'FOUND_TERMINAL':
+                    continue
+                client_id = row.get('client_id')
+                if isinstance(client_id, str) and client_id:
+                    found[client_id] = resolution
+            return found
+
+        try:
+            return self.store.read(query)
+        except Exception:
+            return {}
+
     async def _scoped_recovery_basis(self, report):
         """Account-owned-scope recovery proof for bulk (never global history).
 
@@ -369,10 +407,28 @@ class RecoveryBarrier:
             bound = self.store.read(lambda c: {r['intent_id']: dict(r) for r in c.execute(
                 'SELECT e.* FROM exchange_orders e JOIN order_intents i ON i.intent_id=e.intent_id '
                 'WHERE i.grid_id=? AND e.account=?', (self.actor.grid_id, self.actor.account.account_id))})
+            # A proven terminal native identity can survive only in the wire
+            # journal evidence: the stream/pending-confirmation path records
+            # the proof without persisting the acceptance binding. Recover
+            # those OIDs so a missed fill stays bookable even after its
+            # history window is gone; otherwise the ledger keeps a phantom
+            # inventory lot and every scoped-basis capture refuses
+            # BULK_SCOPED_BASIS_POSITION_MISMATCH (observed 2026-11-04: a
+            # protective flatten FILLED with an unbound exchange_order_id).
+            evidence = self._native_identity_evidence()
+            def native_id(it):
+                row = bound.get(it['intent_id'])
+                if row is not None and row['exchange_order_id']:
+                    return row['exchange_order_id']
+                resolution = evidence.get(it.get('client_id') or '')
+                if not isinstance(resolution, dict) or resolution.get('state') != 'FOUND_TERMINAL':
+                    return None
+                oid = resolution.get('native_order_id')
+                return oid if isinstance(oid, str) and oid else None
             candidates = sorted((it for it in intents if not is_native_protection(it)
                 and it.get('client_id') and it['intent_id'] in bound
                 and bound[it['intent_id']]['client_id'] == it['client_id']
-                and bound[it['intent_id']]['exchange_order_id']), key=lambda it: it['intent_id'])
+                and native_id(it)), key=lambda it: it['intent_id'])
             if not candidates:
                 return
             expected = {}
@@ -381,8 +437,19 @@ class RecoveryBarrier:
                     self.actor.market_key, it['side'], it['qty_base'], it['price'], it['policy'],
                     bool(it['reduce_only']), it['epoch'], trigger_price=it.get('trigger_price'),
                     whole_position=bool(it.get('whole_position')))
-                expected[it['client_id']] = (bound[it['intent_id']]['exchange_order_id'],
+                expected[it['client_id']] = (native_id(it),
                                              models.sha256_hex(req.to_dict()))
+            # Persist the recovered identity: later fills attribute by native
+            # order id, and the COALESCE bind never rewrites a known OID.
+            for it in candidates:
+                if bound[it['intent_id']]['exchange_order_id']:
+                    continue
+                oid = expected[it['client_id']][0]
+                if not oid:
+                    continue
+                await self.journal.bind_exchange_order(account=self.actor.account.account_id,
+                    client_id=it['client_id'], intent_id=it['intent_id'], exchange_order_id=oid)
+                bound.setdefault(it['intent_id'], {})['exchange_order_id'] = oid
             saved = self.store.read(lambda c: c.execute('SELECT value FROM runtime_state WHERE key=?', (key,)).fetchone())
             saved = json.loads(saved[0]) if saved else {'orders': {}, 'records': {}}
             # Terminal native quantities are immutable. Reuse only certificates
@@ -514,7 +581,7 @@ class RecoveryBarrier:
             if not await self.store.write(checked):
                 raise ValueError('recovery mode changed before inspection checkpoint')
             report['owned_fill_proof'] = proof_id
-        except Exception:
+        except Exception as error:
             # Keep private transport bodies and arbitrary adapter messages out
             # of recovery reports. Global recovery is still unconfirmed.
             report['gaps'].append({'code': 'OWNED_FILL_RECONCILIATION_UNAVAILABLE'})

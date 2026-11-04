@@ -120,6 +120,24 @@ class BulkHistoryWindow:
     reason: str
 
 
+# Certification-failure reasons ordered strictest-first. The ledger layer may
+# provisionally accept only COVERAGE_UNCERTIFIED/FLOOR_UNKNOWN (the venue
+# declined to certify but returned a bounded, fully paged window). Declared
+# gaps — partial coverage or a floor above the requested start — stay fatal.
+_CERTIFICATION_PRECEDENCE = (
+    'BULK_HISTORY_HTTP_FAILED', 'BULK_HISTORY_PARTIAL_COVERAGE', 'BULK_HISTORY_FLOOR_GAP',
+    'BULK_HISTORY_COVERAGE_UNCERTIFIED', 'BULK_HISTORY_FLOOR_UNKNOWN')
+_UNCERTIFIED_ACCEPTABLE = frozenset(('BULK_HISTORY_COVERAGE_UNCERTIFIED',
+                                     'BULK_HISTORY_FLOOR_UNKNOWN'))
+
+
+def _stricter_reason(current, candidate):
+    order = {name: index for index, name in enumerate(_CERTIFICATION_PRECEDENCE)}
+    if not current:
+        return candidate
+    return min(current, candidate, key=lambda name: order.get(name, len(order)))
+
+
 class BulkEvidenceReader:
     def __init__(self, transport, *, account, owner, market_ref, client_bindings=None):
         base58(owner)
@@ -359,6 +377,7 @@ class BulkEvidenceReader:
             uint(end_slot)
             if end_slot < start_slot: raise AdapterError('BULK_HISTORY_WINDOW_INVALID')
         anchor, cursor, seen_cursors, rows, last, safe = None, None, set(), {}, None, True
+        uncertified_reason = ''
         parser = {'fills': self.fill, 'fundingHistory': self.funding,
                   'orderHistory': lambda row: self.order(row, terminal=True)}[kind]
         for page_num in range(1, max_pages+1):
@@ -378,7 +397,25 @@ class BulkEvidenceReader:
             elif anchor != (*bounds, floor): raise AdapterError('BULK_HISTORY_SNAPSHOT_CHANGED')
             if p.get('coverage') not in ('complete', 'partial', 'unknown'):
                 raise AdapterError('BULK_HISTORY_COVERAGE_INVALID')
-            safe = safe and reply.status == 200 and p['coverage'] == 'complete' and floor is not None and floor <= start_slot
+            # Precision matters here: a venue that DECLINES to certify
+            # (coverage "unknown", no published floor) is different from one
+            # that DECLARES a real gap (partial coverage, or a floor above the
+            # requested start). Only the former is eligible for a provisional
+            # acceptance by the ledger layer; the latter must keep refusing.
+            page_reason = ''
+            if reply.status != 200:
+                page_reason = 'BULK_HISTORY_HTTP_FAILED'
+            elif p['coverage'] == 'partial':
+                page_reason = 'BULK_HISTORY_PARTIAL_COVERAGE'
+            elif p['coverage'] == 'unknown':
+                page_reason = 'BULK_HISTORY_COVERAGE_UNCERTIFIED'
+            elif floor is None:
+                page_reason = 'BULK_HISTORY_FLOOR_UNKNOWN'
+            elif floor > start_slot:
+                page_reason = 'BULK_HISTORY_FLOOR_GAP'
+            safe = safe and not page_reason
+            if page_reason:
+                uncertified_reason = _stricter_reason(uncertified_reason, page_reason)
             more = flag(p['hasMore']); following = p['nextCursor']
             if (more and (not isinstance(following, str) or not 1 <= len(following) <= 8192)
                     or not more and following is not None):
@@ -402,7 +439,7 @@ class BulkEvidenceReader:
                 rows[identity] = (record, comparable)
             if not more:
                 return BulkHistoryWindow(tuple(v[0] for v in rows.values()), *anchor[:3], anchor[3], safe,
-                    page_num, '' if safe else 'BULK_HISTORY_NOT_CERTIFIED')
+                    page_num, '' if safe else uncertified_reason)
             if following in seen_cursors: raise AdapterError('BULK_HISTORY_CURSOR_STALLED')
             seen_cursors.add(following); cursor = following
         return BulkHistoryWindow(tuple(v[0] for v in rows.values()), *anchor[:3], anchor[3], False,

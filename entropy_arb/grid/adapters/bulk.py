@@ -558,16 +558,23 @@ class BulkGridVenue(GridVenue):
     async def funding_history(self,cursor=None,through=None):
         from .base import FundingPage,FundingPositiveEvidence
         from .bulk_history_checkpoint import MAX_PAGES
-        from .bulk_read import SOURCE
+        from .bulk_read import SOURCE,_UNCERTIFIED_ACCEPTABLE
         if cursor is None:raise AdapterError('BULK_HISTORY_START_REQUIRED')
         reader=self.reader();window=await self.checkpointed_history('fundingHistory',cursor=cursor,through=through)
         pending=window.reason=='BULK_HISTORY_PAGE_BUDGET_EXHAUSTED' and window.pages<MAX_PAGES
         source=SOURCE+':'+reader.scope
         positive=FundingPositiveEvidence(self._account.account_id,self.market.market_key,
             reader.cursor(window.start_slot),reader.cursor(window.end_slot),source,window.records) if not window.complete and window.records else None
+        # The venue declined to certify (no coverage claim, no published
+        # floor) yet returned a bounded, fully paged window: expose the
+        # OBSERVED end so the synchronizer can accept it provisionally. A
+        # declared floor gap (BULK_HISTORY_FLOOR_GAP) never lands here.
+        uncertified=reader.cursor(window.end_slot) if (not window.complete and window.records
+            and not pending and window.reason in _UNCERTIFIED_ACCEPTABLE) else None
         return FundingPage(window.records,reader.cursor(window.start_slot),
             reader.cursor(window.end_slot) if window.complete else None,complete=window.complete,
-            truncated=not window.complete,source_revision=source,scan_pending=pending,positive_evidence=positive)
+            truncated=not window.complete,source_revision=source,scan_pending=pending,positive_evidence=positive,
+            uncertified_through=uncertified,uncertified_reason=window.reason if uncertified else '')
 
     async def checkpointed_history(self,kind,*,cursor,through=None,batch_pages=10):
         """Experimental scoped scan; callers must not advance a ledger on partial results."""

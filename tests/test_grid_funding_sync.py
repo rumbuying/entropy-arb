@@ -198,3 +198,53 @@ def test_funding_keys_and_ingestion_are_scoped_to_each_economic_account(tmp_path
         finally:
             rt.close()
     asyncio.run(run())
+
+
+def test_uncertified_window_is_accepted_provisionally_and_declares_its_gap(tmp_path):
+    """A venue that DECLINES to certify (coverage unknown / no floor) must not
+    deadlock the ledger: the bounded window is accepted with an explicit
+    server-unknown marker and a durable funding-gap declaration. A declared
+    gap (truncated page without the acceptable reason) still refuses."""
+    from entropy_arb.grid.adapters.base import FundingRecord
+
+    async def run():
+        rt, venue = make_runtime(tmp_path)
+        now = [0]
+        rt.funding.clock = lambda: now[0]
+        try:
+            gid, _, _ = await create_ready(rt, venue)
+            venue._account = replace(venue._account, fixture=False)  # offline frequency only
+            original = venue.funding_history
+
+            async def uncertified(*args, **kwargs):
+                return FundingPage(
+                    (FundingRecord('fixture:uncertified:1', '0.5', 'USDC',
+                                   models.utc_now_iso(), '0'),),
+                    '0', None, complete=False, truncated=True,
+                    source_revision='fixture:test', scan_pending=False,
+                    uncertified_through='1',
+                    uncertified_reason='BULK_HISTORY_COVERAGE_UNCERTIFIED')
+
+            venue.funding_history = uncertified
+            out = await rt.funding.sync(account=venue._account.account_id, market=venue.market.market_key)
+            assert out['ok'] and out['certification'] == 'server-unknown' and out['cursor'] == '1'
+            status = rt.funding.status(venue._account.account_id, venue.market.market_key)
+            assert status['ok'] is True and status['certification'] == 'server-unknown'
+            assert status['cursor'] == '1'
+            gap = rt.store.read(lambda c: c.execute(
+                'SELECT value FROM runtime_state WHERE key LIKE ?', ('funding-gap:%',)).fetchone())
+            assert gap is not None and 'server-unknown' in gap[0]
+
+            async def declared_gap(*args, **kwargs):
+                return FundingPage((), '0', None, complete=False, truncated=True,
+                                   source_revision='fixture:test')
+
+            venue.funding_history = declared_gap
+            rt.funding = FundingSynchronizer(rt.store, rt.venues, clock=lambda: now[0])
+            with pytest.raises(AdapterError, match='FUNDING_HISTORY_INCOMPLETE'):
+                await rt.funding.sync(account=venue._account.account_id,
+                                      market=venue.market.market_key, force=True)
+            venue.funding_history = original
+        finally:
+            rt.close()
+    asyncio.run(run())

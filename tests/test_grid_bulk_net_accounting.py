@@ -30,7 +30,7 @@ def payment_rows(rt,gid):return rt.store.read(lambda c:[dict(r) for r in c.execu
 async def add_payments(parts,rows):
     rt,gid,cfg,parent,view,n,*_=parts;previous=n.account
     async def account(kind,owner,**params):
-        if kind=='fundingHistory':return history(copy.deepcopy(rows),coverage='unknown',minAvailableSlot=None)
+        if kind=='fundingHistory':return history(copy.deepcopy(rows),coverage='partial',minAvailableSlot=None)
         return await previous(kind,owner,**params)
     n.account=account
     with pytest.raises(AdapterError,match='FUNDING_HISTORY_INCOMPLETE'):await rt.sync_funding(gid)

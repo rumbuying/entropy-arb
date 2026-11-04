@@ -180,12 +180,22 @@ class FundingPage:
     source_revision: str = ""
     scan_pending: bool = False
     positive_evidence: Optional[FundingPositiveEvidence] = None
+    # The venue stopped certifying its retained history (coverage "unknown" /
+    # no published floor) but still returned a bounded, fully paged window.
+    # This is the OBSERVED end of that window; the funding synchronizer may
+    # accept it provisionally (explicit server-unknown marker, never a
+    # certified coverage claim). A DECLARED floor above the requested start
+    # is a real gap and must never populate this field.
+    uncertified_through: Optional[str] = None
+    uncertified_reason: str = ""
 
     def __post_init__(self):
         if self.complete and (self.truncated or self.coverage_start is None or self.coverage_through is None or not self.source_revision):
             raise ValueError("complete funding page needs a covered boundary and source revision")
         if not self.complete and self.coverage_through is not None:
             raise ValueError("incomplete funding page must not advance coverage")
+        if self.uncertified_through is not None and self.complete:
+            raise ValueError("uncertified window cannot also be a complete page")
 
 
 @dataclass(frozen=True)

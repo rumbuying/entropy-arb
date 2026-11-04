@@ -204,3 +204,38 @@ def test_complete_history_after_partial_booking_replays_idempotently_and_recover
         finally:
             rt.close()
     asyncio.run(run())
+
+
+def test_filled_intent_with_unbound_native_identity_backfills_its_fill(tmp_path, monkeypatch):
+    """A terminal native identity that only survives in the wire journal
+    evidence (no exchange_orders binding) must still be bookable: otherwise a
+    missed flatten fill leaves a phantom inventory lot and every scoped-basis
+    capture refuses BULK_SCOPED_BASIS_POSITION_MISMATCH forever."""
+    import json
+
+    async def run():
+        parts, actor, stop_id, requests = await seeded(tmp_path, monkeypatch)
+        rt, gid, cfg, parent, view, native, protocol, sender, _ = parts
+        try:
+            cid = requests[0].client_id
+            oid = parent.journal.get(cid)['order_id']
+            await rt.store.write(lambda c: c.execute(
+                'UPDATE exchange_orders SET exchange_order_id=NULL WHERE client_id=?', (cid,)))
+            # The wire-journal row keeps its full original request; only the
+            # terminal native proof arrives without an exchange_orders binding.
+            key = 'bulk-intent:' + parent.journal.scope + ':' + cid
+            value = rt.store.read(lambda c: json.loads(
+                c.execute('SELECT value FROM runtime_state WHERE key=?', (key,)).fetchone()[0]))
+            value['native_evidence'] = dict(state='FOUND_TERMINAL', terminal_state='FILLED',
+                native_order_id=oid, cumulative_qty='0.1', cumulative_known=True)
+            await rt.store.write(lambda c: c.execute(
+                'INSERT INTO runtime_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                (key, json.dumps(value, sort_keys=True))))
+            report = await rt.recover(gid, restore=True)
+            assert report['backfilled'] == 1, {k: report.get(k) for k in ('ok','gaps','drift','scoped_basis_refusal','owned_fill_proof')}
+            assert rt.store.read(actor.inv.net_position) == Decimal('0.1')
+            assert rt.store.read(lambda c: c.execute(
+                'SELECT exchange_order_id FROM exchange_orders WHERE client_id=?', (cid,)).fetchone()[0]) == oid
+        finally:
+            rt.close()
+    asyncio.run(run())

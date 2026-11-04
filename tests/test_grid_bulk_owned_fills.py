@@ -64,7 +64,7 @@ def test_positive_original_quantities_match_unknown_history_without_certifying_i
     assert proof.quantity_matched and len(proof.records) == 2
     assert proof.signed_qty == '0.1' and proof.fee_cost == '0.01' and proof.trade_cashflow == '-230.012'
     assert not proof.account_history_certified and not proof.native_window['complete']
-    assert proof.native_window['reason'] == 'BULK_HISTORY_NOT_CERTIFIED'
+    assert proof.native_window['reason'] == 'BULK_HISTORY_COVERAGE_UNCERTIFIED'
     assert native.fills == before and all(c[0] in ('fills', 'orderHistory', 'openOrders') for c in native.calls)
     # Local receive timestamps do not change a replay's proof identity.
     assert run(native).proof_id == proof.proof_id

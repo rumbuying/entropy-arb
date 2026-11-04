@@ -221,14 +221,24 @@ class FundingSynchronizer:
                                              (f"funding-start:{scope}",)).fetchone())
                     cursor = anchor[0] if anchor else None
                 page = await venue.funding_history(cursor=cursor)
+                # Provisional acceptance (operator availability decision,
+                # 2026-11-03/04): the venue stopped certifying retained
+                # history (coverage "unknown" / no published floor) while
+                # still returning a bounded, fully paged window. A DECLARED
+                # gap (partial coverage / floor above start) is never here;
+                # those keep refusing. The acceptance is explicit and
+                # durable: never reported as certified coverage.
+                provisional = getattr(page, 'uncertified_through', None) is not None
                 if not page.complete or page.truncated:
                     code="FUNDING_HISTORY_SCAN_PENDING" if getattr(page,'scan_pending',False) else "FUNDING_HISTORY_INCOMPLETE"
                     if getattr(page,'positive_evidence',None) is not None:
                         saved=await self._ingest_positive(venue,page,account=account,market=market,
                             cursor=cursor,saved=saved,code=code)
-                    raise AdapterError(code)
+                    if not provisional:
+                        raise AdapterError(code)
                 rank = venue.funding_cursor_rank
-                start, end = rank(page.coverage_start), rank(page.coverage_through)
+                through = page.coverage_through if not provisional else page.uncertified_through
+                start, end = rank(page.coverage_start), rank(through)
                 if start > end or cursor is not None and start > rank(cursor):
                     raise AdapterError("FUNDING_COVERAGE_GAP")
                 if saved.get("cursor") is not None and end < rank(saved["cursor"]):
@@ -244,10 +254,26 @@ class FundingSynchronizer:
                     if p.source_seq is None or not start <= rank(p.source_seq) <= end:
                         raise AdapterError("FUNDING_RECORD_BOUNDARY_INVALID")
                     payments.append((p, amount, ts))
-                checkpoint = {"cursor": page.coverage_through, "coverage_start": page.coverage_start,
+                checkpoint = {"cursor": through, "coverage_start": page.coverage_start,
                               "source_revision": page.source_revision, "checked_ts": models.utc_now_iso(),
                               "ok": True, "code": None}
+                if provisional:
+                    checkpoint.update(certification="server-unknown",
+                        provisional=True,
+                        uncertified_reason=getattr(page, 'uncertified_reason', '') or "BULK_HISTORY_COVERAGE_UNCERTIFIED")
                 def commit(c):
+                    if provisional:
+                        # Declare the explicit, durable gap: the ledger knows
+                        # this window was accepted without server
+                        # certification. Never silent, never a coverage claim.
+                        gap = {"schema": "funding-uncertified-v1", "account": account, "market": market,
+                               "certification": "server-unknown",
+                               "coverage_from": page.coverage_start, "observed_through": through,
+                               "reason": checkpoint["uncertified_reason"],
+                               "accepted_ts": checkpoint["checked_ts"],
+                               "note": "venue declined to certify retained history; bounded window accepted provisionally"}
+                        c.execute("INSERT INTO runtime_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                                  ("funding-gap:" + scope, json.dumps(gap, sort_keys=True)))
                     for p, amount, ts in payments:
                         existing = c.execute("SELECT account,market,amount,asset,ts,source_seq FROM funding_payments WHERE payment_key=?",
                                              (p.payment_key,)).fetchone()
@@ -279,4 +305,7 @@ class FundingSynchronizer:
                 raise
             self.errors.pop(scope, None)
             self.next_query[scope] = self.clock() + (0 if venue._account.fixture else self.interval)
-            return {"ok": True, "skipped": False, "cursor": page.coverage_through, "records": len(payments)}
+            result = {"ok": True, "skipped": False, "cursor": through, "records": len(payments)}
+            if provisional:
+                result.update(certification="server-unknown", provisional=True)
+            return result

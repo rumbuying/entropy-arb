@@ -23,7 +23,7 @@ class Native:
         assert kind=='fundingHistory';self.calls.append((owner,params))
         start=params['start_slot'];end=max([start+10,*[r['slot'] for r in self.rows]])
         return history(copy.deepcopy(self.rows),startSlot=start,endSlot=end,asOfSlot=end,
-            coverage='complete' if self.covered else 'unknown',minAvailableSlot=0 if self.covered else None)
+            coverage='complete' if self.covered else 'partial',minAvailableSlot=0 if self.covered else None)
 
 
 async def setup(tmp_path,*,rows=None,owner=OWNER,market=RULES.market_ref,start=100):
@@ -250,7 +250,7 @@ def test_actual_runtime_recovery_books_known_funding_but_does_not_resume_risk(tm
         parts,actor,_=await ready(tmp_path,monkeypatch)
         rt,gid,cfg,parent,view,n,p,sender,_=parts;original=n.account
         async def account(kind,owner,**params):
-            if kind=='fundingHistory':return history([funding(payment='-0.002')],coverage='unknown',minAvailableSlot=None)
+            if kind=='fundingHistory':return history([funding(payment='-0.002')],coverage='partial',minAvailableSlot=None)
             return await original(kind,owner,**params)
         n.account=account
         try:

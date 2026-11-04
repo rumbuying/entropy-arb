@@ -144,7 +144,7 @@ def test_partial_coverage_still_returns_incomplete_and_no_cursor_proof(tmp_path)
             scan=BulkHistoryCheckpoint(st,account='account-1',owner=OWNER,market=RULES.market_ref,kind='fills',start_slot=100,end_slot=None)
             reader=BulkEvidenceReader(Offline(history([fill()],coverage='unknown')),account='account-1',owner=OWNER,market_ref=RULES.market_ref,client_bindings={OID:'engine-42'})
             window=await reader.history_checkpointed('fills',start_slot=100,checkpoint=scan,batch_pages=1)
-            assert not window.complete and window.reason=='BULK_HISTORY_NOT_CERTIFIED'
+            assert not window.complete and window.reason=='BULK_HISTORY_COVERAGE_UNCERTIFIED'
             assert scan.read() is None
         finally:st.close()
     asyncio.run(run())
