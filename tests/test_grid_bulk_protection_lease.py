@@ -349,3 +349,29 @@ def test_repeated_failed_verifies_never_refresh_the_blind_onset(tmp_path,monkeyp
         finally:
             await watcher.close();rt.close()
     asyncio.run(run())
+
+
+def test_unreadable_proof_is_pending_inside_the_blind_window(tmp_path,monkeypatch):
+    """A store/view fault inside the lease check surfaces as PROOF_REQUIRED,
+    which is not an expiry. Inside an existing blind window it is pending —
+    the stop keeps resting — and past the window the exit contract runs."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        watcher=ProtectionWatchScheduler(rt,clock=lambda:mono[0]/1000)
+        try:
+            # A verify outage wrote the backend blind onset.
+            clock[0]+=1000;mono[0]+=1000
+            await backend._note_blind(gid)
+            original_view=type(backend)._view.__get__(backend)
+            def broken_view(*a,**kw):raise RuntimeError('view read exploded')
+            type(backend)._view.__get__(backend)  # keep the descriptor honest
+            backend.__dict__['_view']=broken_view
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED','NEEDS_ATTENTION')
+            # Sustained unreadability past the window still exits.
+            clock[0]+=PROTECTION_BLIND_TOLERANCE_MS+1;mono[0]+=PROTECTION_BLIND_TOLERANCE_MS+1
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+        finally:
+            await watcher.close();rt.close()
+    asyncio.run(run())

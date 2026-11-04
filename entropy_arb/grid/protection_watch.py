@@ -432,30 +432,41 @@ class ProtectionWatchScheduler:
         self.tasks[gid]=(row['epoch'],asyncio.create_task(self.observe(row),name='grid-native-protection:'+gid))
 
     def _blind_tolerated(self,row,code):
-        """Tolerate a proof expiry that happened during continuous blindness.
+        """Tolerate a proof expiry or an unreadable proof during blindness.
 
         Pure durable read: no venue I/O, so a stalled account read cannot hold
-        the supervisor. The marker is written by the backend after a failed
-        verify and cleared by any successful one, so a confirmed bad stop still
-        exits immediately and sustained blindness still runs the exit contract.
+        the supervisor. The backend marker is written after a failed verify
+        and cleared by any successful one; the watch marker is written by the
+        fault-isolation path. Either one inside the tolerance window makes an
+        expiry (or a proof the lease check could not evaluate) pending, not a
+        confirmed protection loss — a confirmed bad stop still exits
+        immediately and sustained blindness still runs the exit contract.
         """
-        if not (isinstance(code,str) and code.endswith('_PROOF_EXPIRED')):
+        if not (isinstance(code,str) and (code.endswith('_PROOF_EXPIRED')
+                or code=='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')):
             return False
-        key=PROTECTION_BLIND_KEY+row['grid_id']
-        saved=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',(key,)).fetchone())
-        if saved is None:
-            return False
-        try:
-            first=int(json.loads(saved[0]))
-        except (TypeError,ValueError):
-            return False
-        try:
-            now_ms=self.rt.venue_for(row['account_id'],row['market_key']).clock_ms()
-        except Exception:
-            return False
-        if 0<=now_ms-first<=PROTECTION_BLIND_TOLERANCE_MS:
-            log.warning('PROTECTION_BLIND_WAIT code=%s blind_ms=%s',code,now_ms-first)
-            return True
+        saved=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+            (PROTECTION_BLIND_KEY+row['grid_id'],)).fetchone())
+        if saved is not None:
+            try:
+                first=int(json.loads(saved[0]))
+                now_ms=self.rt.venue_for(row['account_id'],row['market_key']).clock_ms()
+            except Exception:
+                now_ms=None
+            if now_ms is not None and 0<=now_ms-first<=PROTECTION_BLIND_TOLERANCE_MS:
+                log.warning('PROTECTION_BLIND_WAIT code=%s blind_ms=%s',code,now_ms-first)
+                return True
+        saved=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+            (PROTECTION_WATCH_BLIND_KEY+row['grid_id'],)).fetchone())
+        if saved is not None:
+            try:
+                first=int(json.loads(saved[0]))
+                now_ms=int(self.clock()*1000)
+            except (TypeError,ValueError):
+                return False
+            if 0<=now_ms-first<=PROTECTION_BLIND_TOLERANCE_MS:
+                log.warning('PROTECTION_BLIND_WAIT code=%s watch_blind_ms=%s',code,now_ms-first)
+                return True
         return False
 
     async def observe(self,row):
