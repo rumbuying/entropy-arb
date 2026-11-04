@@ -332,10 +332,11 @@ class GridLifecycle:
             await self._finish_operation(op_id, "succeeded", result=result)
             return {"operation_id": op_id, "status": "succeeded", **result}
         except Exception as e:
+            log.exception('grid resume failed at step %s', 'rebuild_orders' if activation_epoch is not None else 'reconcile')
             if activation_epoch is not None:
                 await self._set_status(grid_id, "NEEDS_ATTENTION", desired="PAUSED",
                     expected_epoch=activation_epoch, allowed_states=("STARTING", "NEEDS_ATTENTION"))
-            await self._finish_operation(op_id, "failed", error=str(e))
+            await self._finish_operation(op_id, "failed", error=str(e) or type(e).__name__)
             raise
 
     # ---------------------------------------------------------- stop flat

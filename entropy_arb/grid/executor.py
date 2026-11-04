@@ -38,6 +38,14 @@ log = logging.getLogger("grid.executor")
 LOOKUP_MAX_TRIES = 5
 LOOKUP_BACKOFF_SEC = 0.05
 VENUE_TIMEOUT_SEC = 10
+# Lookups are idempotent reads: they queue behind execution's shared, paced
+# read transport (one request per second, plus other venues' bursts), so the
+# send-side 10s bound can expire while the query is still WAITING for its
+# turn — cancelling it surfaces a bare TimeoutError and fails the whole
+# activation/rebuild (2026-11-04: resume died at rebuild_orders with an
+# empty error still under a quiet exchange API). Give reads their own,
+# generous bound; callers keep their own deadlines.
+LOOKUP_TIMEOUT_SEC = 30
 
 
 class ExecutorError(Exception):

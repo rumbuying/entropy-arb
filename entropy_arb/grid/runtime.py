@@ -1151,6 +1151,17 @@ class GridRuntime:
                     # proves history and stream generation before initialization;
                     # treating that initial gap as a new loss interrupts itself.
                     continue
+                lock = self._recovery_locks.get(row['grid_id'])
+                if lock is not None and lock.locked():
+                    # An in-flight recovery owns this grid's epoch and is
+                    # already reconciling the gap. Freezing it here would bump
+                    # the epoch under its own activation, fail the rebuild with
+                    # OPERATION_INTERRUPTED, and leave the gap flag (which only
+                    # a SUCCESSFUL recovery clears) permanently set: the
+                    # scheduler would then re-freeze on every tick forever
+                    # (2026-11-04 r17c livelock: rebuild interrupted 9x, epoch
+                    # climbing by 2 per attempt).
+                    continue
                 c.execute("UPDATE grids SET epoch=epoch+1,status='RECOVERING',updated_ts=? WHERE grid_id=?",
                           (models.utc_now_iso(), row["grid_id"]))
                 # A failed proof must never roll back the account's stream

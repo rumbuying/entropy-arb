@@ -577,3 +577,28 @@ def test_expired_fill_cursor_restarts_original_scan_without_opening_risk(tmp_pat
             assert len(sender.calls)==1
         finally:rt.close()
     asyncio.run(run())
+
+
+def test_stream_loss_does_not_freeze_a_grid_owned_by_an_in_flight_recovery(tmp_path,monkeypatch):
+    """Freezing a grid whose recovery is mid-activation bumps its epoch under
+    its own rebuild, which fails OPERATION_INTERRUPTED; the stale gap flag is
+    only cleared by a SUCCESSFUL recovery, so re-freezing every tick would
+    livelock forever (2026-11-04 r17c)."""
+    async def run():
+        parts,actor,iid=await ready(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,_=parts
+        try:
+            before=rt.lifecycle._grid(gid)
+            lock=rt._recovery_locks.setdefault(gid, asyncio.Lock())
+            await lock.acquire()
+            try:
+                parent._state.gap=True
+                await rt.on_stream_loss(cfg.account_ref)
+            finally:
+                lock.release()
+            assert rt.lifecycle._grid(gid)['epoch']==before['epoch']
+            assert rt.lifecycle._grid(gid)['status']=='RUNNING'
+            # A genuine loss without an owner still freezes as before.
+            await rt.on_stream_loss(cfg.account_ref)
+            assert rt.lifecycle._grid(gid)['epoch']==before['epoch']+1
+        finally:rt.close()
+    asyncio.run(run())
