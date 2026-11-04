@@ -374,14 +374,45 @@ class LiveRiskGuard:
                 if result.get('code') is None:
                     c.execute('DELETE FROM runtime_state WHERE key=?',
                         ('risk-observation-blind:' + grid_id,))
+                profit = result.get('profit_protection')
+                if profit is None or profit.get('code') is None:
+                    c.execute('DELETE FROM runtime_state WHERE key=?',
+                        ('risk-profit-blind:' + grid_id,))
         await self.rt.store.write(commit)
+
+    async def _blind_onset(self, key, now_ms):
+        """First timestamp of a continuous blind window, or its reset.
+
+        The onset is refreshed only after an hour of marker age (a stale
+        leftover from a closed grid) or clock regression; a successful
+        observation deletes the key instead.
+        """
+        def mark(c):
+            row = c.execute('SELECT value FROM runtime_state WHERE key=?', (key,)).fetchone()
+            first = None
+            if row is not None:
+                try: first = int(json.loads(row[0]))
+                except (TypeError, ValueError): first = None
+            if first is None or now_ms < first or now_ms - first > 3_600_000:
+                first = now_ms
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '
+                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                    (key, json.dumps(now_ms)))
+            return first
+        return await self.rt.store.write(mark)
 
     async def refuse(self, intent, code):
         self.permits.pop(intent["intent_id"], None)
         await self.freeze(intent["grid_id"], epoch=intent["epoch"], code=code)
 
     async def freeze(self, grid_id, *, epoch, code):
-        if code in ("RISK_EVENTS_PENDING", "RISK_GRID_CHANGED", "RISK_API_BUDGET_WAIT", "RISK_OBSERVATION_CHANGED_WAIT", 'RISK_FUNDING_CHANGED_WAIT', 'PROTECTION_SERVICE_PENDING'):
+        if code in ("RISK_EVENTS_PENDING", "RISK_GRID_CHANGED", "RISK_API_BUDGET_WAIT",
+                    "RISK_OBSERVATION_CHANGED_WAIT", 'RISK_FUNDING_CHANGED_WAIT',
+                    'RISK_STREAM_UNRECONCILED', 'PROTECTION_SERVICE_PENDING'):
+            # RISK_STREAM_UNRECONCILED: the stream-loss path owns that
+            # transition (stream_recovery freezes the grid into RECOVERING
+            # and recovery clears the gap flag); a risk-side pause here
+            # would only race it and bump the epoch mid-recovery.
             return
         backend=self.rt.protection_lease.backend(grid_id)
         if backend is not None and code.startswith('PROTECTION_'):
@@ -422,22 +453,22 @@ class LiveRiskGuard:
         if code in ('PROFIT_TAKE_REACHED', 'PROFIT_LOSS_REACHED'):
             await self.rt.profit_protection.request_exit(grid_id, epoch=epoch, code=code)
             return
+        if code in ('RISK_PROFIT_QUOTE_STALE', 'RISK_PROFIT_DATA_UNAVAILABLE'):
+            # Profit protection could not evaluate (stale quote behind the
+            # paced reads, an unknown fee, or the 10s not-booked window after
+            # one failed funding sync). The position and its native stop are
+            # untouched and the TP/SL trigger itself needs the same data, so
+            # one failed evaluation is blindness, not confirmed danger. Same
+            # bounded window as collection failures; sustained
+            # unevaluability past the grace still pauses (honest: a TP/SL
+            # rule that can never evaluate cannot be enforced).
+            now_ms = int(self.clock() * 1000)
+            first = await self._blind_onset('risk-profit-blind:' + grid_id, now_ms)
+            if now_ms - first < RISK_BLIND_GRACE_S * 1000:
+                return  # unsent stays unsent; next tick re-evaluates
         if code in ('RISK_OBSERVATION_UNAVAILABLE', 'RISK_COLLECTION_TIMEOUT'):
             now_ms = int(self.clock() * 1000)
-            key = 'risk-observation-blind:' + grid_id
-            def mark(c):
-                row = c.execute('SELECT value FROM runtime_state WHERE key=?', (key,)).fetchone()
-                first = None
-                if row is not None:
-                    try: first = int(json.loads(row[0]))
-                    except (TypeError, ValueError): first = None
-                if first is None or now_ms < first or now_ms - first > 3_600_000:
-                    first = now_ms
-                    c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '
-                              'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                        (key, json.dumps(now_ms)))
-                return first
-            first = await self.rt.store.write(mark)
+            first = await self._blind_onset('risk-observation-blind:' + grid_id, now_ms)
             if now_ms - first < RISK_BLIND_GRACE_S * 1000:
                 return  # unsent stays unsent; next tick recollects
         row = self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
@@ -519,6 +550,7 @@ class LiveRiskScheduler:
                 "RISK_NATIVE_SNAPSHOT_STALE", "RISK_API_BUDGET_WAIT",
                 "RISK_OBSERVATION_CHANGED_WAIT", "RISK_EVENTS_PENDING",
                 "RISK_FUNDING_CHANGED_WAIT", "RISK_GRID_CHANGED",
+                "RISK_STREAM_UNRECONCILED",
                 "PROTECTION_SERVICE_PENDING"):
             await self.rt.live_risk.freeze(row["grid_id"], epoch=row["epoch"], code=result["code"])
 

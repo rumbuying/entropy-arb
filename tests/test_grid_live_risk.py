@@ -678,3 +678,86 @@ def test_transient_observation_failure_is_retried_before_pausing(tmp_path, monke
         finally:
             rt.close()
     asyncio.run(run())
+
+
+def test_profit_evaluation_failure_is_blindness_not_a_pause(tmp_path, monkeypatch):
+    """RISK_PROFIT_QUOTE_STALE / RISK_PROFIT_DATA_UNAVAILABLE used to pause a
+    RUNNING grid immediately — one failed funding sync marks reconciliation
+    not-booked for its 10s backoff window and a 5s-old quote trips under the
+    paced reads. Both are now bounded blindness: tolerated inside the grace,
+    paused only when they persist past it. The trigger codes themselves are
+    untouched."""
+    monkeypatch.setenv('GRID_REAL_DISPATCH', '1')
+    async def run():
+        rt = GridRuntime.open(str(tmp_path/'profit-blind.db'), execution_mode='production')
+        try:
+            gid,cfg,venue,mock,signer,qty = await running(rt)
+            epoch = rt.lifecycle._grid(gid)['epoch']
+            guard = rt.live_risk
+            base = guard.clock()
+            for code in ('RISK_PROFIT_QUOTE_STALE', 'RISK_PROFIT_DATA_UNAVAILABLE'):
+                await guard.freeze(gid, epoch=epoch, code=code)
+                assert rt.lifecycle._grid(gid)['status'] == 'RUNNING'
+            # Sustained unevaluability past the grace still pauses.
+            guard.clock = lambda: base + 121
+            await guard.freeze(gid, epoch=epoch, code='RISK_PROFIT_QUOTE_STALE')
+            assert rt.lifecycle._grid(gid)['status'] == 'NEEDS_ATTENTION'
+            assert rt.lifecycle._grid(gid)['desired_mode'] == 'PAUSED'
+        finally:
+            rt.close()
+    asyncio.run(run())
+
+
+def test_clean_profit_evaluation_clears_the_blind_window(tmp_path, monkeypatch):
+    monkeypatch.setenv('GRID_REAL_DISPATCH', '1')
+    async def run():
+        rt = GridRuntime.open(str(tmp_path/'profit-clear.db'), execution_mode='production')
+        try:
+            gid,cfg,venue,mock,signer,qty = await running(rt)
+            epoch = rt.lifecycle._grid(gid)['epoch']
+            guard = rt.live_risk
+            base = guard.clock()
+            await guard.freeze(gid, epoch=epoch, code='RISK_PROFIT_DATA_UNAVAILABLE')
+            assert rt.lifecycle._grid(gid)['status'] == 'RUNNING'
+            # A clean profit evaluation clears the window: the next failure
+            # starts a fresh grace instead of inheriting the old onset.
+            await guard.record(gid, {'code': None, 'epoch': epoch,
+                                     'profit_protection': {'code': None}})
+            guard.clock = lambda: base + 60
+            await guard.freeze(gid, epoch=epoch, code='RISK_PROFIT_QUOTE_STALE')
+            assert rt.lifecycle._grid(gid)['status'] == 'RUNNING'
+            guard.clock = lambda: base + 181
+            await guard.freeze(gid, epoch=epoch, code='RISK_PROFIT_QUOTE_STALE')
+            assert rt.lifecycle._grid(gid)['status'] == 'NEEDS_ATTENTION' 
+        finally:
+            rt.close()
+    asyncio.run(run())
+
+
+def test_stream_unreconciled_never_pauses_the_grid_itself(tmp_path, monkeypatch):
+    """RISK_STREAM_UNRECONCILED raced the stream-loss path: the risk tick
+    paused the grid with an epoch bump while stream recovery owned the same
+    transition, interrupting exactly the recovery that clears the gap. The
+    code is now a wait on both the freeze skip-list and the scheduler."""
+    monkeypatch.setenv('GRID_REAL_DISPATCH', '1')
+    async def run():
+        rt = GridRuntime.open(str(tmp_path/'stream-wait.db'), execution_mode='production')
+        try:
+            gid,cfg,venue,mock,signer,qty = await running(rt)
+            epoch = rt.lifecycle._grid(gid)['epoch']
+            await rt.live_risk.freeze(gid, epoch=epoch, code='RISK_STREAM_UNRECONCILED')
+            assert rt.lifecycle._grid(gid)['status'] == 'RUNNING'
+            assert rt.lifecycle._grid(gid)['epoch'] == epoch
+            from entropy_arb.grid.live_risk import LiveRiskScheduler
+            scheduler = LiveRiskScheduler(rt)
+            try:
+                async def observe(gid):
+                    return {'code': 'RISK_STREAM_UNRECONCILED', 'epoch': epoch}
+                rt.live_risk.observe = observe
+                await scheduler._observe({'grid_id': gid, 'account_id': cfg.account_ref, 'epoch': epoch})
+                assert rt.lifecycle._grid(gid)['status'] == 'RUNNING'
+            finally:
+                await scheduler.close()
+        finally:
+            rt.close()
+    asyncio.run(run())
