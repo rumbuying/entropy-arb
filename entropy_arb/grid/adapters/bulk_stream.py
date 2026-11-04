@@ -319,6 +319,18 @@ class BulkAccountStream:
     Disconnects, queue overflow, malformed messages and snapshots all demand
     reconciliation. `connected` is transport liveness, never trading readiness.
     """
+    # Bound each WS read short and enforce the application-data deadline in
+    # the loop: aiohttp swallows protocol PING/PONG inside receive() with a
+    # fresh read timeout each time, so a socket kept alive by venue pings
+    # but silent at the application level never trips ClientWSTimeout —
+    # `connected` stayed True against a stale account view.
+    RECEIVE_TICK_SEC=5.0
+    HEARTBEAT_IDLE_SEC=45.0
+    # Only a sustained healthy stream resets the reconnect backoff: a poison
+    # frame that recurs after every snapshot must not reconnect at 1/s
+    # forever.
+    HEALTHY_FRAMES_RESET=10
+
     def __init__(self,session,*,network,account,owner,reader_factory,queue_size=1024):
         if network not in WS_ORIGINS:raise AdapterError('BULK_NETWORK_UNSUPPORTED')
         uint(queue_size,10000)
@@ -386,16 +398,26 @@ class BulkAccountStream:
                     if ws._response.history or ws._response.url!=URL(WS_ORIGINS[self.network]):
                         raise AdapterError('BULK_STREAM_REDIRECT_REFUSED')
                     self.connected=True
+                    self.last_received=time.monotonic()
                     await ws.send_json(dict(method='subscribe',subscription=[dict(type='account',user=self.owner)]))
                     self._emit_or_reconnect(BulkStreamEvent('stream_connected',self.decoder.generation))
                     log.info('bulk account stream connected: generation=%s', self.decoder.generation)
-                    async for msg in ws:
+                    healthy=0
+                    while not self.stopped.is_set():
+                        try:msg=await asyncio.wait_for(ws.receive(),timeout=self.RECEIVE_TICK_SEC)
+                        except TimeoutError:
+                            if time.monotonic()-self.last_received>self.HEARTBEAT_IDLE_SEC:
+                                raise AdapterError('BULK_STREAM_HEARTBEAT_TIMEOUT')
+                            continue
                         if msg.type==aiohttp.WSMsgType.TEXT:
                             self.last_received=time.monotonic()
                             event=self.decoder.ingest(msg.data)
                             self._emit_or_reconnect(event)
-                            if self.decoder.has_snapshot:delay=1
-                        elif msg.type not in (aiohttp.WSMsgType.PING,aiohttp.WSMsgType.PONG):break
+                            if self.decoder.has_snapshot:
+                                healthy+=1
+                                if healthy>=self.HEALTHY_FRAMES_RESET:delay=1
+                        elif msg.type in (aiohttp.WSMsgType.CLOSED,aiohttp.WSMsgType.CLOSING,
+                                          aiohttp.WSMsgType.CLOSE,aiohttp.WSMsgType.ERROR):break
             except asyncio.CancelledError:raise
             except Exception as error:
                 # Closed vocabulary only. Never retain peer reason/raw frames.
@@ -406,7 +428,9 @@ class BulkAccountStream:
                 self.connected=False;self.recovery_required=True
                 self._emit(BulkStreamEvent('stream_gap',self.decoder.generation,data=dict(code=code)))
                 if not self.stopped.is_set():
-                    log.warning('bulk account stream gap: %s (generation=%s)', code, self.decoder.generation)
+                    idle=(time.monotonic()-self.last_received) if self.last_received is not None else -1
+                    log.warning('bulk account stream gap: %s (generation=%s receive_age_ms=%.0f)',
+                        code, self.decoder.generation, max(0,idle)*1000)
             try:await asyncio.wait_for(self.stopped.wait(),timeout=delay)
             except TimeoutError:pass
             delay=min(30,delay*2)

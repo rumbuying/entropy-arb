@@ -3,6 +3,7 @@ import asyncio
 import copy
 from dataclasses import replace
 import json
+import time
 
 import aiohttp
 from aiohttp import web
@@ -398,3 +399,99 @@ def test_positive_size_stop_update_is_reconciled_without_a_size_assertion():
             filledSize='0',price='0',maker=True,reduceOnly=True,iso=False,tif='gtc',
             status='resting',timestamp=NS)
         d2.ingest(frame(snapshot(openOrders=[snap])))
+
+
+def test_ping_only_socket_is_not_app_liveness(monkeypatch):
+    """aiohttp swallows protocol PING/PONG inside receive() with a fresh read
+    timeout each time, so a socket kept alive by venue pings but silent at
+    the application level never trips ClientWSTimeout: connected stayed True
+    forever while the account view went stale. The loop now bounds each read
+    and enforces the app-data deadline itself."""
+    monkeypatch.setattr(BulkAccountStream,'RECEIVE_TICK_SEC',.05)
+    monkeypatch.setattr(BulkAccountStream,'HEARTBEAT_IDLE_SEC',.3)
+    async def run():
+        events=[];gapped=asyncio.Event()
+        async def endpoint(request):
+            ws=web.WebSocketResponse(heartbeat=2.0);await ws.prepare(request)
+            await ws.receive_json()
+            await ws.send_json(dict(type='subscriptionResponse',topics=['account.'+OWNER]))
+            # Protocol liveness only: pings answered, but never any app data.
+            await asyncio.sleep(3)
+            await ws.close()
+            return ws
+        app=web.Application();app.router.add_get('/ws',endpoint)
+        server=TestServer(app);await server.start_server()
+        monkeypatch.setitem(WS_ORIGINS,'mainnet',str(server.make_url('/ws')).replace('http://','ws://'))
+        try:
+            async with aiohttp.ClientSession() as session:
+                stream=BulkAccountStream(session,network='mainnet',account='account-1',owner=OWNER,
+                    reader_factory=lambda _:reader())
+                await stream.start()
+                async def drain():
+                    while True:
+                        batch=stream.poll();events.extend(batch)
+                        if any(e.kind=='stream_gap' and e.data.get('code')=='BULK_STREAM_HEARTBEAT_TIMEOUT'
+                               for e in batch):gapped.set();return
+                        await asyncio.sleep(.01)
+                drainer=asyncio.create_task(drain())
+                try:
+                    await asyncio.wait_for(gapped.wait(),8)
+                finally:
+                    drainer.cancel();await asyncio.gather(drainer,return_exceptions=True)
+                    await stream.close()
+                assert any(e.kind=='stream_connected' for e in events)
+        finally:await server.close()
+    asyncio.run(run())
+
+
+def test_repeated_poison_frames_back_off_instead_of_reconnecting_at_1s(monkeypatch):
+    """The reconnect delay used to reset to 1s on the first post-snapshot
+    frame: a poison frame that recurs after every snapshot reconnected the
+    whole account feed at ~1/s forever, refreezing all grids per cycle. The
+    reset now requires a sustained healthy stream. Only two healthy frames
+    are served per connection — below the reset threshold — so the old
+    reset-on-first-frame behaviour cycles at 1s while the fixed one backs
+    off 1s, 2s, 4s."""
+    async def run():
+        gaps=[];done=asyncio.Event()
+        async def endpoint(request):
+            ws=web.WebSocketResponse();await ws.prepare(request)
+            await ws.receive_json()
+            await ws.send_json(dict(type='subscriptionResponse',topics=['account.'+OWNER]))
+            await ws.send_str(frame(snapshot()))
+            # Two healthy frames reach the reset threshold, then a poison
+            # frame with an unknown row shape refuses and closes the socket.
+            await ws.send_str(frame(ws_order()))
+            await ws.send_str(frame(ws_order(ts=NS+1)))
+            await ws.send_str(frame(dict(type='account',topic='account.'+OWNER,
+                data=dict(type='unknownFutureEvent'))))
+            await asyncio.sleep(.2)
+            await ws.close()
+            return ws
+        app=web.Application();app.router.add_get('/ws',endpoint)
+        server=TestServer(app);await server.start_server()
+        monkeypatch.setitem(WS_ORIGINS,'mainnet',str(server.make_url('/ws')).replace('http://','ws://'))
+        try:
+            async with aiohttp.ClientSession() as session:
+                stream=BulkAccountStream(session,network='mainnet',account='account-1',owner=OWNER,
+                    reader_factory=lambda _:reader(),queue_size=2)
+                await stream.start()
+                async def drain():
+                    while True:
+                        for e in stream.poll():
+                            if e.kind=='stream_gap':gaps.append((time.monotonic(),e.data.get('code')))
+                        if len([g for g in gaps if g[1]!='BULK_STREAM_QUEUE_OVERFLOW'])>=3:
+                            done.set();return
+                        await asyncio.sleep(.01)
+                drainer=asyncio.create_task(drain())
+                try:
+                    await asyncio.wait_for(done.wait(),20)
+                finally:
+                    drainer.cancel();await asyncio.gather(drainer,return_exceptions=True)
+                    await stream.close()
+            # The first two cycles wait 1s and 2s (threshold not yet reached at
+            # connect time): the third gap must therefore trail the first by
+            # more than the reset-to-1s world would allow.
+            assert gaps[-1][0]-gaps[0][0]>2.5, f'intervals {[g[0] for g in gaps]}'
+        finally:await server.close()
+    asyncio.run(run())
