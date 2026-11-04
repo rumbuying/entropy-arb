@@ -434,3 +434,27 @@ if __name__ == "__main__":
     test_secrets_roundtrip_and_masking(
         __import__("pathlib").Path(tempfile.mkdtemp()))
     print("test_console OK (use pytest for full coverage)")
+
+
+def test_failed_spawn_releases_the_reserved_port(tmp_path):
+    """A spawn failure (or a storage failure right after it) left the
+    reserved port in _reserved forever: repeated failed starts re-created
+    the 2026-10-11 port exhaustion where no new worker could launch."""
+    async def run():
+        sup = Supervisor(str(tmp_path), str(tmp_path), port_range=(18901, 18999))
+        original = sup.build_argv
+        def broken_argv(w):
+            raise OSError(28, 'injected spawn failure')
+        sup.build_argv = broken_argv
+        for _ in range(5):
+            try:
+                await sup.start('test-profile', 'BTC', 'hl', 'record')
+                raise AssertionError('spawn should have failed')
+            except OSError:
+                pass
+        assert not sup._reserved, f'ports leaked: {sup._reserved}'
+        sup.build_argv = original
+        w = await sup.start('test-profile', 'BTC', 'hl', 'record')
+        assert w.web_port == 18901, 'all five ports must be reusable'
+        await sup.stop(w.id)
+    asyncio.run(run())

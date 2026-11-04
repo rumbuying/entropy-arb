@@ -355,6 +355,17 @@ class Supervisor:
         self._seq += 1
         w = Worker(f"w{self._seq}", profile, symbol, hedge, mode,
                    self._alloc_port(), base=base)
+        try:
+            return await self._spawn(w)
+        except BaseException:
+            # A failed spawn (or a storage failure right after it) left the
+            # reserved port in _reserved forever: repeated failed starts
+            # re-created the 2026-10-11 port exhaustion that stopped every
+            # new worker from launching.
+            self._release_port(w)
+            raise
+
+    async def _spawn(self, w: Worker) -> Worker:
         # identity first: run id + strategy must exist BEFORE the spawn so
         # the event-collection env carries real values
         w.cmdline_hash = cmdline_hash(w.profile, w.symbol, w.hedge,
