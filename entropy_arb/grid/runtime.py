@@ -322,9 +322,19 @@ class GridRuntime:
         except models.GridModelError as e:
             raise RuntimeError_("VALIDATION_ERROR", e.message, 400) from e
         if hasattr(venue, "risk_model_for"):
-            risk_model, cap = venue.risk_model_for(config, lines, snap, acct_snap,
-                **({"owned_context": inventory_context} if inventory_context else {}),
-                **({"portfolio_context": portfolio_context} if portfolio_context is not None else {}))
+            risk_kwargs = {}
+            if inventory_context:
+                risk_kwargs["owned_context"] = inventory_context
+                if getattr(venue, 'venue', None) == 'bulk':
+                    # An existing quantity is revalidated against the committed
+                    # capital: the adverse envelope already covers the owned
+                    # inventory's downside, so the unrealized loss must not
+                    # shrink the pool a second time (that refused every resume
+                    # after a mark-down with BUDGET_EXCEEDED).
+                    risk_kwargs["revalidate"] = fixed_qty_base is not None
+            if portfolio_context is not None:
+                risk_kwargs["portfolio_context"] = portfolio_context
+            risk_model, cap = venue.risk_model_for(config, lines, snap, acct_snap, **risk_kwargs)
             max_qty = cap if cap is not None else max_qty
         if risk_model is not None:
             from . import sizing as _sizing

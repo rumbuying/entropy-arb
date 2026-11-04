@@ -284,7 +284,7 @@ class BulkAccountBudget:
             ctx.prec=512
             return text(max(Decimal(0),capacity-native_decimal(context['other_reserved'],negative=False)))
 
-    def range_model(self,venue,config,lines,market_snapshot,account_snapshot,*,owned_context=None,portfolio_context=None):
+    def range_model(self,venue,config,lines,market_snapshot,account_snapshot,*,owned_context=None,portfolio_context=None,revalidate=False):
         """Application allocation preview; not a native admission certificate.
 
         Full requested leverage remains available up to both native ceilings.
@@ -331,6 +331,19 @@ class BulkAccountBudget:
                 observed_margin=max(observed_margin,margin,worst)
         total=native_decimal(effective if effective is not None else config.capital.total)
         total=max(Decimal(0),total)
+        if revalidate and owned_context is not None:
+            # Revalidating the quantity already committed at creation must not
+            # shrink the pool by the owned inventory's unrealized loss: the
+            # adverse envelope applies the full high->low drop to ALL slots
+            # (owned lots included), so the loss is already counted there.
+            # effective_total (= capital + min(0, pnl)) double-counts it, and a
+            # creation-sized quantity sits at adverse ~= total by construction,
+            # so any mark-down refused resume with BUDGET_EXCEEDED (2026-11-04:
+            # adverse 399.9999988 vs pool 400, a -0.01 mark flipped it).
+            capital_limit=owned_context.get('capital_limit')
+            if capital_limit is not None:
+                total=max(total,native_decimal(capital_limit))
+                total=max(Decimal(0),total)
         stress=list(working_prices)
         with localcontext() as ctx:
             ctx.prec=256

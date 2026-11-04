@@ -171,3 +171,38 @@ def test_exhausted_capital_is_a_budget_refusal_not_an_invalid_instrument():
 @pytest.mark.parametrize('patch',[dict(gross_qty='1'),dict(leverage=True),dict(grid_count=0),dict(taker_fee='0.02'),dict(qty_step='0')])
 def test_invalid_inputs_cannot_return_budget_rows(patch):
     with pytest.raises((AdapterError,models.GridModelError)):risk(**patch)
+
+
+def test_revalidating_a_committed_quantity_ignores_owned_unrealized_loss():
+    """A creation-sized quantity sits at adverse ≈ total by construction, so
+    shrinking the pool by the owned inventory's unrealized loss
+    (effective_total = capital + min(0, pnl)) double-counts a downside the
+    adverse envelope already covers and refuses every resume after a
+    mark-down with BUDGET_EXCEEDED (2026-11-04: adverse 399.9999988 vs pool
+    400; a -0.01 mark flipped it). Revalidation keeps the committed capital."""
+    venue,cfg,quote=venue_and_config();n=native()
+    n['positions']=[dict(symbol='BTC-USD',size='0.00002',iso=False,maintenanceMargin='0.05')]
+    n['margin'].update(availableMargin='499.95',marginUsed='0.05',bufferedMargin='0.0525')
+    c=context();c['selected_grid_id']='existing';c['contexts']={BTC:owned(market=BTC,qty='0.00002',orders=[])}
+    inv=selected_context();inv['orders']=[]
+    inv['effective_total']='30.9';inv['capital_limit']='31'
+    levels={'levels':['80000','81000','82000']}
+    fresh,cap=budget().range_model(venue,cfg,levels,quote,snapshot(n),
+        portfolio_context=c,owned_context=inv)
+    kept,_=budget().range_model(venue,cfg,levels,quote,snapshot(n),
+        portfolio_context=c,owned_context=inv,revalidate=True)
+    assert fresh.total_budget=='30.9' and kept.total_budget=='31'
+    fixed=None
+    row1=kept.demand_row(k=1)
+    step_adverse=D(kept.demand_row(k=2)['adverse'])-D(row1['adverse'])
+    k0=max(1,int((D('30.95')-D(row1['adverse']))/step_adverse)+1)
+    for k in range(max(1,k0-5),k0+6):
+        row=kept.demand_row(k=k)
+        if D('30.9')<D(row['adverse'])<=D('31'):
+            fixed=models.canonical_decimal_text(D(k)*D(kept.qty_step));break
+    assert fixed is not None
+    common=dict(qty_step_base=kept.qty_step,min_qty_base=kept.qty_step,max_qty_base=cap,
+        used_prices=kept.prices,min_notional='0',reserve='0',account_remaining=kept.account_remaining,
+        fixed_qty_base=fixed)
+    assert solve_qty(risk_model=kept,total=kept.total_budget,**common)['validation_status']=='VALID'
+    assert solve_qty(risk_model=fresh,total=fresh.total_budget,**common)['code']=='BUDGET_EXCEEDED'
