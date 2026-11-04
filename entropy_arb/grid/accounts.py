@@ -10,6 +10,7 @@ import copy
 import logging
 import os
 import re
+import time
 import uuid
 from dataclasses import replace
 from decimal import Decimal
@@ -29,6 +30,10 @@ log = logging.getLogger("grid.accounts")
 
 
 class GridAccounts:
+    # A stream task that survived this long before dying starts its restart
+    # backoff from scratch (one fault after hours of health is not the
+    # sustained-failure ladder).
+    STREAM_HEALTHY_UPTIME_S = 300.0
     def __init__(self, runtime, vault: CredentialVault, transport_factory, *, observe_streams=False, temporary=False,
                  funding_allowance="0", commissioning_allowance="0", venue_keys=("hl",), providers=None):
         self.runtime, self.vault, self.transport_factory = runtime, vault, transport_factory
@@ -37,6 +42,7 @@ class GridAccounts:
         self.temporary = temporary
         self._streams = {}
         self._stream_restarts = {}
+        self._restart_tasks = {}
         self._closed = False
         from .venue_registry import spec_for
         from .connections import ConnectionAccounts
@@ -380,9 +386,10 @@ class GridAccounts:
             self.runtime.executors.pop(aid, None)
         await self.runtime.add_venue(venue)
         if self.observe_streams:
-            stop = asyncio.Event()
-            task = asyncio.create_task(venue.run_stream(stop), name=f"grid-hl-observe:{aid}")
-            self._streams[aid] = (stop, task)
+            # Same supervision as the worker-owned streams: an un-stopped
+            # death used to vanish silently, leaving observing=True forever
+            # with nobody to restart it.
+            self.start_stream(aid)
 
     async def verify(self, params):
         if self._record(params.get('account_id')).get('venue', 'hl') != 'hl':
@@ -573,6 +580,10 @@ class GridAccounts:
         # service dispatch policy still control every action.
 
     async def _stop_stream(self, aid):
+        restart = self._restart_tasks.pop(aid, None)
+        if restart is not None:
+            restart.cancel()
+            await asyncio.gather(restart, return_exceptions=True)
         stream = self._streams.pop(aid, None)
         if stream:
             stream[0].set()
@@ -589,8 +600,16 @@ class GridAccounts:
         venue = self.runtime.venues.get(aid)
         if venue is None or not hasattr(venue, 'run_stream'):
             return None
+        existing = self._streams.get(aid)
+        if existing is not None and not existing[1].done():
+            # A scheduled restart firing after an _attach replacement must
+            # not orphan the newly attached stream: two run_stream loops on
+            # one venue, the loser dying with ALREADY_STARTED and its
+            # done-callback scheduling yet another restart.
+            return existing[1]
         stop = asyncio.Event()
         task = asyncio.create_task(venue.run_stream(stop), name=f"grid-account-stream:{aid}")
+        task._grid_stream_started = time.monotonic()
         task.add_done_callback(lambda done, aid=aid: self._stream_finished(aid, done))
         self._streams[aid] = (stop, task)
         return task
@@ -605,14 +624,19 @@ class GridAccounts:
         if self._closed or task.cancelled() or task.exception() is None:
             return
         log.error("account stream task died: %s: %r", aid, task.exception())
-        attempts = self._stream_restarts.get(aid, 0) + 1
+        # A task that ran healthily for a while and then died begins a fresh
+        # backoff ladder, not the capped one left by yesterday's flapping:
+        # the cap is for sustained failure, not for one fault after hours.
+        uptime = time.monotonic() - getattr(task, '_grid_stream_started', time.monotonic())
+        attempts = 1 if uptime > self.STREAM_HEALTHY_UPTIME_S else self._stream_restarts.get(aid, 0) + 1
         self._stream_restarts[aid] = attempts
         delay = min(30.0, 2.0 ** min(attempts, 5))
         async def restart():
             await asyncio.sleep(delay)
+            self._restart_tasks.pop(aid, None)
             if not self._closed:
                 self.start_stream(aid)
-        asyncio.create_task(restart(), name=f"grid-account-stream-restart:{aid}")
+        self._restart_tasks[aid] = asyncio.create_task(restart(), name=f"grid-account-stream-restart:{aid}")
 
     def _close_signer(self, aid):
         venue = self.runtime.venues.get(aid)

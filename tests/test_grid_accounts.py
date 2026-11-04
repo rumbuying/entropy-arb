@@ -1,5 +1,6 @@
 """Independent grid credentials: public unit key only, no live network."""
 import asyncio
+import time
 import copy
 import json
 import os
@@ -460,5 +461,68 @@ def test_stream_task_death_restarts_with_backoff_and_a_deliberate_stop_does_not(
         settled = len(attempts)
         await asyncio.sleep(.3)
         assert len(attempts) == settled and not accounts._streams
+        await accounts.close()
+    asyncio.run(run())
+
+
+def test_stop_stream_cancels_a_scheduled_restart_and_start_refuses_a_live_task(service, monkeypatch):
+    """A restart scheduled by a done-callback used to be untracked and
+    uncancellable: a replacement attach between the death and the restart
+    fired the restart anyway, start_stream orphaned the newly attached task,
+    and the loser died with ALREADY_STARTED while its own callback scheduled
+    yet another restart."""
+    accounts, rt, _, _ = service
+    attempts = []
+    async def observe(venue, stop):
+        attempts.append(venue)
+        if len(attempts) == 1:
+            raise RuntimeError('die once so a restart gets scheduled')
+        await stop.wait()
+    monkeypatch.setattr(HyperliquidGridVenue, "run_stream", observe)
+    async def run():
+        row = (await accounts.save(payload()))["account"]
+        await accounts.verify({"account_id": row["account_id"], "expected_revision": row["revision"]})
+        first = accounts.start_stream(row["account_id"])
+        assert accounts.start_stream(row["account_id"]) is first, 'a live task must not be duplicated'
+        end = asyncio.get_running_loop().time() + 4
+        while not accounts._restart_tasks:
+            assert asyncio.get_running_loop().time() < end, 'restart never scheduled'
+            await asyncio.sleep(.05)
+        # The restart is scheduled but delayed; stopping the account must
+        # cancel it instead of letting it fire against a replaced venue.
+        await accounts._stop_stream(row["account_id"])
+        assert not accounts._restart_tasks and not accounts._streams
+        settled = len(attempts)
+        await asyncio.sleep(2.5)
+        assert len(attempts) == settled and not accounts._streams, 'a cancelled restart must never fire'
+        await accounts.close()
+    asyncio.run(run())
+
+
+def test_restart_backoff_resets_after_a_healthy_uptime(service, monkeypatch):
+    """The attempts counter never reset: a venue that flapped six times
+    yesterday waited the 30s cap today. A task that ran healthily past the
+    threshold and then died starts a fresh ladder."""
+    accounts, rt, _, _ = service
+    attempts = []
+    async def observe(venue, stop):
+        attempts.append(time.monotonic())
+        if len(attempts) == 1:
+            task = asyncio.current_task()
+            task._grid_stream_started = time.monotonic() - 600.0
+            raise RuntimeError('one fault after hours of health')
+        await stop.wait()
+    monkeypatch.setattr(HyperliquidGridVenue, "run_stream", observe)
+    async def run():
+        row = (await accounts.save(payload()))["account"]
+        await accounts.verify({"account_id": row["account_id"], "expected_revision": row["revision"]})
+        accounts.start_stream(row["account_id"])
+        end = asyncio.get_running_loop().time() + 6
+        while len(attempts) < 2:
+            assert asyncio.get_running_loop().time() < end, 'restart never fired'
+            await asyncio.sleep(.05)
+        # First death: 600s of healthy uptime -> attempts reset to 1 -> 2s delay.
+        assert attempts[1] - attempts[0] < 4, 'healthy uptime must reset the ladder'
+        await accounts._stop_stream(row["account_id"])
         await accounts.close()
     asyncio.run(run())
