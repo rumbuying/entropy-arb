@@ -138,7 +138,31 @@ class BulkStreamDecoder:
         px=native_decimal(trigger['px'],negative=False)
         qty=native_decimal(row['origSz' if update else 'originalSize'])
         oid=row['oid' if update else 'orderId'];base58(oid)
-        if px<=0 or qty>=0:raise AdapterError('BULK_STREAM_STOP_SIZE_UNVERIFIED')
+        if px<=0:
+            raise AdapterError('BULK_STREAM_STOP_SIZE_UNVERIFIED')
+        if qty==0:
+            # A cancelled/disappeared stop arrives in an UPDATE frame with
+            # origSz 0 (captured 2026-11-04, value-free shape marker). It
+            # covers nothing, but it is not a stream fault: emit the
+            # protection reconciliation event instead of refusing the frame,
+            # which used to close the socket and reconnect the whole account
+            # feed on every stop cancel (surfaced as a ~30-70 minute flapping
+            # cycle). A ZERO-size stop in a SNAPSHOT stays refused: open
+            # protection with no size is malformed state.
+            if not update:
+                raise AdapterError('BULK_STREAM_STOP_SIZE_UNVERIFIED')
+            return dict(order_id=oid,trigger_price=text(px),qty_bound='0',
+                trigger_direction='below',native_type='stop',coverage_verified=False,zero_size=True)
+        if qty>0:
+            # Unknown sign convention for update frames; never guess. Emit the
+            # value-free shape marker (field names and sign classes only) so a
+            # false refusal is diagnosable without logging order economics.
+            log.warning('BULK_STREAM_STOP_SIZE_SHAPE update=%s size_field=%s '
+                        'size_sign=positive px_sign=%s trigger_keys=%s row_keys=%s',
+                        update, 'origSz' if update else 'originalSize',
+                        'zero' if px == 0 else ('positive' if px > 0 else 'negative'),
+                        sorted(str(k) for k in trigger), sorted(str(k) for k in row))
+            raise AdapterError('BULK_STREAM_STOP_SIZE_UNVERIFIED')
         # r is not sufficient for native stop roots; protocol stop semantics
         # are intrinsically reducing. This observation still confers no grant.
         return dict(order_id=oid,trigger_price=text(px),qty_bound=text(qty.copy_abs()),

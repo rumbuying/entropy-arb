@@ -332,3 +332,24 @@ def test_periodic_snapshot_with_fresh_timestamp_dedups_on_content():
     changed = d._snapshot(row)
     assert changed is not None and changed.data['orders'] == ()
 
+
+
+def test_cancelled_stop_update_is_reconciled_instead_of_reconnecting_the_feed():
+    """A stop UPDATE frame carries origSz 0 once the venue stops it
+    (captured 2026-11-04, value-free shape marker). That covers nothing but
+    must NOT be refused as an unverifiable size: refusing closed the socket
+    and forced a whole-account reconnect on every stop cancel, which is the
+    source of the ~30-70 minute stream flapping cycle."""
+    d=decoder()
+    row=ws_order(ot='stop',status='cancelled',origSz='0',sz='0',fillSz='0',px='0',
+        trigger=dict(isAbove=False,px='2200',lim=None))
+    event=d.ingest(frame(row))
+    assert event is not None and event.kind=='protection_requires_reconciliation'
+    assert event.data['zero_size'] is True and event.data['qty_bound']=='0'
+    # A zero-size stop inside a snapshot is still malformed state.
+    with pytest.raises(AdapterError,match='STOP_SIZE_UNVERIFIED'):
+        d2=decoder()
+        d2.ingest(frame(snapshot(openOrders=[dict(symbol='ETH-USD',orderId=OID,orderType='stop',
+            trigger=dict(isAbove=False,px='2200',lim=None),originalSize='0',size='0',
+            filledSize='0',price='0',maker=True,reduceOnly=True,iso=False,tif='gtc',
+            status='resting',timestamp=NS)])))
