@@ -324,18 +324,23 @@ class BulkAccountStream:
     Disconnects, queue overflow, malformed messages and snapshots all demand
     reconciliation. `connected` is transport liveness, never trading readiness.
     """
-    # Bound each WS read short and enforce the application-data deadline in
-    # the loop: aiohttp swallows protocol PING/PONG inside receive() with a
-    # fresh read timeout each time, so a socket kept alive by venue pings
-    # but silent at the application level never trips ClientWSTimeout —
-    # `connected` stayed True against a stale account view.
+    # Bound each WS read short so the loop stays responsive to shutdown and
+    # to the venue closing the socket. Liveness is TRANSPORT-level: the
+    # account stream is a pure event push, so an idle account legitimately
+    # sends no application frames for hours — a 2026-11-05 attempt at a 45s
+    # app-data deadline disconnected healthy idle accounts every ~45-90s,
+    # which with a running grid would freeze and recover continuously. The
+    # ws_connect heartbeat (below) pings the venue every 15s instead: a dead
+    # TCP path fails its pong and reconnects in ~15-30s. A venue feed that
+    # stops publishing events while pong-alive is reconciled from REST by
+    # the confirm loop, risk collections and recovery, same as every other
+    # stream fault — this layer never trusts the feed alone.
+    RECEIVE_TICK_SEC=5.0
     # A provisional stream fill older than this is retired from the pending
     # set: the fills barrier re-derives booked fills from native REST history,
     # so the provisional copy cannot be lost — it only stops the pending set
     # from growing into the 1024 buffer overflow.
     CONFIRM_PENDING_TTL_SEC=900.0
-    RECEIVE_TICK_SEC=5.0
-    HEARTBEAT_IDLE_SEC=45.0
     # Only a sustained healthy stream resets the reconnect backoff: a poison
     # frame that recurs after every snapshot must not reconnect at 1/s
     # forever.
@@ -399,7 +404,7 @@ class BulkAccountStream:
             try:
                 async with asyncio.timeout(15):
                     ws=await self.session.ws_connect(WS_ORIGINS[self.network],autoping=True,
-                        heartbeat=None,max_msg_size=2_000_000,
+                        heartbeat=15,max_msg_size=2_000_000,
                         timeout=aiohttp.ClientWSTimeout(ws_close=5,ws_receive=45))
                 async with ws:
                     # aiohttp exposes no allow_redirects flag on ws_connect.
@@ -415,10 +420,7 @@ class BulkAccountStream:
                     healthy=0
                     while not self.stopped.is_set():
                         try:msg=await asyncio.wait_for(ws.receive(),timeout=self.RECEIVE_TICK_SEC)
-                        except TimeoutError:
-                            if time.monotonic()-self.last_received>self.HEARTBEAT_IDLE_SEC:
-                                raise AdapterError('BULK_STREAM_HEARTBEAT_TIMEOUT')
-                            continue
+                        except TimeoutError:continue
                         if msg.type==aiohttp.WSMsgType.TEXT:
                             self.last_received=time.monotonic()
                             event=self.decoder.ingest(msg.data)

@@ -404,22 +404,23 @@ def test_positive_size_stop_update_is_reconciled_without_a_size_assertion():
         d2.ingest(frame(snapshot(openOrders=[snap])))
 
 
-def test_ping_only_socket_is_not_app_liveness(monkeypatch):
-    """aiohttp swallows protocol PING/PONG inside receive() with a fresh read
-    timeout each time, so a socket kept alive by venue pings but silent at
-    the application level never trips ClientWSTimeout: connected stayed True
-    forever while the account view went stale. The loop now bounds each read
-    and enforces the app-data deadline itself."""
-    monkeypatch.setattr(BulkAccountStream,'RECEIVE_TICK_SEC',.05)
-    monkeypatch.setattr(BulkAccountStream,'HEARTBEAT_IDLE_SEC',.3)
+def test_a_quiet_account_stream_stays_connected(monkeypatch):
+    """The account stream is a pure event push: an idle account legitimately
+    sends no application frames. A 45s app-data deadline disconnected
+    healthy idle accounts every ~45-90s, which with a running grid would
+    freeze and recover continuously (2026-11-05, caught in the first minutes
+    after deploy). Liveness is transport-level instead: a pong-alive socket
+    with zero app data stays connected, and a dead TCP path fails its pong
+    via the ws_connect heartbeat within ~15-30s."""
     async def run():
         events=[];gapped=asyncio.Event()
         async def endpoint(request):
-            ws=web.WebSocketResponse(heartbeat=2.0);await ws.prepare(request)
+            # The venue side answers protocol pings; it sends app data only
+            # on account events, which an idle account never produces.
+            ws=web.WebSocketResponse(heartbeat=1.0);await ws.prepare(request)
             await ws.receive_json()
             await ws.send_json(dict(type='subscriptionResponse',topics=['account.'+OWNER]))
-            # Protocol liveness only: pings answered, but never any app data.
-            await asyncio.sleep(3)
+            await asyncio.sleep(6)
             await ws.close()
             return ws
         app=web.Application();app.router.add_get('/ws',endpoint)
@@ -433,16 +434,20 @@ def test_ping_only_socket_is_not_app_liveness(monkeypatch):
                 async def drain():
                     while True:
                         batch=stream.poll();events.extend(batch)
-                        if any(e.kind=='stream_gap' and e.data.get('code')=='BULK_STREAM_HEARTBEAT_TIMEOUT'
-                               for e in batch):gapped.set();return
+                        if any(e.kind=='stream_gap' for e in batch):gapped.set();return
                         await asyncio.sleep(.01)
                 drainer=asyncio.create_task(drain())
                 try:
-                    await asyncio.wait_for(gapped.wait(),8)
-                finally:
-                    drainer.cancel();await asyncio.gather(drainer,return_exceptions=True)
-                    await stream.close()
+                    await asyncio.wait_for(asyncio.sleep(4),8)
+                except TimeoutError:
+                    pass
+                # Four seconds of app-data silence on a pong-alive socket is
+                # healthy: still connected, still generation 1.
+                assert stream.connected and stream.decoder.generation==1
+                assert not any(e.kind=='stream_gap' for e in events)
                 assert any(e.kind=='stream_connected' for e in events)
+            drainer.cancel();await asyncio.gather(drainer,return_exceptions=True)
+            await stream.close()
         finally:await server.close()
     asyncio.run(run())
 
