@@ -402,7 +402,11 @@ class BulkProtectionManager:
 
         Measured on the venue clock, consistent with the lease deadline. A
         later expiry inside the tolerance window is treated as pending, not
-        as a confirmed protection loss.
+        as a confirmed protection loss. The onset is written once and only
+        cleared by a successful verify — repeated failed verifies never
+        refresh it, so sustained blindness always exhausts the window and
+        the exit contract still runs (refreshing it here would keep
+        now-first fresh forever and never exit).
         """
         now_ms=self.venue.clock_ms()
         key=BLIND_TOLERANCE_KEY+gid
@@ -412,7 +416,7 @@ class BulkProtectionManager:
             if row is not None:
                 try:first=int(json.loads(row[0]))
                 except (TypeError,ValueError):first=None
-            if first is None or now_ms<first or now_ms-first>BLIND_TOLERANCE_MS:
+            if first is None or now_ms<first:
                 c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '
                           'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                     (key,json.dumps(now_ms)))
