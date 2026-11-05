@@ -33,8 +33,55 @@ from entropy_arb.grid.live_risk import LiveRiskScheduler
 
 log = logging.getLogger("grid.main")
 
+# How often the progress sidecar re-publishes the heartbeat while one
+# supervision step runs. Interval only; the publisher itself rate-limits
+# harder (>=1s between writes).
+PROGRESS_HEARTBEAT_S = 2.0
 
-async def supervision_step(name, step):
+
+async def _progress_heartbeat(heartbeat, phase):
+    """Keep the independent watchdog informed while one bounded step runs.
+
+    The supervision loop publishes between ticks, but a single legitimate
+    step can outlast the watchdog's staleness budget — paced bulk reads
+    make recovery reconcile passes run tens of seconds — and the watchdog
+    then SIGKILL-restarts a live, progressing worker mid-recovery
+    (2026-11-05 22:41, g-551c9890: the fresh instance's close_interrupted
+    protective-closed the grid). This sidecar re-publishes the same phase
+    while the step awaits, so the watchdog measures what it exists for:
+    whether the process can still run Python at all.
+
+    It can only run while the event loop is responsive; a wedged loop or a
+    synchronous hang blocks it too, so genuine stalls still go stale. The
+    invariant this relies on: every awaited operation under the supervision
+    loop (and under startup) is bounded by a read/lookup timeout — an
+    unbounded await would keep this heartbeat beating forever, so no
+    supervision-path await may be added without one.
+    """
+    try:
+        while True:
+            await asyncio.sleep(PROGRESS_HEARTBEAT_S)
+            try:
+                heartbeat.publish(phase)
+            except (OSError, ValueError):
+                log.warning('runtime heartbeat could not record progress')
+    except asyncio.CancelledError:
+        pass
+
+
+async def _with_progress_heartbeat(heartbeat, phase, step):
+    keeper = None
+    if heartbeat is not None:
+        keeper = asyncio.create_task(_progress_heartbeat(heartbeat, phase))
+    try:
+        return await step
+    finally:
+        if keeper is not None:
+            keeper.cancel()
+            await asyncio.gather(keeper, return_exceptions=True)
+
+
+async def supervision_step(name, step, *, heartbeat=None):
     """One scheduler fault must not end the whole runtime process.
 
     Any exception escaping a tick used to kill the main loop; the watchdog
@@ -48,7 +95,7 @@ async def supervision_step(name, step):
     loop = asyncio.get_running_loop()
     started = loop.time()
     try:
-        return await step
+        return await _with_progress_heartbeat(heartbeat, 'running', step)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -232,7 +279,10 @@ async def run(args: argparse.Namespace) -> int:
             rt.close()
             raise
     try:
-        await rt.startup()
+        # Startup legitimately runs long on paced venue reads (restore,
+        # reconcile passes); the watchdog's 'starting' budget must measure a
+        # wedged process, not slow honest progress.
+        await _with_progress_heartbeat(heartbeat, 'starting', rt.startup())
         await rpc.start()
     except BaseException:
         await rpc.stop()
@@ -270,15 +320,15 @@ async def run(args: argparse.Namespace) -> int:
             if heartbeat:await heartbeat.consume(rt)
             if accounts:
                 accounts.drain_unused_observations()
-            await supervision_step('stream_recovery', recovery.tick())
-            await supervision_step('native_protection', protection_watch.tick())
-            await supervision_step('service_rearm', service_rearm.tick())
-            await supervision_step('risk', risk_watch.tick())
+            await supervision_step('stream_recovery', recovery.tick(), heartbeat=heartbeat)
+            await supervision_step('native_protection', protection_watch.tick(), heartbeat=heartbeat)
+            await supervision_step('service_rearm', service_rearm.tick(), heartbeat=heartbeat)
+            await supervision_step('risk', risk_watch.tick(), heartbeat=heartbeat)
             if rt.operator_trial is not None:
-                await supervision_step('trial_policy', rt.operator_trial.expire())
-            await supervision_step('protection_exit', protection_exit.tick())
-            await supervision_step('event_pumps', pumps.tick())
-            await supervision_step('range_start', range_start.tick())
+                await supervision_step('trial_policy', rt.operator_trial.expire(), heartbeat=heartbeat)
+            await supervision_step('protection_exit', protection_exit.tick(), heartbeat=heartbeat)
+            await supervision_step('event_pumps', pumps.tick(), heartbeat=heartbeat)
+            await supervision_step('range_start', range_start.tick(), heartbeat=heartbeat)
             if heartbeat:heartbeat.publish('running')
             try:
                 await asyncio.wait_for(stop.wait(), timeout=0.25)
