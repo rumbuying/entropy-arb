@@ -416,3 +416,52 @@ def test_recovering_grid_survives_a_stale_lease_while_recovery_progresses(tmp_pa
         finally:
             await watcher.close();rt.close()
     asyncio.run(run())
+
+def test_unknown_entry_is_tolerated_only_while_recovery_rebuild_is_live(tmp_path,monkeypatch):
+    """2026-11-05 17:18, g-1bcb4b48: during a stream-gap recovery the rebuild
+    resubmitted an entry whose first venue lookup had not come back; the
+    protection observe saw the journal's in-flight entry 11 seconds after the
+    send, read it as an unprovable exposure (FIXED_UNKNOWN_ENTRY) and
+    flattened the grid — the order never reached the venue at all. An entry
+    inside its own submit lag is the rebuild's window while the recovery
+    scheduler's progress marker is fresh; with no live marker the exit runs
+    unchanged."""
+    from entropy_arb.grid.protection_watch import RECOVERY_WATCH_KEY,RECOVERY_WATCH_SCHEMA
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        try:
+            await planned_entry(rt,gid,cfg)
+            cid=rt.store.read(lambda c:c.execute("SELECT client_id FROM order_intents "
+                "WHERE grid_id=? AND state='DISPATCHING' AND cause_key LIKE 'initial:%'",(gid,)).fetchone()[0])
+            oid='7LkF5eszC1tPJzRBQq7rwSpiT4hKR6b7LkBdWJCo4z9'
+            def plant_journal(c):
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?)',
+                    (parent.journal._key(cid),json.dumps(dict(
+                        account=cfg.account_ref,client_id=cid,
+                        owner=parent.owner,network=parent.network,
+                        action=dict(type='order',symbol='ETH-USD',is_buy=True,size='0.1',
+                            price='2100',reduce_only=False,iso=False,
+                            order_type=dict(tif='GTC',type='limit')),
+                        nonce=42,request_hash='c'*64,order_id=oid,history_start_slot=100,
+                        state='MAY_HAVE_SENT'),sort_keys=True)))
+            await rt.store.write(plant_journal)
+            def plant_marker(c):
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?)',
+                    (RECOVERY_WATCH_KEY+gid,json.dumps(dict(schema=RECOVERY_WATCH_SCHEMA,
+                        grid_id=gid,epoch=1,onset_mono_ms=mono[0],updated_mono_ms=mono[0]),
+                        sort_keys=True)))
+            await rt.store.write(plant_marker)
+            await backend.observe(dict(grid_id=gid,epoch=1))
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED')
+            assert rt.store.read(lambda c:c.execute("SELECT 1 FROM runtime_state WHERE key=?",
+                ('protection-exit:'+gid,)).fetchone()) is None
+            # The scheduler went away: the same unknown entry enforces now.
+            def stale_marker(c):
+                c.execute("UPDATE runtime_state SET value=json_set(value,'$.updated_mono_ms',0) "
+                          "WHERE key=?",(RECOVERY_WATCH_KEY+gid,))
+            await rt.store.write(stale_marker)
+            await backend.observe(dict(grid_id=gid,epoch=1))
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+        finally:
+            rt.close()
+    asyncio.run(run())

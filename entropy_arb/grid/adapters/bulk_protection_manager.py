@@ -16,6 +16,7 @@ import uuid
 from .. import models
 from ..inventory import Inventory
 from ..journal import is_native_protection
+from ..protection_watch import recovery_in_flight
 from .base import AdapterError, OrderRequest
 from .bulk_protection import BulkStopBinding, BulkFixedStopGate, verify_fixed_stop
 from .bulk_read import BulkEvidenceReader, OPEN
@@ -463,6 +464,20 @@ class BulkProtectionManager:
             # expires. Exiting on one flaky read closed a protected, running
             # grid 8 minutes after start (2026-11-04 16:10).
             log.warning('PROTECTION_OBSERVE_TOLERATED code=%s', code)
+            return
+        if code=='PROTECTION_FIXED_UNKNOWN_ENTRY' and recovery_in_flight(
+                self.rt.store,gid,row['epoch'],now_mono_ms=self.monotonic_ms()):
+            # A recovery rebuild is actively re-placing this grid's entries:
+            # a submit still inside its own first-lookup lag (DISPATCHING/
+            # MAY_HAVE_SENT/UNKNOWN in the shared journal) is the rebuild's
+            # own window, not a confirmed unprovable entry — the rebuild's
+            # fences either prove the order or land NEEDS_ATTENTION where
+            # the watch enforces again. Exiting here flattened a grid 11
+            # seconds after its own rebuild had submitted an entry whose
+            # first lookup had not come back; the order never reached the
+            # venue at all (2026-11-05 17:18, g-1bcb4b48). Without a live
+            # recovery marker the exit runs unchanged.
+            log.warning('PROTECTION_OBSERVE_RECOVERY_WAIT code=%s', code)
             return
         log.warning('PROTECTION_OBSERVE_EXIT code=%s', code)
         await self.rt.protection.request_exit(gid,expected_epoch=row['epoch'],reason='PROTECTION_SERVICE_FIXED_UNVERIFIED')

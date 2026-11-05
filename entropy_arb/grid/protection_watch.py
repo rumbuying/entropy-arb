@@ -37,6 +37,28 @@ RECOVERY_PROGRESS_FRESH_MS = 120_000
 PROTECTION_RECOVERY_TOLERANCE_MS = 600_000
 
 
+def recovery_in_flight(store,gid,epoch,*,now_mono_ms):
+    """Durable progress signal from the stream-recovery scheduler.
+
+    The marker carries the recovery episode's epoch and two monotonic
+    timestamps: onset (first scheduler observation of this episode) and
+    updated (its latest tick). Callers share the scheduler's time.monotonic
+    origin. Tolerance applies only while the marker names the current epoch,
+    was refreshed recently, and the episode is still inside the bounded
+    recovery tolerance — anything else reads as no active recovery."""
+    raw=store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+        (RECOVERY_WATCH_KEY+gid,)).fetchone())
+    if raw is None:return False
+    try:marker=json.loads(raw[0])
+    except (ValueError,TypeError):return False
+    return (isinstance(marker,dict) and marker.get('schema')==RECOVERY_WATCH_SCHEMA
+        and marker.get('grid_id')==gid and marker.get('epoch')==epoch
+        and type(marker.get('onset_mono_ms')) is int and type(marker.get('updated_mono_ms')) is int
+        and 0<=marker['onset_mono_ms']<=marker['updated_mono_ms']<=now_mono_ms+1000
+        and now_mono_ms-marker['updated_mono_ms']<=RECOVERY_PROGRESS_FRESH_MS
+        and now_mono_ms-marker['onset_mono_ms']<=PROTECTION_RECOVERY_TOLERANCE_MS)
+
+
 class ProtectionLease:
     def __init__(self,runtime):self.rt=runtime
 
@@ -455,24 +477,10 @@ class ProtectionWatchScheduler:
     def _recovery_in_flight(self,row):
         """Durable progress signal from the stream-recovery scheduler.
 
-        The marker carries the recovery episode's epoch and two monotonic
-        timestamps: onset (first scheduler observation of this episode) and
-        updated (its latest tick). Tolerance applies only while the marker
-        names the current epoch, was refreshed recently, and the episode is
-        still inside the bounded recovery tolerance — anything else falls
-        through to the ordinary deadline enforcement."""
-        raw=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
-            (RECOVERY_WATCH_KEY+row['grid_id'],)).fetchone())
-        if raw is None:return False
-        try:marker=json.loads(raw[0])
-        except (ValueError,TypeError):return False
-        now=int(self.clock()*1000)
-        return (isinstance(marker,dict) and marker.get('schema')==RECOVERY_WATCH_SCHEMA
-            and marker.get('grid_id')==row['grid_id'] and marker.get('epoch')==row['epoch']
-            and type(marker.get('onset_mono_ms')) is int and type(marker.get('updated_mono_ms')) is int
-            and 0<=marker['onset_mono_ms']<=marker['updated_mono_ms']<=now+1000
-            and now-marker['updated_mono_ms']<=RECOVERY_PROGRESS_FRESH_MS
-            and now-marker['onset_mono_ms']<=PROTECTION_RECOVERY_TOLERANCE_MS)
+        See module-level recovery_in_flight; the watch reads it on its own
+        monotonic clock."""
+        return recovery_in_flight(self.rt.store,row['grid_id'],row['epoch'],
+            now_mono_ms=int(self.clock()*1000))
 
     def _blind_tolerated(self,row,code):
         """Tolerate a proof expiry or an unreadable proof during blindness.
