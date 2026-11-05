@@ -26,6 +26,17 @@ WS_ORIGINS = {'mainnet':'wss://mainnet-ws1.bulk.trade', 'testnet':'wss://exchang
 # provisional copy cannot be lost — it only stops the pending set from growing
 # into the 1024 buffer overflow.
 CONFIRM_PENDING_TTL_SEC=900.0
+# Fields whose exact equality lets a provisional stream fill book from its
+# final REST twin (checked by confirm_stream_fill below).
+CONFIRM_FIELDS=('execution_key','account','market','exchange_order_id','trade_id','side',
+        'qty_base','price','fee_amount','fee_asset','is_maker','exchange_ts','source_seq')
+# A provisionally streamed fill whose REST evidence conflicts is retired after
+# this many failed confirm-loop passes (~1s apart). The mismatch is
+# deterministic — the same compare repeats against the same immutable REST
+# record — so retrying past this only holds the scan hostage; the fills
+# barrier re-derives every booked fill from native REST history, so retiring
+# the provisional copy cannot lose the fill.
+CONFIRM_CONFLICT_RETRIES=15
 TERMINAL = CANCELED | REJECTED | {'filled','partiallyFilled','siblingCancelled','triggerFailed'}
 
 log = logging.getLogger('grid.bulk_stream')
@@ -60,14 +71,32 @@ def decode(raw):
         raise AdapterError('BULK_STREAM_JSON_INVALID') from None
 
 
+def stream_fill_conflict(provisional, final):
+    """Describe why this provisional stream fill cannot book, or return None.
+
+    Pure description for the audit log; the booking decision itself stays in
+    confirm_stream_fill."""
+    if (provisional.source!='stream' or provisional.finality!='provisional'
+            or final.source!='rest_backfill' or final.finality!='final'):
+        return ('finality provisional(source=%s,finality=%s) final(source=%s,finality=%s)'
+            %(provisional.source,provisional.finality,final.source,final.finality))
+    mismatched=[]
+    for field in CONFIRM_FIELDS:
+        mine,theirs=getattr(provisional,field),getattr(final,field)
+        if mine!=theirs:mismatched.append('%s(%r!=%r)'%(field,mine,theirs))
+    if (provisional.order_client_id is not None
+            and provisional.order_client_id!=final.order_client_id):
+        mismatched.append('order_client_id(%r!=%r)'
+            %(provisional.order_client_id,final.order_client_id))
+    return ' '.join(mismatched) if mismatched else None
+
+
 def confirm_stream_fill(provisional, final):
     """Only native final REST evidence can enter the execution ledger."""
     if (provisional.source!='stream' or provisional.finality!='provisional'
             or final.source!='rest_backfill' or final.finality!='final'):
         raise AdapterError('BULK_STREAM_FILL_FINALITY_UNVERIFIED')
-    fields=('execution_key','account','market','exchange_order_id','trade_id','side',
-            'qty_base','price','fee_amount','fee_asset','is_maker','exchange_ts','source_seq')
-    if (any(getattr(provisional,k)!=getattr(final,k) for k in fields)
+    if (any(getattr(provisional,k)!=getattr(final,k) for k in CONFIRM_FIELDS)
             or provisional.order_client_id is not None and provisional.order_client_id!=final.order_client_id):
         raise AdapterError('BULK_STREAM_REST_FILL_CONFLICT')
     return final

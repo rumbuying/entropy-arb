@@ -21,6 +21,20 @@ PROTECTION_BLIND_KEY = 'protection-blind:'
 PROTECTION_BLIND_TOLERANCE_MS = 180_000
 # Watch-level blindness (the supervisor itself failed to evaluate a grid).
 PROTECTION_WATCH_BLIND_KEY = 'protection-watch-blind:'
+# Active stream-loss recovery (durable progress marker written by the
+# recovery scheduler). A recovery legitimately runs longer than the proof
+# window it interrupted — paced multi-market cancels and reconciliation —
+# and exiting at the carried deadline bumps the epoch the recovery then can
+# never satisfy (2026-11-05 10:57, g-2f8fd555: closed ~2 minutes into every
+# stream-gap recovery). The tolerance is bounded per recovery episode and
+# only applies while the scheduler keeps refreshing its marker; a stale
+# marker (dead scheduler, interrupted process, given-up recovery) enforces
+# the deadline unchanged, as does a grid the scheduler left in
+# NEEDS_ATTENTION. The native stop keeps resting on the venue throughout.
+RECOVERY_WATCH_KEY = 'recovery-watch:'
+RECOVERY_WATCH_SCHEMA = 'recovery-watch-v1'
+RECOVERY_PROGRESS_FRESH_MS = 120_000
+PROTECTION_RECOVERY_TOLERANCE_MS = 600_000
 
 
 class ProtectionLease:
@@ -351,8 +365,14 @@ class ProtectionWatchScheduler:
 
     async def tick(self):
         if self.closed:return
+        # `status` must be selected: the RECOVERING exemption below reads it
+        # from this row, and a row missing the column silently disabled the
+        # exemption — a grid whose recovery cancel was still in flight was
+        # exited on its stale lease (2026-11-05 10:57, g-2f8fd555: closed
+        # ~2 minutes into every stream-gap recovery because the guard never
+        # matched).
         rows=self.rt.store.read(lambda c:[dict(r) for r in c.execute(
-            "SELECT grid_id,account_id,market_key,epoch FROM grids WHERE desired_mode='ACTIVE' AND status IN ('STARTING','RUNNING','RECOVERING','NEEDS_ATTENTION')")])
+            "SELECT grid_id,account_id,market_key,epoch,status FROM grids WHERE desired_mode='ACTIVE' AND status IN ('STARTING','RUNNING','RECOVERING','NEEDS_ATTENTION')")])
         eligible={}
         for row in rows:
             gid=row['grid_id']
@@ -402,13 +422,14 @@ class ProtectionWatchScheduler:
             # No lease has ever been written and no stop is mid-dispatch:
             # activation owns this window.
             return
-        if code and 'status' in row.keys() and row['status'] in ('STARTING', 'RECOVERING'):
-            # An activation or recovery is in flight: it re-establishes the
-            # proof on its own schedule (multi-market paced reads make each
-            # attempt slow) and its reconcile either succeeds into a fresh
-            # lease or exits through its own fences. The native stop stays
-            # resting on the venue the whole time, so protection is never
-            # absent while the engine re-proves control.
+        if code and row.get('status') == 'RECOVERING' and self._recovery_in_flight(row):
+            # A stream-loss recovery is actively re-proving control (fresh
+            # durable marker from the recovery scheduler): its own bounded
+            # retry budget and fences own the window, and the recovery
+            # tolerance above bounds how long a carried proof may stay
+            # un-renewed. STARTING keeps the immediate local exit: the
+            # activation owns its own fences and the independent deadline
+            # must hold there.
             return
         if code:
             if not self._blind_tolerated(row,code):
@@ -430,6 +451,28 @@ class ProtectionWatchScheduler:
         policy=self.rt.service_coverage.policy(gid)
         self.next_attempt[gid]=self.clock()+(min(2,policy.max_seconds/3) if policy is not None else 2)
         self.tasks[gid]=(row['epoch'],asyncio.create_task(self.observe(row),name='grid-native-protection:'+gid))
+
+    def _recovery_in_flight(self,row):
+        """Durable progress signal from the stream-recovery scheduler.
+
+        The marker carries the recovery episode's epoch and two monotonic
+        timestamps: onset (first scheduler observation of this episode) and
+        updated (its latest tick). Tolerance applies only while the marker
+        names the current epoch, was refreshed recently, and the episode is
+        still inside the bounded recovery tolerance — anything else falls
+        through to the ordinary deadline enforcement."""
+        raw=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+            (RECOVERY_WATCH_KEY+row['grid_id'],)).fetchone())
+        if raw is None:return False
+        try:marker=json.loads(raw[0])
+        except (ValueError,TypeError):return False
+        now=int(self.clock()*1000)
+        return (isinstance(marker,dict) and marker.get('schema')==RECOVERY_WATCH_SCHEMA
+            and marker.get('grid_id')==row['grid_id'] and marker.get('epoch')==row['epoch']
+            and type(marker.get('onset_mono_ms')) is int and type(marker.get('updated_mono_ms')) is int
+            and 0<=marker['onset_mono_ms']<=marker['updated_mono_ms']<=now+1000
+            and now-marker['updated_mono_ms']<=RECOVERY_PROGRESS_FRESH_MS
+            and now-marker['onset_mono_ms']<=PROTECTION_RECOVERY_TOLERANCE_MS)
 
     def _blind_tolerated(self,row,code):
         """Tolerate a proof expiry or an unreadable proof during blindness.

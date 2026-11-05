@@ -393,6 +393,57 @@ def test_confirm_pending_scans_from_the_oldest_pending_fill_and_expires_stale_on
     asyncio.run(run())
 
 
+def test_conflicting_fill_is_quarantined_without_poisoning_the_confirm_scan(tmp_path):
+    """2026-11-05 10:55: one provisionally streamed fill whose REST evidence
+    mismatched raised out of confirm_pending every pass, aborting the scan
+    before the age-out branch, so the entry never retired, stream_gap never
+    cleared, and the account froze into recovery until the protection lease
+    expired and closed the grid. A conflict must now stay bounded to its own
+    entry: the healthy sibling still books, and the conflicting copy is
+    quarantined after CONFIRM_CONFLICT_RETRIES passes (the fills barrier
+    re-derives booked fills from native REST history, so dropping the
+    provisional copy cannot lose the fill)."""
+    async def run():
+        read=Read();st=Store.open(str(tmp_path/'conflict.sqlite'))
+        try:
+            venue=root(st,read);await venue.catalog_markets()
+            view=venue.market_venue(RULES.market_ref)
+            request=replace(REQUEST,account=venue._account.account_id)
+            await venue.journal.reserve(request,RULES,history_start_slot=100)
+            protocol=Protocol();allocated=venue.journal.get(request.client_id)
+            prepared=protocol.prepare(allocated['action'],allocated['nonce'])
+            await venue.journal.attach(request,prepared,protocol)
+            oid=prepared['order_id']
+            from entropy_arb.grid.adapters.bulk_stream import BulkStreamDecoder,CONFIRM_CONFLICT_RETRIES
+            d=BulkStreamDecoder(owner=OWNER,account=venue._account.account_id,network='mainnet',
+                reader_factory=lambda _:view.reader())
+            d.begin();d.ingest(frame(snapshot()))
+            event_conflicting=d.ingest(frame(ws_fill(orderId=oid)))
+            event_healthy=d.ingest(frame(ws_fill(orderId=oid,tradeId='101:9')))
+            conflicting,healthy=event_conflicting.execution,event_healthy.execution
+            await venue.ingest_events([event_conflicting,event_healthy])
+            native_conflict=fill(orderIdMaker=oid,orderIdTaker=oid,price='2300.20')  # price drifts vs the stream fill
+            native_healthy=fill(orderIdMaker=oid,orderIdTaker=oid,slot=101,sequence=9,tradeId='101:9')
+            read.history=history([native_healthy,native_conflict],startSlot=101)  # newest first
+            venue.stream_gap=False
+            await view.confirm_pending()
+            # The healthy sibling booked on the same pass the conflict was found.
+            booked=view.poll()
+            assert len(booked)==1 and booked[0].execution.trade_id=='101:9'
+            assert booked[0].execution.order_client_id==request.client_id
+            assert list(view._pending)==[conflicting.execution_key]
+            assert venue.stream_gap
+            for _ in range(CONFIRM_CONFLICT_RETRIES - 1):
+                await view.confirm_pending()
+                assert list(view._pending)==[conflicting.execution_key]
+            await view.confirm_pending()  # the pass that exhausts the retry budget
+            # Quarantined: the scan is no longer held hostage by the entry.
+            assert not view._pending
+            assert venue.stream_gap  # honest: the gap stays until recovery clears it
+        finally:st.close()
+    asyncio.run(run())
+
+
 def test_reader_bindings_are_cached_until_the_journal_changes(tmp_path):
     """The decoder constructs a reader per WS frame; each used to run two
     full LIKE scans over every intent ever placed (runtime_state grows

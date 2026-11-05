@@ -7,12 +7,14 @@ transport outages use backoff and never qualify an adapter for real trading.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
 
 from . import models, store
 from .adapters.base import AdapterError
+from .protection_watch import RECOVERY_WATCH_KEY, RECOVERY_WATCH_SCHEMA
 
 log = logging.getLogger("grid.stream_recovery")
 NETWORK_ERRORS = {"HL_TRANSPORT_UNCERTAIN", "HL_HTTP_408", "HL_HTTP_429", "HL_HTTP_500", "HL_HTTP_502", "HL_HTTP_503", "HL_HTTP_504"}
@@ -61,6 +63,7 @@ class StreamRecoveryScheduler:
         self.runtime, self.clock = runtime, clock
         self.concurrency = concurrency
         self.tasks, self.next_attempt, self.attempts = {}, {}, {}
+        self.marked = set()
         self.closed = False
 
     async def tick(self):
@@ -83,6 +86,13 @@ class StreamRecoveryScheduler:
                 del self.tasks[aid]
         rows = rt.store.read(lambda c: [dict(r) for r in c.execute(
             "SELECT grid_id,account_id,epoch FROM grids WHERE status='RECOVERING' AND desired_mode='ACTIVE'")])
+        # A durable per-episode progress marker: the protection watch reads it
+        # to tolerate a stale carried proof while this scheduler is actively
+        # re-proving the grid, and enforces the deadline unchanged once the
+        # marker goes stale (dead scheduler, interrupted process) or the
+        # episode leaves RECOVERING. A failed marker write only removes the
+        # tolerance — never grants it.
+        await self._mark_active(rows)
         # Retry deadlines also order eligible accounts. A repeatedly failing
         # oldest account must not monopolize every newly available slot.
         rows.sort(key=lambda row: self.next_attempt.get((row['grid_id'], row['epoch']), 0))
@@ -106,6 +116,50 @@ class StreamRecoveryScheduler:
                 self.tasks[aid] = asyncio.create_task(self._attempt_account(siblings, venue))
             else:
                 self.tasks[aid] = asyncio.create_task(self._attempt(row, venue))
+
+    async def _mark_active(self, rows):
+        """Refresh (or clear) the per-grid recovery-progress marker.
+
+        The onset survives within one grid epoch — retries keep the epoch —
+        so the protection watch can bound the whole episode; a newer epoch or
+        an unreadable old marker starts a fresh onset. Grids that left
+        RECOVERING have their markers deleted, so a later expiry in
+        NEEDS_ATTENTION enforces immediately."""
+        now = int(self.clock() * 1000)
+        active = {row['grid_id'] for row in rows}
+        stale = self.marked - active
+        self.marked = active
+        if stale:
+            await self.runtime.store.write(lambda c: c.executemany(
+                'DELETE FROM runtime_state WHERE key=?',
+                [(RECOVERY_WATCH_KEY + gid,) for gid in sorted(stale)]))
+        for row in rows:
+            gid, epoch = row['grid_id'], row['epoch']
+            def write(c):
+                raw = c.execute('SELECT value FROM runtime_state WHERE key=?',
+                                (RECOVERY_WATCH_KEY + gid,)).fetchone()
+                onset = None
+                if raw is not None:
+                    try:
+                        old = json.loads(raw[0])
+                        if (isinstance(old, dict) and old.get('schema') == RECOVERY_WATCH_SCHEMA
+                                and old.get('grid_id') == gid and old.get('epoch') == epoch
+                                and type(old.get('onset_mono_ms')) is int
+                                and 0 <= old['onset_mono_ms'] <= now + 1000):
+                            onset = old['onset_mono_ms']
+                    except (ValueError, TypeError):
+                        onset = None
+                if onset is None or onset > now:
+                    onset = now
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '
+                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                    (RECOVERY_WATCH_KEY + gid, json.dumps(dict(
+                        schema=RECOVERY_WATCH_SCHEMA, grid_id=gid, epoch=epoch,
+                        onset_mono_ms=onset, updated_mono_ms=now), sort_keys=True)))
+            try:
+                await self.runtime.store.write(write)
+            except Exception:
+                log.exception('recovery progress marker failed for %s', gid)
 
     def _current(self, row):
         current = self.runtime.lifecycle._grid(row["grid_id"])

@@ -388,3 +388,58 @@ def test_unacknowledged_lost_send_is_declared_absent_against_truncated_history(t
             assert state=='EXPIRED_EPOCH'
         finally:rt.close()
     asyncio.run(run())
+
+def test_declared_absence_certificate_is_reused_without_requerying_the_venue(tmp_path, monkeypatch):
+    """A declared-absent lost send was re-looked-up and re-declared on every
+    capture — one expired grid's g000000000194 spent a paced lookup and an
+    audit warning every pass for a day (2026-11-04/05). The durable
+    certificate must be reused (no venue lookup), while the basis keeps
+    listing the absence and the open-order/fold proofs still run fresh.
+    Absence itself stays transient: the certificate never upgrades the
+    journal row."""
+    async def run():
+        stack=build(monkeypatch,tmp_path);rt=stack.rt
+        try:
+            venue,gid=await create_and_start(stack,monkeypatch)
+            parent=venue
+            gid_cid='g000000000200';oid='7LkF5eszC1tPJzRBQq7rwSpiT4hKR6b7LkBdWJCo2s3'
+            await rt.journal.create_intent(grid_id=gid,cause_key='phantom-lost-send-2',revision=1,
+                level_index=2,side='buy',qty_base='0.00027892',price='76900',policy='post_only',
+                reduce_only=False,epoch=1,expected_epoch=1)
+            def plant(c):
+                c.execute("UPDATE order_intents SET client_id=?,state='UNKNOWN' WHERE cause_key='phantom-lost-send-2'",(gid_cid,))
+                evidence=dict(account=parent._account.account_id,client_id=gid_cid,
+                    action=dict(type='order',symbol='BTC-USD',is_buy=True,size='0.00027892',
+                        price='76900',reduce_only=False,iso=False,
+                        order_type=dict(tif='ALO',type='limit')),
+                    nonce=998,request_hash='b'*64,order_id=oid,history_start_slot=ANCHOR,
+                    state='MAY_HAVE_SENT')
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?)',
+                    (parent.journal._key(gid_cid),json.dumps(evidence)))
+            await rt.store.write(plant)
+            view=parent.market_venue(BTC_MARKET)
+            # reader() builds a fresh BulkBoundEvidenceReader per call, so the
+            # count has to wrap the class method, not one instance. The real
+            # venue fake already answers NOT_FOUND_TRANSIENT for a planted
+            # order that never reached its book.
+            from entropy_arb.grid.adapters.bulk_bound_read import BulkBoundEvidenceReader
+            original_lookup=BulkBoundEvidenceReader.lookup_many
+            lookups={'n':0}
+            async def counting(self,pairs,**kw):
+                for cid,_ in pairs:
+                    if cid==gid_cid:lookups['n']+=1
+                return await original_lookup(self,pairs,**kw)
+            monkeypatch.setattr(BulkBoundEvidenceReader,'lookup_many',counting)
+            report=await rt.recover(gid,restore=False)
+            assert report['ok'] is True,report
+            assert gid_cid in (report.get('declared_absences') or [])
+            first=lookups['n']
+            assert first>=1,'the lost send must have been looked up once'
+            from entropy_arb.grid.adapters.bulk_recovery_scope import capture_basis
+            await capture_basis(parent)
+            assert lookups['n']==first,'a certified absence must not be re-queried'
+            basis=rt.store.read(lambda c:read_basis(c,venue))
+            assert basis['declared_absences'][0]['client_id']==gid_cid
+            assert basis['declared_absences'][0]['proof_state']=='NOT_FOUND_TRANSIENT'
+        finally:rt.close()
+    asyncio.run(run())

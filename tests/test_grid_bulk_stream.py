@@ -13,7 +13,8 @@ import pytest
 from entropy_arb.grid.adapters.base import AdapterError
 from entropy_arb.grid.adapters.bulk_read import BulkEvidenceReader
 from entropy_arb.grid.adapters.bulk_stream import (
-    BulkAccountStream, BulkStreamDecoder, BulkStreamEvent, confirm_stream_fill, WS_ORIGINS)
+    BulkAccountStream, BulkStreamDecoder, BulkStreamEvent, confirm_stream_fill,
+    stream_fill_conflict, WS_ORIGINS)
 from test_grid_bulk import OWNER, OTHER, OID, NS, RULES, reader, fill, open_order
 
 
@@ -66,6 +67,19 @@ def test_stream_and_rest_share_identity_but_use_different_side_semantics(maker,o
 def test_unmatched_or_provisional_evidence_cannot_book_a_stream_execution(patch):
     p=decoder().ingest(frame(ws_fill())).execution;final=reader().fill(fill())
     with pytest.raises(AdapterError):confirm_stream_fill(p,replace(final,**patch))
+
+
+def test_stream_fill_conflict_names_the_diverging_fields_for_the_audit_log():
+    """The confirm loop logged only error_type=AdapterError for a day-long
+    production outage (2026-11-05); the diff helper carries the actual
+    divergence so the log can answer which side lied."""
+    p=decoder().ingest(frame(ws_fill())).execution;final=reader().fill(fill())
+    assert stream_fill_conflict(p,final) is None
+    drifted=replace(final,price='2300.20',qty_base='0.11')
+    diff=stream_fill_conflict(p,drifted)
+    assert 'price' in diff and 'qty_base' in diff and '2300.20' in diff
+    provisional=replace(final,finality='provisional')
+    assert 'finality' in stream_fill_conflict(p,provisional)
 
 
 def test_duplicate_fill_conflict_and_slot_gaps_are_not_false_missing_execution():

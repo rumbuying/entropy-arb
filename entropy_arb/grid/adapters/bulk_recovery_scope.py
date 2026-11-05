@@ -134,6 +134,33 @@ def _cached_terminal(row):
         and isinstance(resolution.get('cumulative_qty'), str))
 
 
+def _declared_absence_certificate(parent, cid):
+    """A prior capture's durably declared absence for one lost-send original.
+
+    Its per-original lookup has returned NOT_FOUND_TRANSIENT on every
+    capture, and re-querying cannot change that answer class. The
+    certificate never upgrades the journal row — absence stays transient
+    there (bulk_order_evidence) — and it carries no fill economics, so the
+    certified open-orders snapshot and the counter folds in capture_basis
+    remain the live proofs on every reuse: an order that ever actually
+    rested or filled still refuses."""
+    row = parent.journal.store.read(lambda c: c.execute(
+        'SELECT value FROM runtime_state WHERE key=?',
+        ('bulk-declared-absence:' + parent.journal.scope + ':' + cid,)).fetchone())
+    if row is None:
+        return None
+    try:
+        cert = json.loads(row[0])
+    except (ValueError, TypeError):
+        return None
+    if (not isinstance(cert, dict) or cert.get('schema') != 'bulk-declared-absence-v1'
+            or cert.get('client_id') != cid or cert.get('account') != parent._account.account_id
+            or cert.get('evidence') != 'MAY_HAVE_SENT' or cert.get('proof_state') != 'NOT_FOUND_TRANSIENT'
+            or not isinstance(cert.get('market'), str)):
+        return None
+    return cert
+
+
 def _market_key(parent, coin):
     return models.MarketIdentity(parent.deployment, coin, '', 'linear_perp', 'USDC').market_key
 
@@ -202,6 +229,20 @@ async def capture_basis(parent, *, max_originals=256):
                 # keeps its root OID; a filled limit keeps its own).
                 oid = row.get('terminal_resolution', {}).get('native_order_id', row['order_id'])
                 unproven[row['client_id']] = (oid, row)
+        # A prior capture's declared absence is reused instead of re-queried:
+        # re-declaring the same lost send on every capture re-spent a paced
+        # lookup and re-logged the warning every pass for a day
+        # (2026-11-04/05, g000000000194 — an expired grid's original). The
+        # open-orders snapshot and the counter folds below still run fresh
+        # and refuse if the order ever actually rested or filled.
+        declared_known = {}
+        for cid in sorted(unproven):
+            cert = _declared_absence_certificate(parent, cid)
+            if cert is not None:
+                declared_known[cid] = (unproven[cid][0],
+                    dict(market=cert['market'], evidence=cert['evidence'],
+                         proof_state=cert['proof_state']))
+                del unproven[cid]
         if len(unproven) > max_originals:
             raise AdapterError('BULK_SCOPED_BASIS_CAPACITY_EXCEEDED')
         if len({oid for oid, _ in unproven.values()}) != len(unproven):
@@ -291,6 +332,10 @@ async def capture_basis(parent, *, max_originals=256):
                     cumulative_qty=proof.cumulative_qty, cumulative_known=proof.cumulative_known,
                     parked=parked, market=view.market.market_key,
                     declared_absence=declared_absence)
+        for cid, (_, info) in declared_known.items():
+            observed[cid] = dict(state=info['proof_state'], terminal_state=None,
+                cumulative_qty='0', cumulative_known=False, parked=False,
+                market=info['market'], declared_absence=True)
         # Positions per market: native vs the account's durable ledger, both ways.
         ledger = {}
         def positions(c):
@@ -325,10 +370,11 @@ async def capture_basis(parent, *, max_originals=256):
             if original is None or not order_matches(row, _order_view(original)):
                 raise AdapterError('BULK_SCOPED_BASIS_FOREIGN_OPEN_ORDER')
         for cid, item in observed.items():
+            oid = unproven[cid][0] if cid in unproven else declared_known[cid][0]
             if item['state'] == 'FOUND_OPEN' and not item['parked']:
-                if unproven[cid][0] not in seen_oids:
+                if oid not in seen_oids:
                     raise AdapterError('BULK_SCOPED_BASIS_ACTIVE_ORDER_MISSING')
-            if item.get('declared_absence') and unproven[cid][0] in seen_oids:
+            if item.get('declared_absence') and oid in seen_oids:
                 # A declared-absent original cannot be resting natively.
                 raise AdapterError('BULK_SCOPED_BASIS_DECLARED_OPEN_CONFLICT')
         # Booked economics: grid-owned executions and staged positive payments.
@@ -395,7 +441,8 @@ async def capture_basis(parent, *, max_originals=256):
             parked_originals=sum(1 for item in observed.values() if item['parked']),
             declared_absences=[dict(client_id=cid, market=info['market'],
                 evidence=info['evidence'], proof_state=info['proof_state'])
-                for cid, info in sorted(declared.items())],
+                for cid, info in sorted({**{cid: info for cid, (_, info) in declared_known.items()},
+                                         **declared}.items())],
             markets=markets, pending=False,
             economics=dict(
                 fees=dict(booked_count=len(booked_fees), fold=repr(fees_fold), target=repr(fees_target),
@@ -421,6 +468,7 @@ async def capture_basis(parent, *, max_originals=256):
                 payload={'fingerprint': value['fingerprint'], 'originals': value['originals'],
                          'open_originals': value['open_originals'], 'markets': len(value['markets']),
                          'declared_absences': len(declared),
+                         'reused_absences': len(declared_known),
                          'global_coverage_advanced': False})
             for cid, info in sorted(declared.items()):
                 c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '

@@ -375,3 +375,44 @@ def test_unreadable_proof_is_pending_inside_the_blind_window(tmp_path,monkeypatc
         finally:
             await watcher.close();rt.close()
     asyncio.run(run())
+
+def test_recovering_grid_survives_a_stale_lease_while_recovery_progresses(tmp_path,monkeypatch):
+    """2026-11-05 10:57: a grid whose stream-loss recovery was still cancelling
+    orders was exited ~2 minutes into the recovery because the watch tick's
+    row never carried `status`, so no in-flight exemption ever matched and the
+    stale lease ran the exit contract — bumping the epoch the recovery could
+    then never satisfy. While the recovery scheduler's durable progress
+    marker is fresh and inside the episode tolerance, a stale lease must hold;
+    a stale marker must enforce the deadline unchanged."""
+    from entropy_arb.grid.protection_watch import (RECOVERY_WATCH_KEY, RECOVERY_WATCH_SCHEMA)
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        watcher=ProtectionWatchScheduler(rt,clock=lambda:mono[0]/1000)
+        try:
+            def to_recovering(c):
+                c.execute("UPDATE grids SET status='RECOVERING',epoch=1 WHERE grid_id=?",(gid,))
+            await rt.store.write(to_recovering)
+            def plant_marker(c):
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?)',
+                    (RECOVERY_WATCH_KEY+gid,json.dumps(dict(schema=RECOVERY_WATCH_SCHEMA,
+                        grid_id=gid,epoch=1,onset_mono_ms=mono[0],updated_mono_ms=mono[0]),
+                        sort_keys=True)))
+            await rt.store.write(plant_marker)
+            async def offline(kind):
+                if kind=='fullAccount':raise TimeoutError()
+            native.on_read=offline  # verify cannot renew; the lease goes stale
+            clock[0]+=PROOF_MAX_SECONDS*1000+1;mono[0]+=PROOF_MAX_SECONDS*1000+1
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status']=='RECOVERING'
+            assert rt.store.read(lambda c:c.execute("SELECT 1 FROM runtime_state WHERE key=?",
+                ('protection-exit:'+gid,)).fetchone()) is None
+            # The scheduler went away: a stale progress marker enforces again.
+            def stale_marker(c):
+                c.execute("UPDATE runtime_state SET value=json_set(value,'$.updated_mono_ms',0) "
+                          "WHERE key=?",(RECOVERY_WATCH_KEY+gid,))
+            await rt.store.write(stale_marker)
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+        finally:
+            await watcher.close();rt.close()
+    asyncio.run(run())

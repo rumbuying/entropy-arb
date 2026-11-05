@@ -19,7 +19,7 @@ from .base import AccountSnapshot,AdapterError,CancelResult,GridVenue,SubmitResu
 from .bulk_execution import BulkExecution
 from .bulk_market import BulkMarketData,symbol
 from .bulk_read import BulkEvidenceReader,ns_iso
-from .bulk_stream import BulkAccountStream,confirm_stream_fill
+from .bulk_stream import BulkAccountStream,CONFIRM_CONFLICT_RETRIES,confirm_stream_fill,stream_fill_conflict
 from .bulk_wire import BulkIntentJournal,BulkWireRules,base58,uint,text,native_decimal
 from .observation import ORIGINS
 
@@ -297,7 +297,10 @@ class BulkAccountVenue(GridVenue):
                     if view._pending:await view.confirm_pending()
             except asyncio.CancelledError:raise
             except Exception as error:
-                log.warning('BULK_CONFIRM_LOOP_FAILED error_type=%s',type(error).__name__)
+                # The type alone cannot be triaged (2026-11-05: a day-long
+                # loop failure was logged as bare "AdapterError" and the
+                # actual code stayed unknown); always carry the message.
+                log.warning('BULK_CONFIRM_LOOP_FAILED error=%r',error)
                 self._state.gap=True
             try:await asyncio.wait_for(stop.wait(),timeout=1)
             except TimeoutError:pass
@@ -323,7 +326,7 @@ class BulkGridVenue(GridVenue):
         self.market=models.MarketIdentity.from_dict(dict(deployment=self.deployment,native_instrument_id=market_ref.split('|')[2],dex='',product_type='linear_perp',settlement_asset='USDC'))
         self.symbol=self.market.native_instrument_id;self.rules=None;self.wire_rules=None
         self.credential_ref=parent.credential_ref;self.clock_ms=parent.clock_ms
-        self._events=[];self._pending={};self._execution=None;self._fixed_backend=None
+        self._events=[];self._pending={};self._conflicts={};self._execution=None;self._fixed_backend=None
 
     def native_protection_backend(self,runtime):
         from .bulk_protection_manager import BulkProtectionManager
@@ -651,8 +654,8 @@ class BulkGridVenue(GridVenue):
             start_slot=min(int(exec.trade_id.split(':')[0]) for exec in self._pending.values())
             window=await self.reader().history('fills',start_slot=start_slot)
         except Exception as error:
-            log.warning('BULK_CONFIRM_PENDING_FAILED error_type=%s pending=%s',
-                type(error).__name__,len(self._pending))
+            log.warning('BULK_CONFIRM_PENDING_FAILED error=%r pending=%s',
+                error,len(self._pending))
             parent.stream_gap=True;return
         final={e.execution_key:e for e in window.records}
         if not window.complete:
@@ -661,13 +664,38 @@ class BulkGridVenue(GridVenue):
             parent.stream_gap=True
         for key,event in list(self._pending.items()):
             if key in final:
-                confirmed=confirm_stream_fill(event,final[key])
+                try:
+                    confirmed=confirm_stream_fill(event,final[key])
+                except AdapterError as error:
+                    # One conflicting fill must not abort the whole scan
+                    # (2026-11-05: the raised error interrupted this loop
+                    # before the age-out branch every pass, the conflicting
+                    # entry never retired, stream_gap never cleared, and the
+                    # account froze into recovery until the protection lease
+                    # expired and closed the grid). The mismatch is
+                    # deterministic, so the entry is quarantined after
+                    # CONFIRM_CONFLICT_RETRIES passes; the fills barrier
+                    # re-derives booked fills from native REST history, so
+                    # dropping the provisional copy cannot lose the fill.
+                    parent.stream_gap=True
+                    attempts=self._conflicts.get(key,0)+1
+                    self._conflicts[key]=attempts
+                    if attempts>CONFIRM_CONFLICT_RETRIES:
+                        del self._pending[key];self._conflicts.pop(key,None)
+                        log.warning('BULK_CONFIRM_PENDING_QUARANTINED key=%s error=%r attempts=%s',
+                            key,error,attempts)
+                    else:
+                        log.warning('BULK_CONFIRM_PENDING_CONFLICT key=%s error=%r diff=%s attempts=%s',
+                            key,error,stream_fill_conflict(event,final[key]),attempts)
+                    continue
+                self._conflicts.pop(key,None)
                 if confirmed.order_client_id is None:
                     parent.stream_gap=True
                     continue
                 self._events.append(VenueEvent('fill',execution=confirmed))
                 del self._pending[key]
             else:
+                self._conflicts.pop(key,None)
                 from .bulk_stream import CONFIRM_PENDING_TTL_SEC
                 age=datetime.now(timezone.utc).timestamp()-models.parse_iso_ts(event.received_ts,'confirm-pending').timestamp()
                 if age>CONFIRM_PENDING_TTL_SEC:
@@ -679,7 +707,7 @@ class BulkGridVenue(GridVenue):
                     # 1024 buffer overflow tripped the stream (recovery then
                     # re-books it or the ledger already holds it).
                     del self._pending[key]
-                    log.warning('BULK_CONFIRM_PENDING_EXPIRED key_age_s=%.0f',age)
+                    log.warning('BULK_CONFIRM_PENDING_EXPIRED key=%s age_s=%.0f',key,age)
     def poll(self):
         events,self._events=self._events,[]
         return events
