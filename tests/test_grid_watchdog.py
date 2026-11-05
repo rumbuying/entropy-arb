@@ -245,3 +245,18 @@ def test_unconsumed_marker_survives_an_intermediate_startup_failure(tmp_path,mon
             assert rt.lifecycle._grid(gid)['status']=='STOPPING'
         finally:rt.close()
     asyncio.run(run())
+
+
+def test_stale_after_is_configurable_for_slow_read_deployments(tmp_path):
+    """--stale-after must reach RuntimeWatchdog. The default (5s) restarted
+    a live worker whose paced recovery reconcile passes ran 27-35s
+    (2026-11-05 22:41, g-551c9890) and the restart protective-closed the
+    grid; bulk now deploys the watchdog with a timeout-aligned budget."""
+    from entropy_arb.grid.watchdog import build_arg_parser
+    args=build_arg_parser().parse_args(['--root',str(tmp_path),'--stale-after','60',
+        '--manager','systemd','--unit','entropy-grid-worker@bulk.service'])
+    assert args.stale_after==60
+    assert RuntimeWatchdog(args.root,manager=args.manager,unit=args.unit,
+        stale_after=args.stale_after).stale_after==60
+    defaults=build_arg_parser().parse_args(['--root',str(tmp_path)])
+    assert defaults.stale_after==5

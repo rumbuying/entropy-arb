@@ -275,13 +275,25 @@ class RuntimeWatchdog:
         return self.save('restarted' if changed else 'instance_changed',target_pid=current['pid'])
 
 
-def main():
+def build_arg_parser():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root',required=True)
     parser.add_argument('--once',action='store_true')
     parser.add_argument('--manager',choices=('auto','launchd','systemd','systemd-user'),default='auto')
     parser.add_argument('--unit',help='systemd unit owning the runtime heartbeat; defaults to the HL grid unit')
-    args=parser.parse_args();watchdog=RuntimeWatchdog(args.root,manager=args.manager,unit=args.unit)
+    parser.add_argument('--stale-after',type=float,default=5,
+        help='seconds of heartbeat silence before the runtime counts as stalled. '
+             'The worker publishes between supervision ticks; deployments whose '
+             'steps legitimately run on paced venue reads should size this above '
+             'the read timeout (LOOKUP_TIMEOUT_SEC) instead of restarting live '
+             'recoveries (2026-11-05: 5s vs 27-35s reconcile passes killed the '
+             'worker mid-recovery and the restart protective-closed the grid).')
+    return parser
+
+
+def main():
+    args=build_arg_parser().parse_args()
+    watchdog=RuntimeWatchdog(args.root,manager=args.manager,unit=args.unit,stale_after=args.stale_after)
     previous=None
     while True:
         try:result=watchdog.tick()
