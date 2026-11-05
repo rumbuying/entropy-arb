@@ -268,6 +268,91 @@ def test_missing_account_adapter_cannot_hide_persisted_fixed_protection_at_start
     asyncio.run(run())
 
 
+def _reopen(tmp_path):
+    return GridRuntime.open(str(tmp_path/'bulk-fixed.sqlite'),execution_mode='production')
+
+
+def test_valid_carried_lease_resumes_into_recovery_instead_of_restart_exit(tmp_path,monkeypatch):
+    """A restart must not protective-close a grid whose fixed stop was
+    verified resting moments before the process disappeared.
+
+    2026-11-05: every deploy or watchdog restart ran close_interrupted,
+    which request_exit(PROTECTION_SERVICE_RESTART)-ed every active bulk
+    grid with history — eight closes, one per restart. The lease binds to
+    the proving session, so check_lease still refuses it for sends; the
+    carried read only justifies resuming into bounded recovery."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,*_=parts
+        lease=snapshot(rt,gid)
+        assert lease['schema']=='bulk-fixed-native-v1'
+        rt.close()
+        rt=_reopen(tmp_path)
+        try:
+            assert not rt.venues  # close_interrupted runs before any venue loads
+            # The session fence is untouched: sends still refuse the old proof.
+            assert rt.protection_lease.check(gid,now_ms=clock[0])=='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED'
+            # The fixture clocks differ from the real system clocks; the
+            # carried decision reads the same injectable sources close_interrupted uses.
+            rt.protection_lease._mono_now=lambda:mono[0]
+            rt.protection_lease._wall_now=lambda:clock[0]
+            assert rt.protection_lease.carried_fixed_proof(gid) is True
+            await asyncio.wait_for(rt.protection_lease.close_interrupted(),.2)
+            grid=rt.lifecycle._grid(gid)
+            assert grid['status']=='RECOVERING' and grid['desired_mode']=='ACTIVE'
+            exit_row=rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+                ('protection-exit:'+gid,)).fetchone())
+            assert exit_row is None
+        finally:rt.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('patch',[
+    dict(deadline_ms=1,deadline_mono_ms=1),                      # expired on both clocks
+    dict(epoch=99),                                              # proof for a moved epoch
+    dict(config_hash='other'),                                   # config changed since the proof
+    dict(capacity_qty='0.0000001'),                              # capacity no longer covers exposure
+    dict(whole_position=True),                                   # not the fixed-quantity schema shape
+    dict(observed_mono_ms=10**18),                               # mono timestamps disagree with wall ones
+])
+def test_expired_or_forged_carried_lease_still_exits_at_startup(tmp_path,monkeypatch,patch):
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,*_=parts
+        lease=snapshot(rt,gid)|patch
+        await rt.store.write(lambda c:c.execute('UPDATE runtime_state SET value=? WHERE key=?',
+            (json.dumps(lease),'native-protection-lease:'+gid)))
+        rt.close()
+        rt=_reopen(tmp_path)
+        try:
+            rt.protection_lease._mono_now=lambda:mono[0]
+            rt.protection_lease._wall_now=lambda:clock[0]
+            assert rt.protection_lease.carried_fixed_proof(gid) is False
+            await asyncio.wait_for(rt.protection_lease.close_interrupted(),.2)
+            grid=rt.lifecycle._grid(gid)
+            assert grid['status']=='STOPPING' and grid['desired_mode']=='STOPPED'
+            exit_row=rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+                ('protection-exit:'+gid,)).fetchone())
+            assert json.loads(exit_row[0])['reason']=='PROTECTION_SERVICE_RESTART'
+        finally:rt.close()
+    asyncio.run(run())
+
+
+def test_carried_resume_survives_a_graceful_shutdown_recovering_status(tmp_path,monkeypatch):
+    """A grid already RECOVERING at the interruption resumes the same way."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,*_=parts
+        await rt.lifecycle._set_status(gid,'RECOVERING')
+        rt.close()
+        rt=_reopen(tmp_path)
+        try:
+            rt.protection_lease._mono_now=lambda:mono[0]
+            rt.protection_lease._wall_now=lambda:clock[0]
+            await asyncio.wait_for(rt.protection_lease.close_interrupted(),.2)
+            grid=rt.lifecycle._grid(gid)
+            assert grid['status']=='RECOVERING' and grid['desired_mode']=='ACTIVE'
+        finally:rt.close()
+    asyncio.run(run())
+
+
 def test_lost_independent_guardian_requests_exit_without_waiting_for_native_read(tmp_path,monkeypatch):
     async def run():
         parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts

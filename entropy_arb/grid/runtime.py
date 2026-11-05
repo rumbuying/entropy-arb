@@ -1453,11 +1453,19 @@ class GridRuntime:
                 window=self.service_coverage.snapshot(gid)
                 if (window and window['phase']=='rearming' and row['desired_mode']=='ACTIVE'
                         and row['status']!='CLOSED'):
-                    # A process interruption cannot turn an unprotected
-                    # window into a fresh activation with a renewed budget.
-                    await self.protection.request_exit(gid,expected_epoch=row['epoch'],
-                        reason='PROTECTION_SERVICE_RESTART')
-                    continue
+                    if (row['status'] in ('STARTING','RUNNING','RECOVERING')
+                            and self.protection_lease.carried_fixed_proof(gid)):
+                        # Same carried-proof resume as close_interrupted: the
+                        # window is still rearming, but the fixed stop was
+                        # verified resting moments before the interruption.
+                        await self.lifecycle._set_status(gid,'RECOVERING')
+                        log.info('carried fixed-stop lease still valid; restart resumes into recovery: %s',gid)
+                    else:
+                        # A process interruption cannot turn an unprotected
+                        # window into a fresh activation with a renewed budget.
+                        await self.protection.request_exit(gid,expected_epoch=row['epoch'],
+                            reason='PROTECTION_SERVICE_RESTART')
+                        continue
                 if row["status"] != "CLOSED":
                     pending = self.store.read(lambda c: c.execute(
                         "SELECT op_type FROM operations WHERE grid_id=? AND status IN ('running','queued')", (gid,)).fetchone())

@@ -197,8 +197,8 @@ def test_startup_persistence_error_does_not_skip_other_grid(tmp_path, monkeypatc
             original_read = rt.store.read
             def read(fn):
                 value = original_read(fn)
-                if isinstance(value, list) and value and isinstance(value[0], dict) and set(value[0]) == {'grid_id','epoch'}:
-                    return [{'grid_id':'broken','epoch':1}] + value
+                if isinstance(value, list) and value and isinstance(value[0], dict) and set(value[0]) == {'grid_id','epoch','status'}:
+                    return [{'grid_id':'broken','epoch':1,'status':'RUNNING'}] + value
                 return value
             rt.store.read = read
             original_backend = rt.protection_lease.backend

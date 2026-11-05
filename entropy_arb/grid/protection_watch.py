@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import time
 from decimal import Decimal
 
 from . import models
@@ -84,6 +85,82 @@ class ProtectionLease:
         row=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
             ('native-protection-lease:'+gid,)).fetchone())
         return json.loads(row[0]) if row else None
+
+    @staticmethod
+    def _mono_now():return time.monotonic_ns()//1_000_000
+
+    @staticmethod
+    def _wall_now():return int(time.time()*1000)
+
+    def carried_fixed_proof(self,gid,*,mono_ms=None,now_ms=None):
+        """DB-only restart decision for the bulk fixed native stop.
+
+        A lease binds to the session that proved it, so a fresh process's
+        check_lease refuses it by design — that fence protects SEND
+        authorization and stays untouched. This read re-derives, without the
+        session field and without any venue I/O, whether the fixed stop was
+        independently verified resting moments before the process
+        disappeared; if so a restart may resume the grid into bounded
+        recovery (reconcile plus a fresh activation re-prove everything with
+        new venue evidence before any send) instead of protective-closing it.
+        Closing here made every deploy or watchdog restart protective-close
+        every live bulk grid (2026-11-05: eight closes, one per restart;
+        g-551c9890's stop had been verified resting 66s before the kill).
+
+        The exact PROOF_MAX_SECONDS arithmetic is deliberately not enforced
+        here: the deploy override is venue-specific, close_interrupted runs
+        before it, and this decision authorizes no sends. A bounded sanity
+        cap keeps a forged deadline from extending the resume window; the
+        recovery tolerance bounds it regardless.
+        """
+        CARRIED_PROOF_SANITY_MS=600_000
+        mono_ms=self._mono_now() if mono_ms is None else mono_ms
+        now_ms=self._wall_now() if now_ms is None else now_ms
+        grid=self.rt.lifecycle._grid(gid)
+        # STARTING included: the lease itself proves the activation's fixed
+        # stop landed and was verified OPEN (save() runs only with
+        # independently queried OPEN proofs) — the activation was past its
+        # protection step. Without a valid lease STARTING still exits below,
+        # unchanged: an interrupted submit with no proof owns nothing here.
+        if (grid['status'] not in ('STARTING','RUNNING','RECOVERING')
+                or grid['desired_mode']!='ACTIVE'):return False
+        if not self.required(gid):return False
+        row=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+            ('native-protection-lease:'+gid,)).fetchone())
+        if not row:return False
+        try:lease=json.loads(row[0])
+        except (ValueError,TypeError):return False
+        if (not isinstance(lease,dict) or lease.get('schema')!='bulk-fixed-native-v1'
+                or lease.get('whole_position') is not False):return False
+        try:
+            config=self.rt.store.read(lambda c:self.rt.service_coverage.transaction_config(c,gid))
+        except Exception:return False
+        if (lease.get('epoch')!=grid['epoch'] or lease.get('config_hash')!=config.config_hash
+                or lease.get('account')!=config.account_ref or lease.get('market')!=config.market_ref):
+            return False
+        stamps=(mono_ms,now_ms,lease.get('confirmed_from_ms'),lease.get('observed_ms'),lease.get('deadline_ms'),
+            lease.get('confirmed_from_mono_ms'),lease.get('observed_mono_ms'),lease.get('deadline_mono_ms'))
+        if any(type(x) is not int for x in stamps):return False
+        if not lease['confirmed_from_ms']<=lease['observed_ms']<=now_ms<lease['deadline_ms']:return False
+        if not lease['confirmed_from_mono_ms']<=lease['observed_mono_ms']<=mono_ms<lease['deadline_mono_ms']:return False
+        if (lease['deadline_ms']-lease['confirmed_from_ms']>CARRIED_PROOF_SANITY_MS
+                or lease['deadline_mono_ms']-lease['confirmed_from_mono_ms']>CARRIED_PROOF_SANITY_MS):return False
+        def exposure(c):
+            owned=Inventory(self.rt.store,gid).net_position(c)
+            pending=c.execute("SELECT side,qty_base FROM order_intents WHERE grid_id=? AND reduce_only=0 "
+                "AND state IN ('ACCEPTED','OPEN','PARTIAL','UNKNOWN','DISPATCHING','CANCEL_REQUESTED','CANCEL_PENDING')",
+                (gid,)).fetchall()
+            return owned,pending
+        owned,pending=self.rt.store.read(exposure)
+        try:
+            bound=Decimal(owned)
+            if bound<0:return False
+            for order in pending:
+                if order['side']!='buy':return False
+                bound+=Decimal(order['qty_base'])
+            if bound>Decimal(lease['capacity_qty']):return False
+        except Exception:return False
+        return True
 
     def save(self,c,gid,*,epoch,proofs,started_ms,now_ms):
         """Called only with independently queried OPEN proofs for every side."""
@@ -268,7 +345,7 @@ class ProtectionLease:
 
     async def close_interrupted(self):
         """Persist exit before startup can wait on any account/venue request."""
-        rows=self.rt.store.read(lambda c:[dict(r) for r in c.execute("SELECT grid_id,epoch FROM grids "
+        rows=self.rt.store.read(lambda c:[dict(r) for r in c.execute("SELECT grid_id,epoch,status FROM grids "
             "WHERE desired_mode='ACTIVE' AND status IN ('STARTING','RUNNING','RECOVERING','NEEDS_ATTENTION')")])
         failures=[]
         for row in rows:
@@ -277,6 +354,13 @@ class ProtectionLease:
                 backend=self.backend(gid)
                 if (self.rt.service_coverage.policy(gid) is None and not self.fixed_protection(gid)
                         and not (backend is not None and backend.watches(gid))):continue
+                if row['status'] in ('STARTING','RUNNING','RECOVERING') and self.carried_fixed_proof(gid):
+                    # The fixed stop was verified resting moments before the
+                    # interruption; bounded recovery and the fresh activation
+                    # re-prove it with new venue evidence before any send.
+                    await self.rt.lifecycle._set_status(gid,'RECOVERING')
+                    log.info('carried fixed-stop lease still valid; restart resumes into recovery: %s',gid)
+                    continue
                 window=self.rt.service_coverage.snapshot(gid)
                 required=self.required(gid) or bool(window and window['phase']=='rearming')
             except Exception:
