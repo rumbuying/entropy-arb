@@ -127,11 +127,25 @@ def _claimed_for_send(row):
 
 
 def _cached_terminal(row):
-    resolution = row.get('terminal_resolution') or {}
-    return (resolution.get('state') == 'FOUND_TERMINAL'
-        and resolution.get('terminal_state') in ('FILLED', 'CANCELED', 'REJECTED')
-        and resolution.get('cumulative_known') is True
-        and isinstance(resolution.get('cumulative_qty'), str))
+    """A durably cached positive terminal result for one original.
+
+    Two equivalent certificates exist. ``terminal_resolution`` is written by
+    the stop-identity resolver (native stops only); ``native_evidence`` is
+    written by the bound per-original lookup recorder for every order kind
+    (bulk_order_evidence). Ignoring the latter classified every proven
+    entry order as unproven forever, so the account's post-baseline
+    originals grew past the capture capacity and the scoped basis refused —
+    the closeout could then never reconcile (2026-11-05 19:00,
+    FILL_HISTORY_TRUNCATED loop with BULK_SCOPED_BASIS_CAPACITY_EXCEEDED:
+    232 cached certificates ignored, 45 originals actually unproven)."""
+    for source in ('terminal_resolution','native_evidence'):
+        cached=row.get(source) or {}
+        if (cached.get('state')=='FOUND_TERMINAL'
+                and cached.get('terminal_state') in ('FILLED','CANCELED','REJECTED')
+                and cached.get('cumulative_known') is True
+                and isinstance(cached.get('cumulative_qty'),str)):
+            return True
+    return False
 
 
 def _declared_absence_certificate(parent, cid):

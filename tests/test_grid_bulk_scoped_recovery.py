@@ -443,3 +443,57 @@ def test_declared_absence_certificate_is_reused_without_requerying_the_venue(tmp
             assert basis['declared_absences'][0]['proof_state']=='NOT_FOUND_TRANSIENT'
         finally:rt.close()
     asyncio.run(run())
+
+def test_cached_native_evidence_skips_the_per_original_lookup(tmp_path, monkeypatch):
+    """A bound lookup's positive terminal result is durably recorded as
+    native_evidence on the journal original (bulk_order_evidence) — but the
+    capture's cached-terminal fast path only read terminal_resolution, the
+    stop resolver's stop-only certificate. Every proven entry order therefore
+    stayed unproven forever: the post-baseline set grew past the capture
+    capacity (277 vs 256 on 2026-11-05 19:00), the scoped basis refused with
+    BULK_SCOPED_BASIS_CAPACITY_EXCEEDED and the closeout deadlocked behind
+    FILL_HISTORY_TRUNCATED. native_evidence must count as cached."""
+    async def run():
+        stack=build(monkeypatch,tmp_path);rt=stack.rt
+        try:
+            venue,gid=await create_and_start(stack,monkeypatch)
+            parent=venue
+            cid='g000000000300';oid='7LkF5eszC1tPJzRBQq7rwSpiT4hKR6b7LkBdWJCo5a1'
+            await rt.journal.create_intent(grid_id=gid,cause_key='already-proven-entry',revision=1,
+                level_index=1,side='buy',qty_base='0.00027892',price='76900',policy='post_only',
+                reduce_only=False,epoch=1,expected_epoch=1)
+            def plant(c):
+                c.execute("UPDATE order_intents SET client_id=?,state='CANCELED' WHERE cause_key='already-proven-entry'",(cid,))
+                evidence=dict(account=parent._account.account_id,client_id=cid,
+                    owner=parent.owner,network=parent.network,
+                    action=dict(type='order',symbol='BTC-USD',is_buy=True,size='0.00027892',
+                        price='76900',reduce_only=False,iso=False,
+                        order_type=dict(tif='ALO',type='limit')),
+                    nonce=997,request_hash='d'*64,order_id=oid,history_start_slot=ANCHOR,
+                    state='ACK_ACCEPTED',
+                    native_evidence=dict(state='FOUND_TERMINAL',native_order_id=oid,
+                        terminal_state='CANCELED',native_status='canceled',
+                        cumulative_qty='0',cumulative_known=True,conditional_parked=False,
+                        request_hash='d'*64,history_start_slot=ANCHOR))
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?)',
+                    (parent.journal._key(cid),json.dumps(evidence)))
+            await rt.store.write(plant)
+            from entropy_arb.grid.adapters.bulk_bound_read import BulkBoundEvidenceReader
+            original_lookup=BulkBoundEvidenceReader.lookup_many
+            lookups={'n':0}
+            async def counting(self,pairs,**kw):
+                for c,_ in pairs:
+                    if c==cid:lookups['n']+=1
+                return await original_lookup(self,pairs,**kw)
+            monkeypatch.setattr(BulkBoundEvidenceReader,'lookup_many',counting)
+            report=await rt.recover(gid,restore=False)
+            assert report['ok'] is True,report
+            assert lookups['n']==0,'a cached-terminal original must not be re-queried'
+            row=rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+                (parent.journal._key(cid),)).fetchone())
+            planted=json.loads(row[0])
+            assert planted.get('native_evidence') and not planted.get('terminal_resolution')
+            basis=rt.store.read(lambda c:read_basis(c,venue))
+            assert basis['proven_originals']>=1 and basis['declared_absences']==[]
+        finally:rt.close()
+    asyncio.run(run())
