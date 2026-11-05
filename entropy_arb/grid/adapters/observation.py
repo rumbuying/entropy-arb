@@ -264,9 +264,12 @@ def observation_providers(session):
             return transports[venue, network]
         return get
     from .bulk_read import BulkObservation
+    from .ondo import OndoObservation
+    from .arcus import ArcusObservation
     return {'lighter': LighterObservation(factory('lighter')),
             'lighter-rh': LighterObservation(factory('lighter-rh'), 'lighter-rh'),
             'backpack': BackpackObservation(factory('backpack')),
             'bulk': BulkObservation(factory('bulk')),
             'tradexyz': TradeXYZObservation(session),
-            **{v: CatalogObservation(v, factory(v)) for v in ('katana', 'ondo', 'arcus', 'perpl')}}
+            'ondo': OndoObservation(session), 'arcus': ArcusObservation(session),
+            **{v: CatalogObservation(v, factory(v)) for v in ('katana', 'perpl')}}
