@@ -659,8 +659,16 @@ class BulkGridVenue(GridVenue):
             parent.stream_gap=True;return
         final={e.execution_key:e for e in window.records}
         if not window.complete:
-            log.warning('BULK_CONFIRM_PENDING_INCOMPLETE pending=%s records=%s',
-                len(self._pending),len(window.records))
+            # The operator cannot triage a refillless "incomplete": carry the
+            # scan's shape — start slot, rows returned, page budget consumed
+            # and the venue's own refusal reason — so the next occurrence
+            # pins the venue-side behavior (2026-11-06 02:17: a day of
+            # pending=1 records=1 incompletes with zero page evidence; the
+            # direct probes could not catch the venue in the act).
+            log.warning('BULK_CONFIRM_PENDING_INCOMPLETE pending=%s records=%s '
+                'start_slot=%s end_slot=%s as_of=%s pages=%s reason=%s',
+                len(self._pending),len(window.records),start_slot,
+                window.end_slot,window.as_of_slot,window.pages,window.reason)
             parent.stream_gap=True
         for key,event in list(self._pending.items()):
             if key in final:
