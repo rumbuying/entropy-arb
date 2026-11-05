@@ -359,10 +359,24 @@ class BulkGridVenue(GridVenue):
         row=parent.catalog.get(market_ref)
         if row is None:raise AdapterError('BULK_MARKET_NOT_SUPPORTED')
         wire=BulkWireRules.from_native(row,network=self.network);fees=await self.reader().fee_quote()
-        stable_fees={k:v for k,v in fees.items() if k!='received_ts'}
+        # The operator-trial fence compares this revision between grid
+        # creation and start, and on every later trial check. Hashing the
+        # raw exchangeInfo row and the full fee-tier context made it fire on
+        # fields that drift without any trading-rule change: the account's
+        # rolling 14-day volume decays on its own and the venue toggles
+        # promo fields (2026-11-05: a fresh HYPE-USD grid was refused within
+        # a minute of creation — OPERATOR_TRIAL_RULES_CHANGED — and closed
+        # flat with zero fills). Hash only what a grid's safety and
+        # economics depend on: tick, step, minNotional and the effective
+        # fee rates. A real tier change still flips the hash through the
+        # bps; volume decay does not.
+        safety=dict(market_ref=self.market.market_key, base_asset=row.get('baseAsset'),
+            tick=wire.tick, step=wire.step, min_notional=wire.min_notional,
+            maker_fee_rate=fees['maker_fee_rate'], taker_fee_rate=fees['taker_fee_rate'],
+            base_maker_fee_rate=fees['base_maker_fee_rate'])
         self.rules=models.InstrumentRules(market_ref,self.symbol,'linear_perp',row['baseAsset'],'USDC',
             wire.tick,wire.step,wire.step,wire.min_notional,None,'1',fees['maker_fee_rate'],fees['taker_fee_rate'],
-            revision=models.sha256_hex([row,stable_fees]),source='bulk:exchange-info+account-fee-tier',
+            revision=models.sha256_hex(['bulk-rules-safety-v1',safety]),source='bulk:exchange-info+account-fee-tier',
             unknown_reasons=('BULK_PORTFOLIO_RISK_UNVERIFIED','OPEN_ORDER_LIMIT_UNVERIFIED','FIXED_STOP_QUALIFICATION_PENDING'))
         self.wire_rules=wire
         return self.rules

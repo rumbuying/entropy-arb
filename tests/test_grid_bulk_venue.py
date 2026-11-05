@@ -423,3 +423,36 @@ def test_reader_bindings_are_cached_until_the_journal_changes(tmp_path):
             assert calls['n']==4, 'a journal write must invalidate the cache'
         finally:st.close()
     asyncio.run(run())
+
+
+def test_rules_revision_ignores_rolling_volume_but_tracks_safety_fields(tmp_path):
+    """The operator-trial fence compares the rules revision between grid
+    creation and start, and on every later trial check. Hashing the raw
+    exchangeInfo row plus the full fee-tier context made it fire on fields
+    that drift without any trading-rule change: the account's rolling
+    14-day volume decays on its own (2026-11-05: a fresh HYPE-USD grid was
+    refused within a minute of creation and closed flat, zero fills). The
+    revision now hashes only tick, step, minNotional and the effective fee
+    rates; a real tier change still flips it through the bps."""
+    async def run():
+        transport=Read();st=Store.open(str(tmp_path/'rules-revision.sqlite'))
+        try:
+            venue=root(st,transport);await venue.catalog_markets()
+            view=venue.market_venue('bulk:mainnet||ETH-USD|linear_perp|USDC')
+            first=await view.load_instrument(view.market.market_key)
+            # Rolling-volume decay without any rule change: same revision.
+            transport.fees=quote(rollingVolume='999.123456789')
+            decayed=await view.load_instrument(view.market.market_key)
+            assert decayed.revision==first.revision
+            # A tier change that leaves the effective bps unchanged is also
+            # not a trading-rule change for the fence.
+            transport.fees=quote(rollingVolume='999.123456789',tierThreshold='500')
+            retiered=await view.load_instrument(view.market.market_key)
+            assert retiered.revision==first.revision
+            # A real economics change flips the revision.
+            transport.fees=quote(rollingVolume='999.123456789',takerBps='0.5')
+            refees=await view.load_instrument(view.market.market_key)
+            assert refees.revision!=first.revision
+            assert refees.taker_fee_rate==first.taker_fee_rate.replace('0.0000375','0.00005')
+        finally:st.close()
+    asyncio.run(run())
