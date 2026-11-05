@@ -465,18 +465,22 @@ class BulkProtectionManager:
             # grid 8 minutes after start (2026-11-04 16:10).
             log.warning('PROTECTION_OBSERVE_TOLERATED code=%s', code)
             return
-        if code=='PROTECTION_FIXED_UNKNOWN_ENTRY' and recovery_in_flight(
-                self.rt.store,gid,row['epoch'],now_mono_ms=self.monotonic_ms()):
-            # A recovery rebuild is actively re-placing this grid's entries:
-            # a submit still inside its own first-lookup lag (DISPATCHING/
-            # MAY_HAVE_SENT/UNKNOWN in the shared journal) is the rebuild's
-            # own window, not a confirmed unprovable entry — the rebuild's
-            # fences either prove the order or land NEEDS_ATTENTION where
-            # the watch enforces again. Exiting here flattened a grid 11
-            # seconds after its own rebuild had submitted an entry whose
-            # first lookup had not come back; the order never reached the
-            # venue at all (2026-11-05 17:18, g-1bcb4b48). Without a live
-            # recovery marker the exit runs unchanged.
+        if code=='PROTECTION_FIXED_UNKNOWN_ENTRY' and (recovery_in_flight(
+                self.rt.store,gid,row['epoch'],now_mono_ms=self.monotonic_ms()) or inflight):
+            # A submit still inside its own first-lookup lag (DISPATCHING/
+            # MAY_HAVE_SENT/UNKNOWN in the shared journal) is the window of
+            # whoever placed it — a recovery rebuild re-placing entries, or
+            # a running activation/adjust operation — not a confirmed
+            # unprovable entry. Their own fences either prove the order or
+            # fail into NEEDS_ATTENTION/NEEDS_ATTENTION where the watch
+            # enforces again. Exiting here flattened a grid 11 seconds
+            # after its own rebuild had submitted an entry whose first
+            # lookup had not come back (2026-11-05 17:18, g-1bcb4b48), and
+            # killed a fresh activation the same way: the start barrier's
+            # own in-flight submit tripped the observe before its first
+            # lookup returned (2026-11-05 22:14, g-b2c8b5f2 — STARTING has
+            # no recovery marker, so the recovery-only tolerance was not
+            # armed). Without a live window the exit runs unchanged.
             log.warning('PROTECTION_OBSERVE_RECOVERY_WAIT code=%s', code)
             return
         log.warning('PROTECTION_OBSERVE_EXIT code=%s', code)
