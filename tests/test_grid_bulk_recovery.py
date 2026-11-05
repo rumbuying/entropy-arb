@@ -653,3 +653,18 @@ def test_funding_read_inside_recovery_is_retried(tmp_path,monkeypatch):
             assert report['ok'],json.dumps(report,default=str)[:400]
         finally:rt.close()
     asyncio.run(run())
+
+def test_scoped_settlement_race_is_transient():
+    """2026-11-05 20:01: the hourly funding settlement landed mid-recovery;
+    the capture's counter fold refused with BULK_SCOPED_BASIS_FUNDING_MISMATCH
+    (venue counter already carried the payment, the ledger had not booked it
+    yet), attempt 1 died into NEEDS_ATTENTION and the watch flattened the
+    grid. The same capture succeeded minutes later once the funding sync
+    booked the payment. A settlement race in the fold must retry."""
+    from entropy_arb.grid.stream_recovery import transient
+    base={"drift": [], "gaps": [{"code": "FILL_HISTORY_TRUNCATED"}],
+          "scoped_basis_refusal": "BULK_SCOPED_BASIS_FUNDING_MISMATCH"}
+    assert transient(base) is True
+    assert transient(base|{"scoped_basis_refusal": "BULK_SCOPED_BASIS_FEES_MISMATCH"}) is True
+    assert transient(base|{"scoped_basis_refusal": "BULK_SCOPED_BASIS_POSITION_MISMATCH"}) is False
+    assert transient({k:v for k,v in base.items() if k!="scoped_basis_refusal"}) is False

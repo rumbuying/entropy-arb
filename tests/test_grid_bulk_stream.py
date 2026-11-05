@@ -28,8 +28,10 @@ def snapshot(**patch):
 
 
 def ws_fill(**patch):
+    # isBuy is account-perspective (like REST): a maker fill on our resting
+    # bid carries isBuy=True and books as our buy (2026-11-05 mainnet).
     return dict(type='fill',tradeId='101:7',symbol='ETH-USD',orderId=OID,price='2300.12',
-        size='0.1',fee='-0.01',isBuy=False,reasonCode=0,timestamp=NS,maker=True)|patch
+        size='0.1',fee='-0.01',isBuy=True,reasonCode=0,timestamp=NS,maker=True)|patch
 
 
 def ws_order(**patch):
@@ -46,9 +48,14 @@ def decoder(**kwargs):
 
 @pytest.mark.parametrize('maker',[True,False])
 @pytest.mark.parametrize('own_buy',[True,False])
-def test_stream_and_rest_share_identity_but_use_different_side_semantics(maker,own_buy):
+def test_stream_and_rest_share_one_account_perspective_side(maker,own_buy):
+    """WS and REST report the side from the same account perspective — a
+    maker fill on a resting post-only bid carries isBuy=True on the WS and
+    books 'buy' from REST (2026-11-05 mainnet, key 236bfd0b: the old
+    taker-perspective XOR produced 'sell' and no maker fill ever confirmed
+    off the stream)."""
     d=decoder()
-    event=d.ingest(frame(ws_fill(maker=maker,isBuy=not own_buy if maker else own_buy,
+    event=d.ingest(frame(ws_fill(maker=maker,isBuy=own_buy,
         fee='-0.01' if maker else '0.03')))
     p=event.execution
     native=fill(maker=OWNER if maker else OTHER,taker=OTHER if maker else OWNER,
@@ -57,7 +64,7 @@ def test_stream_and_rest_share_identity_but_use_different_side_semantics(maker,o
     assert p.finality=='provisional' and p.source=='stream'
     assert p.side==('buy' if own_buy else 'sell')
     assert confirm_stream_fill(p,final)==final
-    assert d.ingest(frame(ws_fill(maker=maker,isBuy=not own_buy if maker else own_buy,
+    assert d.ingest(frame(ws_fill(maker=maker,isBuy=own_buy,
         fee='-0.01' if maker else '0.03')))==None
 
 

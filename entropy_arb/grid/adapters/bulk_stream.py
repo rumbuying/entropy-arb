@@ -146,8 +146,16 @@ class BulkStreamDecoder:
             raise AdapterError('BULK_RISK_EXECUTION_UNVERIFIED')
         qty,price=native_decimal(row['size'],negative=False),native_decimal(row['price'],negative=False)
         if qty<=0 or price<=0:raise AdapterError('BULK_STREAM_FILL_AMOUNT_INVALID')
-        # WS isBuy describes the taker, unlike the account-side REST field.
-        own_buy=not taker_buy if maker else taker_buy
+        # WS isBuy is account-perspective, like the REST account field: the
+        # account stream describes this account's fills. The v43-era
+        # taker-perspective XOR inverted every maker fill's side — on live
+        # mainnet (2026-11-05 19:59, key 236bfd0b) a maker fill on a resting
+        # post-only bid carried isBuy=True and the XOR produced 'sell'
+        # against the REST ground truth 'buy' for the same trade_id, so no
+        # maker fill could ever confirm off the stream (all post-only fills
+        # are maker fills; every one quarantined and waited for the recovery
+        # REST re-book instead).
+        own_buy=taker_buy
         event=models.ExecutionEvent(models.sha256_hex(['bulk-fill',reader.scope,tid]),reader.account,
             reader.market_ref,reader.bindings.get(oid),oid,tid,'buy' if own_buy else 'sell',
             text(qty),text(price),text(native_decimal(row['fee']).copy_negate()),'USDC',maker,
