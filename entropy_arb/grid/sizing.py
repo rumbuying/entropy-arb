@@ -127,6 +127,146 @@ def k_max_from_rules(*, qty_step_base: str, max_qty_base: str) -> int:
     return max(0, int((cap / step).to_integral_value(rounding="ROUND_FLOOR")))
 
 
+CONSTRAINT_LABELS = {
+    "ordinary": "budget margin",
+    "adverse": "adverse-move margin",
+    "account": "account balance",
+    "service_coverage": "service coverage open-notional",
+}
+
+
+def _readable(amount):
+    """Four decimals for the human-readable reason; the structured detail
+    keeps full precision."""
+    return models.canonical_decimal_text(
+        amount.quantize(Decimal("0.0001"), rounding="ROUND_DOWN"))
+
+
+def _parsed_demand(model, k, coverage_limit):
+    """One validated demand row as Decimals, or None if the model refuses k.
+
+    The failure report must never crash on a model that only supports part
+    of the range; an unreadable row simply reads as infeasible."""
+    try:
+        if getattr(model, "monotone_demand", False) is True and callable(
+                getattr(model, "demand_row", None)):
+            row = model.demand_row(k=k)
+        else:
+            rows = model.demand_rows(k_min=k, k_max=k)
+            row = rows[0] if rows else None
+        if row is None or models.parse_strict_int(row["k"], "k", minimum=1) != k:
+            return None
+        out = {"k": k,
+               "ordinary": Decimal(models.parse_decimal_text(row["ordinary"], "ordinary")),
+               "adverse": Decimal(models.parse_decimal_text(row["adverse"], "adverse")),
+               "account": Decimal(models.parse_decimal_text(row["account"], "account"))}
+        if coverage_limit is not None:
+            if "service_open_notional" not in row:
+                return None
+            out["service_coverage"] = Decimal(models.parse_decimal_text(
+                row["service_open_notional"], "service_open_notional"))
+        return out
+    except Exception:
+        return None
+
+
+def _sizing_failure_report(*, model, k_min, k_max, step, parsed_rows,
+                           selection_limit, adverse_cap, account_cap,
+                           coverage_limit, total, reserve, utilization,
+                           monotone):
+    """Per-constraint verdict for an unsolvable range.
+
+    Demands are nondecreasing in k for trusted models (monotone_demand), so
+    each constraint's feasible set is a prefix of [k_min, k_max]: a
+    constraint whose demand at k_min already exceeds its cap blocks EVERY
+    size, and the report says so with the actual numbers instead of the old
+    opaque "budget/adverse/account constraints" (2026-11-06: the operator
+    could not tell an insufficient budget from an exhausted account or a
+    coverage cap). Table models keep a linear scan over their own rows."""
+    def demand(k):
+        if not monotone:
+            for row in parsed_rows:
+                if row["k"] == k:
+                    return row
+            return None
+        return _parsed_demand(model, k, coverage_limit)
+
+    def max_feasible(key, cap):
+        """Largest k whose single demand meets the cap, or None.
+
+        The k_min pre-check is monotone-only: a table model may satisfy a
+        constraint at some higher k after failing it at k_min."""
+        if k_max < k_min:
+            return None
+        if not monotone:
+            feasible = [row["k"] for row in parsed_rows
+                        if row.get(key) is not None and row[key] <= cap]
+            return max(feasible) if feasible else None
+        low_row = demand(k_min)
+        if low_row is None or low_row[key] > cap:
+            return None
+        lo, hi = k_min, k_max
+        while lo < hi:
+            middle = (lo + hi + 1) // 2
+            row = demand(middle)
+            if row is not None and row[key] <= cap:
+                lo = middle
+            else:
+                hi = middle - 1
+        return lo
+
+    constraints = []
+    for key, cap in (("ordinary", selection_limit), ("adverse", adverse_cap),
+                     ("account", account_cap),
+                     ("service_coverage", coverage_limit)):
+        if cap is None:
+            continue
+        smallest = demand(k_min)
+        constraints.append({
+            "key": key,
+            "label": CONSTRAINT_LABELS[key],
+            "limit": models.canonical_decimal_text(cap),
+            "required_at_k_min": (models.canonical_decimal_text(smallest[key])
+                                  if smallest is not None else None),
+            "max_feasible_k": max_feasible(key, cap),
+        })
+    blocking = [c["key"] for c in constraints if c["max_feasible_k"] is None]
+    report = {"k_min": k_min, "k_max": k_max,
+              "smallest_qty_base": models.canonical_decimal_text(step * k_min),
+              "largest_qty_base": models.canonical_decimal_text(step * k_max),
+              "budget": {"total": models.canonical_decimal_text(Decimal(total)),
+                         "reserve": models.canonical_decimal_text(Decimal(reserve)),
+                         "utilization": models.canonical_decimal_text(utilization),
+                         "ordinary_limit": models.canonical_decimal_text(selection_limit)},
+              "constraints": constraints,
+              "blocking": blocking}
+    if k_max < k_min:
+        report["blocking"] = ["qty_rules_conflict"]
+        reason = ("quantity rules leave no usable size: the smallest compliant "
+                  "quantity (k=%d, %s per grid, from min_qty/min_notional) already "
+                  "exceeds the per-grid cap (k=%d, %s, from max_qty)"
+                  % (k_min, report["smallest_qty_base"], k_max,
+                     report["largest_qty_base"]))
+    elif blocking:
+        parts = []
+        for key in blocking:
+            entry = next(c for c in constraints if c["key"] == key)
+            parts.append("%s needs %s but only %s is allowed"
+                         % (entry["label"], _readable(Decimal(entry["required_at_k_min"]))
+                            if entry["required_at_k_min"] is not None else "?",
+                            _readable(Decimal(entry["limit"]))))
+        reason = ("no fundable grid size in [k=%d, k=%d]: the smallest allowed grid "
+                  "(k=%d, %s per grid) is already too large - %s"
+                  % (k_min, k_max, k_min, report["smallest_qty_base"],
+                     "; ".join(parts)))
+    else:
+        parts = ["%s fits only k<=%d" % (c["label"], c["max_feasible_k"])
+                 for c in constraints if c["max_feasible_k"] is not None]
+        reason = ("no k in [%d, %d] satisfies all sizing constraints at once: %s"
+                  % (k_min, k_max, "; ".join(parts) or "no candidate rows"))
+    return report, reason
+
+
 def solve_qty(*, risk_model: Optional[RiskModel], qty_step_base: str,
               min_qty_base: str, max_qty_base: str,
               used_prices: Sequence[str], min_notional: str,
@@ -171,6 +311,7 @@ def solve_qty(*, risk_model: Optional[RiskModel], qty_step_base: str,
     if coverage_limit is not None and coverage_limit<=0:
         raise GridModelError('VALIDATION_ERROR','coverage limit must be positive')
     coverage_rejected=False
+    parsed_rows: List[Dict[str, Any]] = []
     if getattr(risk_model,'monotone_demand',False) is True and callable(getattr(risk_model,'demand_row',None)):
         rows=_monotone_candidates(risk_model,k_min=k_min,k_max=k_max,
             ordinary_limit=selection_limit,adverse_cap=adverse_cap,account_cap=account_cap,coverage_limit=coverage_limit)
@@ -191,9 +332,11 @@ def solve_qty(*, risk_model: Optional[RiskModel], qty_step_base: str,
                 raise GridModelError('SERVICE_COVERAGE_MODEL_UNAVAILABLE','risk model has no service coverage envelope')
             coverage=models.parse_decimal_text(row['service_open_notional'],'service_open_notional')
             if coverage<0:raise GridModelError('SERVICE_COVERAGE_MODEL_INVALID','negative coverage envelope')
-            if coverage>coverage_limit:
-                coverage_rejected=True
-                continue
+        parsed_rows.append({"k": k, "ordinary": ordinary, "adverse": adverse,
+                            "account": account, "service_coverage": coverage})
+        if coverage is not None and coverage>coverage_limit:
+            coverage_rejected=True
+            continue
         if ordinary <= selection_limit and adverse <= adverse_cap \
                 and account <= account_cap:
             if best is None or k > best["k"]:
@@ -201,9 +344,16 @@ def solve_qty(*, risk_model: Optional[RiskModel], qty_step_base: str,
                         "account": account, "service_coverage":coverage}
     step = Decimal(qty_step_base)
     if best is None:
+        monotone = (getattr(risk_model, "monotone_demand", False) is True
+                    and callable(getattr(risk_model, "demand_row", None)))
+        report, reason = _sizing_failure_report(
+            model=risk_model, k_min=k_min, k_max=k_max, step=step,
+            parsed_rows=parsed_rows, selection_limit=selection_limit,
+            adverse_cap=adverse_cap, account_cap=account_cap,
+            coverage_limit=coverage_limit, total=total, reserve=reserve,
+            utilization=utilization, monotone=monotone)
         return {"validation_status": "INVALID", "code": "SERVICE_COVERAGE_LIMIT" if coverage_rejected else "BUDGET_EXCEEDED",
-                "reason": ("no k in [%d, %d] satisfies budget/adverse/"
-                           "account constraints" % (k_min, k_max)),
+                "reason": reason, "reason_detail": report,
                 "k_min": k_min, "k": None, "qty_base": None,
                 "live_eligible": False}
     qty = step * best["k"]

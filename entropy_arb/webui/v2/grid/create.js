@@ -14,6 +14,39 @@ import {
   amount,
 } from "./widgets.js";
 
+// 数量求解失败（BUDGET_EXCEEDED / SERVICE_COVERAGE_LIMIT）的人读解释：
+// 后端 reason_detail 逐约束给出「需要多少 / 上限多少」，这里翻译成中文，
+// 让操作者能分清是资金不够、账户余额被占用，还是敞口/数量规则问题。
+function sizingFailureText(sizing, asset) {
+  const budgetAsset = asset || "USDC";
+  const detail = sizing?.reason_detail;
+  if (!detail) return sizing?.reason || "资金预算不足，无法确定每格数量。";
+  const num = (v) => {
+    const x = Number(v);
+    return Number.isFinite(x) ? String(parseFloat(x.toPrecision(6))) : v;
+  };
+  const find = (key) => (detail.constraints || []).find((c) => c.key === key);
+  const budget = detail.budget || {};
+  if (detail.k_min > detail.k_max) {
+    return `数量规则冲突：最小合规数量 k=${detail.k_min}（每格 ${detail.smallest_qty_base}，由 min_qty/min_notional 决定）已超过单格数量上限 k=${detail.k_max}（每格 ${detail.largest_qty_base}，由 max_qty 决定）。请调整价格区间、格数或单格数量上限。`;
+  }
+  const parts = (detail.blocking || []).map((key) => {
+    const c = find(key);
+    if (!c || c.required_at_k_min == null) return null;
+    if (key === "ordinary") {
+      const headroom = budget.utilization && budget.utilization !== "1"
+        ? ` ×${budget.utilization} 操作余量` : "";
+      return `初始保证金需 ${num(c.required_at_k_min)} ${budgetAsset}，但预算上限只有 ${num(c.limit)}（总额 ${num(budget.total)} − 预留 ${num(budget.reserve)}${headroom}）`;
+    }
+    if (key === "adverse") return `极端波动保证金需 ${num(c.required_at_k_min)} ${budgetAsset}，超过总额 ${num(c.limit)}`;
+    if (key === "account") return `账户可用余额只有 ${num(c.limit)}，不足以覆盖所需的 ${num(c.required_at_k_min)}`;
+    if (key === "service_coverage") return `保护期敞口 ${num(c.required_at_k_min)} 超过上限 ${num(c.limit)}`;
+    return null;
+  }).filter(Boolean);
+  if (!parts.length) return sizing.reason;
+  return `没有可用的网格规模：最小允许格量（k=${detail.k_min}，每格 ${detail.smallest_qty_base}）就已无法满足 — ${parts.join("；")}。可减少格数、缩小价格区间或提高资金后重试。`;
+}
+
 export function mount(container) {
   const root = el("div", { class: "grid-workbench" });
   container.append(root);
@@ -504,9 +537,7 @@ export function mount(container) {
       if (!plan) {
         previewBox.replaceChildren(
           notice(
-            out.sizing?.code === "SERVICE_COVERAGE_LIMIT"
-              ? "保护期敞口上限不足以容纳最小下单量或现有库存。请调整上限、格数或价格区间后重新预览。"
-              : out.sizing?.reason || "资金预算不足，无法确定每格数量。",
+            sizingFailureText(out.sizing, config?.capital?.asset),
             "error",
           ),
         );
