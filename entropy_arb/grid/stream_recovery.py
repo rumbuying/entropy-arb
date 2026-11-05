@@ -30,20 +30,24 @@ BULK_READ_ERRORS = frozenset((
 NETWORK_ERRORS |= BULK_READ_ERRORS
 
 
-# A funding/fee settlement landing between the baseline counters and the
-# capture's native read races the fold: the venue counter already carries
-# the settlement the ledger has not booked yet. The next attempt's funding
-# sync books it and the fold matches — retry instead of dying into
-# NEEDS_ATTENTION (2026-11-05 20:01: the hourly funding settlement landed
-# mid-recovery, the capture refused with BULK_SCOPED_BASIS_FUNDING_MISMATCH,
-# attempt 1 landed NEEDS_ATTENTION and the watch flattened the grid; the
-# same capture succeeded three minutes later once the payment was booked).
-_SCOPED_SETTLEMENT_RACES = frozenset((
-    'BULK_SCOPED_BASIS_FUNDING_MISMATCH','BULK_SCOPED_BASIS_FEES_MISMATCH'))
+# A venue-vs-ledger lag race between the baseline counters and the
+# capture's native read: a settlement or an owned fill lands while the
+# recovery holds the account execution lock, so the venue counter/position
+# already carries it while the ledger has not booked it yet — the pump
+# cannot book under the same lock the capture holds. The next attempt (lock
+# released) books the fill/settlement and the fold matches. 2026-11-05
+# 20:01: the hourly funding settlement (FUNDING_MISMATCH); 21:30: an owned
+# fill executed one second before the stream gap (POSITION_MISMATCH) —
+# each refused once and succeeded on the next capture minutes later.
+# Retry here; a genuine mismatch still exhausts the bounded budget into
+# NEEDS_ATTENTION, where the watch enforces as always.
+_SCOPED_FOLD_RACES = frozenset((
+    'BULK_SCOPED_BASIS_FUNDING_MISMATCH','BULK_SCOPED_BASIS_FEES_MISMATCH',
+    'BULK_SCOPED_BASIS_POSITION_MISMATCH','BULK_SCOPED_BASIS_ACTIVE_ORDER_MISSING'))
 
 
 def transient(report):
-    if report.get("scoped_basis_refusal") in _SCOPED_SETTLEMENT_RACES:
+    if report.get("scoped_basis_refusal") in _SCOPED_FOLD_RACES:
         return True
     if report.get("drift") or not report.get("gaps"):
         return False

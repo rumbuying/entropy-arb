@@ -655,16 +655,19 @@ def test_funding_read_inside_recovery_is_retried(tmp_path,monkeypatch):
     asyncio.run(run())
 
 def test_scoped_settlement_race_is_transient():
-    """2026-11-05 20:01: the hourly funding settlement landed mid-recovery;
-    the capture's counter fold refused with BULK_SCOPED_BASIS_FUNDING_MISMATCH
-    (venue counter already carried the payment, the ledger had not booked it
-    yet), attempt 1 died into NEEDS_ATTENTION and the watch flattened the
-    grid. The same capture succeeded minutes later once the funding sync
-    booked the payment. A settlement race in the fold must retry."""
+    """Venue-vs-ledger lag races in the scoped fold must retry, bounded:
+    2026-11-05 20:01 the hourly funding settlement landed mid-recovery
+    (FUNDING_MISMATCH); 21:30 an owned fill executed one second before the
+    stream gap and the capture refused with POSITION_MISMATCH while the
+    pump could not book under the lock the capture held. The next attempt
+    books the fill/settlement and the fold matches; genuine mismatches
+    (foreign orders, capacity) still exhaust into NEEDS_ATTENTION."""
     from entropy_arb.grid.stream_recovery import transient
-    base={"drift": [], "gaps": [{"code": "FILL_HISTORY_TRUNCATED"}],
-          "scoped_basis_refusal": "BULK_SCOPED_BASIS_FUNDING_MISMATCH"}
-    assert transient(base) is True
-    assert transient(base|{"scoped_basis_refusal": "BULK_SCOPED_BASIS_FEES_MISMATCH"}) is True
-    assert transient(base|{"scoped_basis_refusal": "BULK_SCOPED_BASIS_POSITION_MISMATCH"}) is False
-    assert transient({k:v for k,v in base.items() if k!="scoped_basis_refusal"}) is False
+    base={"drift": [], "gaps": [{"code": "FILL_HISTORY_TRUNCATED"}]}
+    for race in ("BULK_SCOPED_BASIS_FUNDING_MISMATCH","BULK_SCOPED_BASIS_FEES_MISMATCH",
+                 "BULK_SCOPED_BASIS_POSITION_MISMATCH","BULK_SCOPED_BASIS_ACTIVE_ORDER_MISSING"):
+        assert transient(base|{"scoped_basis_refusal": race}) is True, race
+    assert transient(base|{"scoped_basis_refusal": "BULK_SCOPED_BASIS_FOREIGN_OPEN_ORDER"}) is False
+    assert transient(base|{"scoped_basis_refusal": "BULK_SCOPED_BASIS_CAPACITY_EXCEEDED"}) is False
+    plain={k:v for k,v in base.items() if k!="scoped_basis_refusal"}
+    assert transient(plain) is False
