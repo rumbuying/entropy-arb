@@ -18,7 +18,7 @@ from ..venue_registry import account_identity
 from .base import AccountSnapshot,AdapterError,CancelResult,GridVenue,SubmitResult,VenueEvent
 from .bulk_execution import BulkExecution
 from .bulk_market import BulkMarketData,symbol
-from .bulk_read import BulkEvidenceReader,ns_iso
+from .bulk_read import BulkEvidenceReader,ns_iso,_UNCERTIFIED_ACCEPTABLE
 from .bulk_stream import BulkAccountStream,CONFIRM_CONFLICT_RETRIES,confirm_stream_fill,stream_fill_conflict
 from .bulk_wire import BulkIntentJournal,BulkWireRules,base58,uint,text,native_decimal
 from .observation import ORIGINS
@@ -658,18 +658,32 @@ class BulkGridVenue(GridVenue):
                 error,len(self._pending))
             parent.stream_gap=True;return
         final={e.execution_key:e for e in window.records}
-        if not window.complete:
-            # The operator cannot triage a refillless "incomplete": carry the
-            # scan's shape — start slot, rows returned, page budget consumed
-            # and the venue's own refusal reason — so the next occurrence
-            # pins the venue-side behavior (2026-11-06 02:17: a day of
-            # pending=1 records=1 incompletes with zero page evidence; the
-            # direct probes could not catch the venue in the act).
+        if not window.complete and window.reason not in _UNCERTIFIED_ACCEPTABLE:
+            # A declared gap (partial coverage, floor above the start) or an
+            # exhausted page budget is a real evidence hole: flag it, and the
+            # scan below still ages out entries whose confirmation window has
+            # passed (a refusal must not strand the pending set).
             log.warning('BULK_CONFIRM_PENDING_INCOMPLETE pending=%s records=%s '
                 'start_slot=%s end_slot=%s as_of=%s pages=%s reason=%s',
                 len(self._pending),len(window.records),start_slot,
                 window.end_slot,window.as_of_slot,window.pages,window.reason)
             parent.stream_gap=True
+        if not window.complete:
+            # The venue declined to certify coverage (COVERAGE_UNCERTIFIED /
+            # FLOOR_UNKNOWN) yet returned a bounded, fully paged window — the
+            # same provisional acceptance the ledger layer documents for this
+            # exact case (bulk_read _UNCERTIFIED_ACCEPTABLE). Confirming a
+            # pending fill only needs its own REST row to match the streamed
+            # event; coverage of unrelated fills is the fills barrier's job,
+            # and that barrier re-derives booked fills from native REST
+            # history anyway. Treating this as a stream gap made the confirm
+            # loop poison the account on every pass: a day of recovery churn
+            # (2026-11-06, g-5ae92626 epoch 2-8) with pages=1
+            # reason=COVERAGE_UNCERTIFIED — the page evidence the previous
+            # commit added is what pinned it.
+            log.info('BULK_CONFIRM_PENDING_PROVISIONAL pending=%s records=%s '
+                'reason=%s pages=%s',len(self._pending),len(window.records),
+                window.reason,window.pages)
         for key,event in list(self._pending.items()):
             if key in final:
                 try:

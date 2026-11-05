@@ -15,7 +15,7 @@ from entropy_arb.grid.adapters.observation import ORIGINS
 from entropy_arb.grid.runtime import GridRuntime
 from entropy_arb.grid.store import Store
 from entropy_arb.grid.venue_registry import account_identity
-from test_grid_bulk import OWNER,META,REQUEST,RULES,OID,fill,history
+from test_grid_bulk import OWNER,META,REQUEST,RULES,OID,fill,history,reader as bulk_test_reader
 from test_grid_bulk_fees import quote
 from test_grid_bulk_stream import decoder,frame,ws_fill,ws_order,snapshot
 from test_grid_bulk_execution import Protocol,Sender
@@ -505,5 +505,61 @@ def test_rules_revision_ignores_rolling_volume_but_tracks_safety_fields(tmp_path
             refees=await view.load_instrument(view.market.market_key)
             assert refees.revision!=first.revision
             assert refees.taker_fee_rate==first.taker_fee_rate.replace('0.0000375','0.00005')
+        finally:st.close()
+    asyncio.run(run())
+
+
+def test_uncertified_but_fully_paged_window_still_confirms_pending_fills(tmp_path):
+    """2026-11-06, g-5ae92626 epoch 2-8: the venue stopped publishing fills
+    coverage certification (COVERAGE_UNCERTIFIED, no floor) and every
+    confirm pass flagged a stream gap on a one-page window — a day of
+    place→gap→cancel→reconcile churn. Confirming a pending fill needs its
+    own REST row to match the streamed event, not an account-wide coverage
+    certificate: the documented provisional-acceptance family
+    (_UNCERTIFIED_ACCEPTABLE) must confirm, while declared gaps and
+    exhausted budgets keep refusing."""
+    async def run():
+        transport=Read();st=Store.open(str(tmp_path/'confirm-uncertified.sqlite'))
+        try:
+            venue=root(st,transport);await venue.catalog_markets()
+            view=venue.market_venue('bulk:mainnet||ETH-USD|linear_perp|USDC')
+            event=decoder().ingest(frame(ws_fill()))
+            view._pending[event.execution.execution_key]=event.execution
+            parent=venue
+            parent.stream_gap=False  # the provisional window must not flag a gap
+            final=bulk_test_reader().fill(fill())
+            async def fake_history(kind,*,start_slot,**kw):
+                from entropy_arb.grid.adapters.bulk_read import BulkHistoryWindow
+                return BulkHistoryWindow((final,),start_slot=start_slot,
+                    end_slot=start_slot,as_of_slot=start_slot,min_available_slot=None,
+                    complete=False,pages=1,reason='BULK_HISTORY_COVERAGE_UNCERTIFIED')
+            view.__dict__['reader']=lambda:SimpleNamespace(history=fake_history)
+            await view.confirm_pending()
+            assert not view._pending
+            assert any(e.kind=='fill' and e.execution.order_client_id=='engine-42'
+                       for e in view._events)
+            assert not parent.stream_gap
+        finally:st.close()
+    asyncio.run(run())
+
+
+def test_declared_gap_still_refuses_confirm_and_flags_the_gap(tmp_path):
+    async def run():
+        transport=Read();st=Store.open(str(tmp_path/'confirm-gap.sqlite'))
+        try:
+            venue=root(st,transport);await venue.catalog_markets()
+            view=venue.market_venue('bulk:mainnet||ETH-USD|linear_perp|USDC')
+            event=decoder().ingest(frame(ws_fill()))
+            view._pending[event.execution.execution_key]=event.execution
+            parent=venue;parent.stream_gap=False
+            async def fake_history(kind,*,start_slot,**kw):
+                from entropy_arb.grid.adapters.bulk_read import BulkHistoryWindow
+                return BulkHistoryWindow((event.execution,),start_slot=start_slot,
+                    end_slot=start_slot,as_of_slot=start_slot,min_available_slot=None,
+                    complete=False,pages=1,reason='BULK_HISTORY_PARTIAL_COVERAGE')
+            view.__dict__['reader']=lambda:SimpleNamespace(history=fake_history)
+            await view.confirm_pending()
+            assert view._pending and not view._events
+            assert parent.stream_gap
         finally:st.close()
     asyncio.run(run())
