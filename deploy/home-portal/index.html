@@ -12,6 +12,12 @@
     --green: #2ecc71; --amber: #e8b339;
     --mono: "SFMono-Regular", ui-monospace, "Cascadia Mono", Consolas, monospace;
   }
+
+  html.light {
+    --bg: #f4f6f9; --panel: #ffffff; --panel-2: #edf1f6; --border: #d5dde6;
+    --text: #1a2634; --dim: #64748b; --accent: #0b7285;
+    --green: #188a4e; --amber: #a16207;
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100vh; display: flex; flex-direction: column;
@@ -88,5 +94,22 @@
 <footer>
   三个入口共用同一登录凭据（本页的浏览器会自动带上）。运行时相互独立：一个服务的重启、看护或网络问题不影响其余两个。套利控制台的数据访问另受令牌校验。
 </footer>
+<script>
+  (function(){
+    var KEY="entropy-theme";
+    function apply(t){document.documentElement.classList.toggle("light",t==="light");
+      var b=document.getElementById("theme-toggle");
+      if(b){b.textContent=t==="light"?"🌙":"☀️";b.title=t==="light"?"切换深色模式":"切换浅色模式";}}
+    try{apply(localStorage.getItem(KEY)||"dark");}catch(e){apply("dark");}
+    var b=document.createElement("button");
+    b.id="theme-toggle";
+    b.style.cssText="position:fixed;right:14px;bottom:14px;z-index:300;width:38px;height:38px;"
+      +"border-radius:50%;cursor:pointer;font-size:17px;opacity:.85;background:var(--panel);"
+      +"color:var(--text);border:1px solid var(--border);padding:0;line-height:1;";
+    b.onclick=function(){var t;try{t=localStorage.getItem(KEY)==="light"?"dark":"light";}catch(e){t="dark";}
+      try{localStorage.setItem(KEY,t);}catch(e){} apply(t);};
+    document.body.appendChild(b);apply((function(){try{return localStorage.getItem(KEY)||"dark";}catch(e){return "dark";}})());
+  })();
+  </script>
 </body>
 </html>

@@ -9,6 +9,12 @@
   --bg:#0f1115; --panel:#161a21; --line:#232936; --text:#e6e9ef;
   --dim:#8b93a3; --good:#4ade80; --bad:#f87171; --warn:#fbbf24; --accent:#60a5fa;
 }
+html.light{
+  --bg:#f4f6f9; --panel:#ffffff; --line:#d5dde6; --text:#1a2634;
+  --dim:#64748b; --good:#188a4e; --bad:#c23b34; --warn:#a16207; --accent:#0b7285;
+}
+html.light button{background:#ffffff;border-color:#c4cfda}
+html.light tr:hover td{background:#eef2f7}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);
   font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
@@ -49,6 +55,7 @@ tr:hover td{background:#1b2029}
 .note b{color:var(--warn);font-weight:500}
 .err{color:var(--bad);padding:12px 0}
 </style>
+<script src="/static/theme.js"></script>
 </head>
 <body>
 <header>

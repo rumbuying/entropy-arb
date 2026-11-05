@@ -4,10 +4,20 @@
    Histogram: distribution bins + vertical marks (band preview).
    Both handle devicePixelRatio and container resize. */
 
-const AXIS_COLOR = "#3a4a5a";
-const TEXT_COLOR = "#7a8b9c";
-const GRID_COLOR = "#16202b";
 const FONT = "11px ui-monospace, monospace";
+// Theme-aware chart colors: read once per draw from the CSS variables so
+// the light theme (html.light) re-colors the canvas without a reload.
+function _cssColor(name, fallback) {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+function chartPalette() {
+  return {
+    axis: _cssColor("--chart-axis", "#3a4a5a"),
+    text: _cssColor("--chart-text", "#7a8b9c"),
+    grid: _cssColor("--chart-grid", "#16202b"),
+  };
+}
 
 function setupCanvas(canvas) {
   const dpr = window.devicePixelRatio || 1;
@@ -84,7 +94,8 @@ export class TimeSeriesChart {
 
     // horizontal grid + y labels
     ctx.font = FONT;
-    ctx.strokeStyle = GRID_COLOR; ctx.fillStyle = TEXT_COLOR;
+    const PAL = chartPalette();
+    ctx.strokeStyle = PAL.grid; ctx.fillStyle = PAL.text;
     ctx.lineWidth = 1;
     for (let g = 0; g <= 4; g++) {
       const v = lo + (hi - lo) * g / 4;
@@ -112,7 +123,7 @@ export class TimeSeriesChart {
 
     // x labels: first / middle / last timestamp
     if (this.points.length > 1) {
-      ctx.fillStyle = TEXT_COLOR;
+      ctx.fillStyle = chartPalette().text;
       ctx.textBaseline = "top";
       const fmt = t => {
         const d = new Date(t * 1000), p = n => String(n).padStart(2, "0");
@@ -164,7 +175,7 @@ export class Histogram {
     const padL = 8, padR = 8, padT = 8, padB = 18;
     const iw = w - padL - padR, ih = h - padT - padB;
     if (iw < 10 || ih < 10 || !this.bins.length) {
-      ctx.font = FONT; ctx.fillStyle = TEXT_COLOR;
+      ctx.font = FONT; ctx.fillStyle = chartPalette().text;
       ctx.fillText("no data", padL, padT + 12);
       return;
     }
@@ -199,7 +210,7 @@ export class Histogram {
     }
 
     // x axis: ~6 ticks
-    ctx.fillStyle = TEXT_COLOR; ctx.textBaseline = "top";
+    ctx.fillStyle = chartPalette().text; ctx.textBaseline = "top";
     const ticks = 6;
     for (let i = 0; i <= ticks; i++) {
       const v = lo + (hi - lo) * i / ticks;

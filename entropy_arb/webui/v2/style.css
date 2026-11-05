@@ -23,8 +23,8 @@
   display: block; padding: 7px 10px; border-radius: 6px;
   color: var(--text); font-size: 13.5px;
 }
-.v2-nav a:hover { background: #16222e; }
-.v2-nav a.active { background: #16222e; color: var(--accent); }
+.v2-nav a:hover { background: var(--hover); }
+.v2-nav a.active { background: var(--hover); color: var(--accent); }
 .v2-nav .spacer { flex: 1; }
 .v2-nav .v2-navfoot { display: flex; gap: 8px; padding: 8px 6px 0; flex-wrap: wrap; }
 .v2-nav .v2-navfoot a, .v2-nav .v2-navfoot button {
@@ -58,8 +58,10 @@
 .v2-retry { margin-top: 4px; }
 
 /* ---------------- badges / pnl ---------------- */
-.badge.pending { background: #4d3c00; color: #fff3c4; }
-.badge.reconciled { background: #14532d; color: #d9f7e4; }
+.badge.pending { background: #f4e8c3; color: #7a5a08; }
+html:not(.light) .badge.pending { background: #4d3c00; color: #fff3c4; }
+.badge.reconciled { background: #d3f0de; color: #116237; }
+html:not(.light) .badge.reconciled { background: #14532d; color: #d9f7e4; }
 .v2-updated { margin-left: auto; }
 
 .kpi-strip { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
@@ -103,7 +105,7 @@
 .v2-keyedit .note, .v2-keyedit span { display: block; margin-top: 2px; }
 .v2-keyrow label { flex: 0 0 auto; white-space: nowrap; padding-top: 8px;
                    cursor: pointer; }
-.v2-diag { margin-top: 12px; border-top: 1px dashed #22303d; padding-top: 8px; }
+.v2-diag { margin-top: 12px; border-top: 1px dashed var(--badge-bg); padding-top: 8px; }
 .v2-diag-line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .v2-diag-line input[type=text] { max-width: 180px; }
 
@@ -126,7 +128,8 @@
 /* ---------------- R-01 P&L honesty (estimate basis) ---------------- */
 .v2-pnl-scope { margin-bottom: 8px; }
 .v2-pnl-gaps {
-  border: 1px solid #3a301e; background: #241f12;
+  --pnl-gap-border: #ecd9a0; --pnl-gap-bg: #fdf6e3;
+  border: 1px solid var(--pnl-gap-border); background: var(--pnl-gap-bg);
   border-radius: 8px; padding: 10px 14px; margin-bottom: 14px;
 }
 .v2-pnl-gaps-title {
@@ -140,7 +143,8 @@
 
 @media (max-width: 767px) {
   .v2-pnl-gap, .v2-pnl-gaps-foot { font-size: 14px; }
-  .v2-pnl-gaps { padding: 10px 12px; }
+  .v2-pnl-gaps {
+  --pnl-gap-border: #ecd9a0; --pnl-gap-bg: #fdf6e3; padding: 10px 12px; }
 }
 
 /* P&L board: 10 dense columns — tighter padding keeps them in one screen */
@@ -165,3 +169,8 @@
   .v2-acct-controls select { max-width: 100%; }
   .v2-lh-intro { font-size: 14px; }
 }
+
+/* ---------------- light theme ---------------- */
+html:not(.light) .v2-pnl-gaps { --pnl-gap-border: #3a301e; --pnl-gap-bg: #241f12; }
+html.light .badge.pending { background: #f4e8c3; color: #7a5a08; }
+html.light .badge.reconciled { background: #d3f0de; color: #116237; }
