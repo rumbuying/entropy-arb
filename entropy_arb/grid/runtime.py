@@ -874,6 +874,7 @@ class GridRuntime:
         intents = await actor.place_initial(candidates, epoch=expected_epoch)
         placed, pending = 0, 0
         for intent in sorted(intents, key=lambda item: not item['reduce_only']):
+            unknown_rounds = 0
             for _ in range(4):
                 # A previous initial order can fill before the rest of the
                 # batch is ready. Book it before checking the next order,
@@ -907,7 +908,38 @@ class GridRuntime:
                 placed += 1
             elif result['outcome'] == 'DEFERRED':
                 pending += 1
+            elif result['outcome'] == 'UNKNOWN':
+                # One unproven acknowledgment must not discard a long
+                # paced activation: the venue's read visibility can lag
+                # the ack by minutes (the bulk openOrders quirk), and
+                # the lookup path never resends. Give it three bounded
+                # reconciliation rounds before failing the start.
+                # 2026-11-06 00:53, g-8d266770: a 17-minute activation
+                # aborted on one unproven ACK after the entries were
+                # already placed.
+                resolved = result.get("resolved")
+                while (unknown_rounds < 3 and resolved not in
+                       ("OPEN", "PARTIAL", "FILLED", "ABSENT_FINAL_PLANNED",
+                        "EXPIRED_EPOCH", "REJECTED", "CANCELED")):
+                    unknown_rounds += 1
+                    await asyncio.sleep(5)
+                    await self.pump_events(grid_id, dispatch=False)
+                    resolved = await executor.resolve_unknown(intent["intent_id"])
+                if resolved in ("OPEN", "PARTIAL", "FILLED"):
+                    placed += 1
+                elif resolved in ("ABSENT_FINAL_PLANNED", "EXPIRED_EPOCH",
+                                  "REJECTED", "CANCELED"):
+                    pending += 1
+                else:
+                    log.error('GRID_INITIAL_ORDER_UNCONFIRMED grid=%s intent=%s outcome=%s resolved=%s',
+                              grid_id, intent["intent_id"], result.get('outcome'), resolved)
+                    raise RuntimeError_("ORDER_NOT_CONFIRMED", "initial/restored grid orders require reconciliation")
             else:
+                # The outcome alone cannot be triaged; carry the full
+                # result and the intent for the operator and the monitor.
+                log.error('GRID_INITIAL_ORDER_UNCONFIRMED grid=%s intent=%s outcome=%s reject_code=%s resolved=%s',
+                          grid_id, intent["intent_id"], result.get('outcome'),
+                          result.get('reject_code'), result.get('resolved'))
                 raise RuntimeError_("ORDER_NOT_CONFIRMED", "initial/restored grid orders require reconciliation")
         await self.pump_events(grid_id)
         updated = await self.store.write(lambda c: c.execute(

@@ -222,3 +222,80 @@ def test_old_activation_cannot_replace_a_newly_resumed_actor(tmp_path, stage):
             if old is not None: await asyncio.gather(old, return_exceptions=True)
             rt.close()
     asyncio.run(run())
+
+
+async def _zero_sleep(_):
+    return None
+
+
+def test_one_unproven_ack_does_not_abort_the_activation(tmp_path, monkeypatch):
+    """A venue whose read visibility lags the ack (bulk openOrders quirk)
+    returns UNKNOWN after SENT; the lookup path never resends. The start
+    must give it bounded reconciliation rounds instead of discarding the
+    whole paced activation (2026-11-06 00:53, g-8d266770). White-box: the
+    fixture resolves sends synchronously, so the UNKNOWN boundary and the
+    later visible lookup are both injected."""
+    async def run():
+        rt, venue = make_runtime(tmp_path)
+        monkeypatch.setattr('entropy_arb.grid.runtime.asyncio.sleep', _zero_sleep)
+        try:
+            gid, _, _ = await create_ready(rt, venue)
+            executor = rt.executors[next(iter(rt.venues))]
+            original = executor.submit_intent
+            state = {'unknown': 0, 'rounds': 0}
+            async def unproven_once(intent_id, **kwargs):
+                # the first initial entry is the second submit call
+                state['unknown'] += 1
+                if state['unknown'] == 2:
+                    state['injected'] = True
+                    return {'intent_id': intent_id, 'outcome': 'UNKNOWN',
+                            'resolved': 'ABSENT'}
+                return await original(intent_id, **kwargs)
+            monkeypatch.setattr(executor, 'submit_intent', unproven_once)
+            async def visibility_lags(intent_id, **kwargs):
+                state['rounds'] += 1
+                return 'OPEN'
+            monkeypatch.setattr(executor, 'resolve_unknown', visibility_lags)
+            result = await rt.start_grid(gid)
+            assert rt.lifecycle._grid(gid)['status'] == 'RUNNING'
+            assert state.get('injected') is True and state['rounds'] >= 1
+            assert result['placed'] >= 1
+        finally:
+            rt.close()
+    asyncio.run(run())
+
+
+def test_permanently_unproven_ack_still_fails_the_start_with_details(tmp_path, monkeypatch, caplog):
+    async def run():
+        rt, venue = make_runtime(tmp_path)
+        monkeypatch.setattr('entropy_arb.grid.runtime.asyncio.sleep', _zero_sleep)
+        try:
+            gid, _, _ = await create_ready(rt, venue)
+            executor = rt.executors[next(iter(rt.venues))]
+            original = executor.submit_intent
+            state = {'unknown': 0}
+            async def unproven_once(intent_id, **kwargs):
+                # call #1 is the protection stop inside place_initial; the
+                # first initial entry is call #2.
+                state['unknown'] += 1
+                if state['unknown'] == 2:
+                    return {'intent_id': intent_id, 'outcome': 'UNKNOWN',
+                            'resolved': 'ABSENT'}
+                return await original(intent_id, **kwargs)
+            monkeypatch.setattr(executor, 'submit_intent', unproven_once)
+            async def absent(intent_id, **kwargs):
+                return 'ABSENT'
+            monkeypatch.setattr(executor, 'resolve_unknown', absent)
+            import logging
+            # start_grid reports ORDER_NOT_CONFIRMED as a failed operation
+            # result (runtime.start's structured-failure handler), not a raise.
+            with caplog.at_level(logging.ERROR, logger='grid.runtime'):
+                outcome = await rt.start_grid(gid)
+            assert outcome.get('status') == 'failed'
+            assert outcome.get('code') == 'ORDER_NOT_CONFIRMED'
+            assert rt.lifecycle._grid(gid)['status'] == 'NEEDS_ATTENTION'
+            assert any('GRID_INITIAL_ORDER_UNCONFIRMED' in r.message and 'ABSENT' in r.message
+                       for r in caplog.records)
+        finally:
+            rt.close()
+    asyncio.run(run())
