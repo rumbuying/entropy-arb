@@ -188,6 +188,15 @@ def _opt(d: Dict[str, Any], key: str) -> Any:
     return d.get(key)
 
 
+def _opt_bool(d: Dict[str, Any], key: str, default: bool) -> bool:
+    value = d.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise GridModelError("VALIDATION_ERROR", f"{key} must be a boolean", key)
+    return value
+
+
 # ------------------------------------------------------------------- hashing
 
 def canonical_json_bytes(payload: Any) -> bytes:
@@ -465,6 +474,11 @@ class GridConfig:
     execution_policy: str = "post_only"   # post_only | gtc
     protection: Optional[PriceProtection] = None
     profit_protection: Optional[ProfitProtection] = None
+    # True (default): the runtime budget revalidation pauses the grid when the
+    # plan's adverse requirement no longer fits the account (RISK_BUDGET_
+    # EXCEEDED). False: the operator chose to keep the grid RUNNING instead —
+    # the observation is recorded and the venue remains the final margin gate.
+    pause_on_budget: bool = True
 
     # canonical (tick-rounded) bounds are computed by the planner, never
     # user-typed; they live on the Plan, not here.
@@ -486,6 +500,7 @@ class GridConfig:
             "initial_position": self.initial_position,
             "start": self.start,
             "execution_policy": self.execution_policy,
+            "pause_on_budget": bool(self.pause_on_budget),
         }
         if self.protection is not None:
             result['protection'] = self.protection.to_dict()
@@ -500,7 +515,8 @@ class GridConfig:
                             "spacing", "lower_price", "upper_price",
                             "grid_count", "capital", "leverage",
                             "margin_mode", "initial_position", "start",
-                            "execution_policy", "protection", "profit_protection", "trailing"),
+                            "execution_policy", "protection", "profit_protection", "trailing",
+                            "pause_on_budget"),
                         "GridConfig")
         # P1 features declared in the spec example: refuse, never ignore
         for p1 in ("trailing",):
@@ -536,6 +552,7 @@ class GridConfig:
             execution_policy=str(_opt(d, "execution_policy") or "post_only"),
             protection=PriceProtection.from_dict(d['protection'], d.get('direction')) if 'protection' in d else None,
             profit_protection=ProfitProtection.from_dict(d['profit_protection']) if 'profit_protection' in d else None,
+            pause_on_budget=_opt_bool(d, "pause_on_budget", True),
         )
         cfg.validate_enums()
         return cfg

@@ -203,6 +203,9 @@ export function mount(container) {
   const autoStart = el("input", { type: "checkbox", checked: true });
   const initialPositionSelect = select("deferred", [["deferred", "等待价格触及后建仓"], ["immediate", "立即建立初始仓位（多头 / 空头）"]], v => draft.initial_position = v);
   const executionSelect = select("post_only", [["post_only", "仅挂单 · 防止主动成交"], ["gtc", "普通限价 · 持续有效"]], v => draft.execution_policy = v);
+  // 开单时让操作者决定:预算超限(风控重新核算装不下)时是否暂停网格。
+  // 默认勾选 = 现行行为;取消勾选则网格保持运行,预算检查只拦新开仓单。
+  const pauseOnBudget = el("input", { type: "checkbox", checked: true });
   const marginSelect = select("cross", [["cross", "全仓"], ["isolated", "逐仓（需交易所支持）"]], v => draft.margin_mode = v);
   const leverageInput = textInput(3, v => draft.leverage = v, { integer: true, min: "1" });
   function updateCreateText() {
@@ -335,6 +338,12 @@ export function mount(container) {
       ),
     ),
     el("label", { class: "grid-sub" }, autoStart, " 创建后立即启动"),
+    el(
+      "label",
+      { class: "grid-sub", title: "勾选:风控重新核算发现最坏情况保证金超出账户容量时自动暂停网格(保留仓位与止损)。取消:网格保持运行,预算检查仅拦截新开仓单,由交易所保证金做最终把关。" },
+      pauseOnBudget,
+      " 预算超限时暂停网格(取消则保持运行,仅拦截新开仓单)",
+    ),
     el("div", { style: "margin:14px 0" }, note),
     refreshPreview,
     create,
@@ -507,6 +516,7 @@ export function mount(container) {
     if (!alive || busy || !draft.market_ref || !market) return;
     const own = ++seq,
       frozen = structuredClone(draft);
+    frozen.pause_on_budget = pauseOnBudget.checked;
     if (!simulated) {
       const rule = (operator, value) => ({ type: "price", source: "mark", operator, value });
       frozen.protection = { exit_action: "flatten" };

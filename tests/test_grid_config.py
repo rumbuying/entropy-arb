@@ -196,3 +196,16 @@ class TestPlanDto:
     def test_level_price_must_be_decimal_text(self):
         with pytest.raises(models.GridModelError):
             models.PriceLevel.from_dict({"level_index": 0, "price": 100.5})
+
+
+def test_pause_on_budget_is_an_optional_creation_choice():
+    """2026-11-06: the operator asked for a creation-time choice: should
+    budget exhaustion pause the grid? Default preserves the pause; false
+    keeps the grid running (venue margin admission stays the final gate)."""
+    default = models.GridConfig.from_dict(base_config())
+    assert default.pause_on_budget is True
+    off = models.GridConfig.from_dict(base_config(pause_on_budget=False))
+    assert off.pause_on_budget is False
+    assert off.to_dict()["pause_on_budget"] is False
+    with pytest.raises(models.GridModelError):
+        models.GridConfig.from_dict(base_config(pause_on_budget="no"))

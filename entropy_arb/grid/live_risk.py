@@ -27,6 +27,18 @@ log = logging.getLogger("grid.live_risk")
 RISK_BLIND_GRACE_S = 120
 
 
+def _pause_on_budget(rt, grid_id):
+    """Creation-time operator choice: should budget exhaustion pause the grid?
+
+    Default True preserves the historical behaviour. False keeps the grid
+    running and lets the venue margin admission be the final send gate.
+    """
+    try:
+        return bool(getattr(rt.config(grid_id), 'pause_on_budget', True))
+    except Exception:
+        return True
+
+
 class LiveRiskGuard:
     def __init__(self, runtime, *, clock=time.monotonic, max_age=5.0, collection_timeout=10.0):
         self.rt, self.clock, self.max_age = runtime, clock, max_age
@@ -312,6 +324,16 @@ class LiveRiskGuard:
         if protection:
             return protection
         result = await self.observe(intent["grid_id"], intent_id=intent["intent_id"], protection_checked=True)
+        if (result["code"] == "RISK_BUDGET_EXCEEDED"
+                and not _pause_on_budget(self.rt, intent["grid_id"])):
+            # The operator chose creation-time semantics that keep this grid
+            # running through budget exhaustion (pause_on_budget=false): the
+            # observation is recorded, no pause, and the venue's own margin
+            # admission remains the final gate for the send itself.
+            result["budget_tolerated"] = True
+            result["code"] = None
+            log.warning("RISK_BUDGET_TOLERATED grid=%s intent=%s", intent["grid_id"],
+                        intent.get("intent_id"))
         if not result["code"]:
             self.permits[intent["intent_id"]] = result
         await self.record(intent["grid_id"], result)
@@ -562,6 +584,16 @@ class LiveRiskScheduler:
                 "RISK_FUNDING_CHANGED_WAIT", "RISK_GRID_CHANGED",
                 "RISK_STREAM_UNRECONCILED",
                 "PROTECTION_SERVICE_PENDING"):
+            if (result["code"] == "RISK_BUDGET_EXCEEDED"
+                    and not _pause_on_budget(self.rt, row["grid_id"])):
+                # pause_on_budget=false: keep the grid RUNNING (creation-time
+                # decision). The order-path observation tolerates the same
+                # code, so sends proceed and the venue's own margin admission
+                # is the final gate. Everything else freezes exactly as
+                # before.
+                result["budget_tolerated"] = True
+                log.warning("RISK_BUDGET_TOLERATED grid=%s epoch=%s", row["grid_id"], row["epoch"])
+                return
             await self.rt.live_risk.freeze(row["grid_id"], epoch=row["epoch"], code=result["code"])
 
     async def close(self):

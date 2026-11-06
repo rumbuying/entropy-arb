@@ -761,3 +761,51 @@ def test_stream_unreconciled_never_pauses_the_grid_itself(tmp_path, monkeypatch)
         finally:
             rt.close()
     asyncio.run(run())
+
+
+def test_budget_pause_can_be_disabled_at_creation(tmp_path, monkeypatch):
+    """开单时可选:预算超限是否暂停网格。
+
+    2026-11-06: a bulk long grid auto-paused twice on RISK_BUDGET_EXCEEDED
+    after fills consumed the account headroom. The operator asked for the
+    choice at creation. With pause_on_budget=false the periodic guard records
+    the budget failure but keeps the grid RUNNING, and the order path stops
+    treating the budget code as a send refusal (the venue margin check is the
+    final gate). Default (true) preserves the pause exactly as before.
+    """
+    monkeypatch.setenv("GRID_REAL_DISPATCH", "1")
+    async def run():
+        rt = GridRuntime.open(str(tmp_path / "native.db"), execution_mode="production")
+        scheduler = LiveRiskScheduler(rt)
+        try:
+            gid, cfg, venue, mock, signer, qty = await running(rt)
+            def patch_config(c):
+                row = c.execute("SELECT revision,config_json FROM grid_versions "
+                                "WHERE grid_id=? ORDER BY revision DESC LIMIT 1",
+                                (gid,)).fetchone()
+                doc = json.loads(row[1]); doc["pause_on_budget"] = False
+                c.execute("UPDATE grid_versions SET config_json=? WHERE grid_id=? AND revision=?",
+                          (json.dumps(doc), gid, row[0]))
+            await rt.store.write(patch_config)
+            assert rt.config(gid).pause_on_budget is False
+            mock.equity = "1"
+            before = orders_sent(mock)
+            await scheduler.tick()
+            await asyncio.gather(*scheduler.tasks.values())
+            grid = rt.lifecycle._grid(gid)
+            assert (grid["status"], grid["desired_mode"]) == ("RUNNING", "ACTIVE")
+            assert rt.store.read(lambda c: c.execute(
+                "SELECT COUNT(*) FROM events WHERE scope=? AND event_type='risk_paused'",
+                (gid,)).fetchone()[0]) == 0
+            assert rt.grid_snapshot(gid)["risk_watch"]["code"] == "RISK_BUDGET_EXCEEDED"
+            # The order path tolerates the budget code too: the send proceeds
+            # and the venue's margin admission is the final gate.
+            intent = await refill(rt, gid, qty)
+            result = await rt.executors[cfg.account_ref].submit_intent(
+                intent["intent_id"], epoch=intent["epoch"])
+            assert result["outcome"] == "ACCEPTED", result
+            assert orders_sent(mock) == before + 1
+        finally:
+            await scheduler.close()
+            rt.close()
+    asyncio.run(run())
