@@ -500,8 +500,14 @@ class GridConfig:
             "initial_position": self.initial_position,
             "start": self.start,
             "execution_policy": self.execution_policy,
-            "pause_on_budget": bool(self.pause_on_budget),
         }
+        # Only an explicit opt-out enters the canonical form: the default
+        # (True) must hash exactly like configs created before the field
+        # existed, or every running grid's operator-trial record would
+        # mismatch its config hash and revoke its own scope
+        # (OPERATOR_TRIAL_SCOPE_REVOKED, 2026-11-06 19:27).
+        if not self.pause_on_budget:
+            result["pause_on_budget"] = False
         if self.protection is not None:
             result['protection'] = self.protection.to_dict()
         if self.profit_protection is not None:
