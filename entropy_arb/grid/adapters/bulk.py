@@ -328,6 +328,17 @@ class BulkGridVenue(GridVenue):
         self.credential_ref=parent.credential_ref;self.clock_ms=parent.clock_ms
         self._events=[];self._pending={};self._conflicts={};self._execution=None;self._fixed_backend=None
 
+    def read_health(self, *, now_mono):
+        """Recent negative read evidence from the shared paced transport.
+
+        Activation gates (start_grid/resume/range scheduler) refuse while
+        this venue's reads are failing, so a flapping API cannot burn an
+        epoch on a doomed activation. A fresh process with no reads yet is
+        healthy — the gate refuses only on observed failures. Other venues
+        have no such attribute; callers getattr-probe."""
+        health=getattr(self.transport,'read_health',None)
+        return True if health is None else health(now_mono=now_mono)
+
     def native_protection_backend(self,runtime):
         from .bulk_protection_manager import BulkProtectionManager
         if self._fixed_backend is None:self._fixed_backend=BulkProtectionManager(runtime,self)

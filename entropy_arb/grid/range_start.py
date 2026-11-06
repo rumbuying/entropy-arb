@@ -79,6 +79,13 @@ class RangeStartScheduler:
             if getattr(venue,'stream_gap',False) or not getattr(venue,'stream_connected',True):
                 await self.record(row,code='RANGE_STREAM_UNRECONCILED')
                 return
+            read_health = getattr(venue,'read_health',None)
+            if read_health is not None and not read_health(now_mono=time.monotonic()):
+                # Recent negative read evidence: starting now would burn an
+                # epoch on a doomed activation (2026-11-06, g-779434bd
+                # pattern). Retry on the next poll; no state change here.
+                await self.record(row,code='RANGE_READ_UNHEALTHY')
+                return
             snapshot = await asyncio.wait_for(critical_market_snapshot(venue),self.query_timeout)
             if not self.current(row):
                 return

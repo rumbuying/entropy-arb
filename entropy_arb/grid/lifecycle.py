@@ -313,7 +313,17 @@ class GridLifecycle:
             raise LifecycleError("BAD_STATE",
                                  f"resume from {grid['status']}")
         activation_epoch = None
+        last_report = None
+        from .stream_recovery import activation_read_failure
         try:
+            venue = self.runtime.venue_for(grid['account_id'], grid['market_key']) if self.runtime else None
+            read_health = getattr(venue, 'read_health', None) if venue is not None else None
+            if read_health is not None and not read_health(now_mono=time.monotonic()):
+                # Refuse BEFORE any I/O (the reconcile step cancels venue
+                # orders): the operation fails cleanly, the grid keeps its
+                # state, and the caller retries once reads recover.
+                raise LifecycleError("READ_HEALTH_UNHEALTHY",
+                                     "venue reads failed recently; resume refused before any I/O")
             await self._step(op_id, "reconcile")
             if self.runtime:
                 # A failed activation may leave confirmed ordinary orders.
@@ -321,6 +331,7 @@ class GridLifecycle:
                 # whole-position protection stays in place throughout.
                 await self._cancel_open_grid_orders(grid_id, grid['epoch'])
                 report = await self.runtime.recover(grid_id, restore=False, expected_epoch=grid["epoch"])
+                last_report = report
                 if not report["ok"]:
                     raise LifecycleError("RECOVERY_BLOCKED", "orders/history/position not reconciled")
             native_protection = await self.runtime.protection_lease.resume_proofs(grid_id,
@@ -333,6 +344,21 @@ class GridLifecycle:
             return {"operation_id": op_id, "status": "succeeded", **result}
         except Exception as e:
             log.exception('grid resume failed at step %s', 'rebuild_orders' if activation_epoch is not None else 'reconcile')
+            if (activation_epoch is not None and self.runtime is not None
+                    and activation_read_failure(e, last_report)
+                    and self.runtime._activation_was_pre_io(grid_id, activation_epoch)):
+                # Same contract as start_grid: a read flap before this epoch
+                # sent anything reverts to the pre-resume state instead of
+                # parking NEEDS_ATTENTION (an automation dead end).
+                await self._set_status(grid_id, grid["status"], desired=grid["desired_mode"],
+                    expected_epoch=activation_epoch, allowed_states=("STARTING", "NEEDS_ATTENTION"))
+                await self.store.write(lambda c: store.register_event(c,
+                    event_key=f"activation-reverted:{grid_id}:{activation_epoch}",
+                    scope=grid_id, event_type="activation_read_reverted",
+                    payload={"code": str(e), "epoch": activation_epoch,
+                             "previous_status": grid["status"], "previous_desired": grid["desired_mode"]}))
+                await self._finish_operation(op_id, "failed", error=str(e) or type(e).__name__)
+                raise
             if activation_epoch is not None:
                 await self._set_status(grid_id, "NEEDS_ATTENTION", desired="PAUSED",
                     expected_epoch=activation_epoch, allowed_states=("STARTING", "NEEDS_ATTENTION"))

@@ -728,20 +728,53 @@ class GridRuntime:
         return pump
 
     # ------------------------------------------------------------ control
+    def _activation_was_pre_io(self, grid_id: str, epoch: int) -> bool:
+        """True when no order of this activation epoch ever reached the send path.
+
+        PLANNED/BLOCKED_SLOT are provably unsent (no bulk original exists, so
+        nothing can be on the wire); everything from DISPATCHING onward may
+        have been sent — the per-order analogue is the preparation_not_sent
+        fence at the executor (2026-11-05 vocabulary). The native fixed stop
+        submits inside activate(), so any intent past PLANNED means real I/O
+        happened and the uncertainty is genuine.
+        """
+        sent = self.store.read(lambda c: c.execute(
+            "SELECT 1 FROM order_intents WHERE grid_id=? AND epoch=? AND state IN "
+            "('DISPATCHING','MAY_HAVE_SENT','UNKNOWN','ACCEPTED','OPEN','PARTIAL','FILLED','CANCELED',"
+            "'CANCEL_REQUESTED','CANCEL_PENDING') LIMIT 1",
+            (grid_id, epoch)).fetchone())
+        return sent is None
+
     async def start_grid(self, grid_id: str, *,
                          request_id: Optional[str] = None) -> Dict[str, Any]:
+        import time
+        from .stream_recovery import activation_read_failure
         op = await self.lifecycle._begin_operation(grid_id, "start", request_id)
         if op.get("replayed"):
             return op
         activation_epoch = None
+        original_status = original_desired = None
+        last_report = None
         try:
             grid=self.lifecycle._grid(grid_id)
             if grid["status"] not in ("READY", "WAITING_RANGE"):
                 raise RuntimeError_("BAD_STATE", "grid cannot start from current state")
+            original_status, original_desired = grid["status"], grid["desired_mode"]
+            venue = self.venue_for(grid["account_id"], grid["market_key"])
+            read_health = getattr(venue, "read_health", None)
+            if read_health is not None and not read_health(now_mono=time.monotonic()):
+                # Refuse BEFORE the epoch bump: this is a pre-I/O refusal, the
+                # operation fails cleanly and the grid keeps its state. The
+                # range scheduler retries once reads recover (2026-11-06,
+                # g-779434bd: repeated activations into a flapping API each
+                # burned an epoch and parked NEEDS_ATTENTION).
+                raise RuntimeError_("READ_HEALTH_UNHEALTHY",
+                                    "venue reads failed recently; start refused before any I/O", 422)
             activation_epoch = await self.lifecycle._bump_epoch(grid_id, status="STARTING", desired="ACTIVE", expected_epoch=grid["epoch"], allowed_states=("READY","WAITING_RANGE"))
             if self.execution_mode == "production":
                 await self.lifecycle._step(op["operation_id"], "reconcile")
                 report = await self.recover(grid_id, restore=False, expected_epoch=activation_epoch)
+                last_report = report
                 if not report["ok"]:
                     raise RuntimeError_("RECOVERY_BLOCKED", "orders/history/position not reconciled", 422)
             await self.lifecycle._step(op["operation_id"], "initialize")
@@ -761,6 +794,27 @@ class GridRuntime:
                           'message':'启动期间触发保护，已转入自动退出流程；请查看网格详情与实际仓位。'}
                 await self.lifecycle._finish_operation(op['operation_id'],'failed',result=result,error=result['message'])
                 return {'operation_id':op['operation_id'],'status':'failed',**result}
+            if (activation_epoch is not None and original_status is not None
+                    and activation_read_failure(e, last_report)
+                    and self._activation_was_pre_io(grid_id, activation_epoch)):
+                # A read flap before this epoch sent anything is not grid
+                # danger: revert to the pre-start state instead of parking
+                # NEEDS_ATTENTION (an automation dead end — resume refuses
+                # it, so every such landing needed a manual re-drive).
+                # WAITING_RANGE grids keep desired ACTIVE and the range
+                # scheduler retries once reads recover; the read-health gate
+                # refuses that retry while reads still fail. The barrier
+                # failure path in _recover may already have flipped the
+                # status to NEEDS_ATTENTION — that flip is reverted too.
+                await self.lifecycle._set_status(grid_id, original_status, desired=original_desired,
+                    expected_epoch=activation_epoch, allowed_states=("STARTING", "NEEDS_ATTENTION"))
+                await self.store.write(lambda c: store.register_event(c,
+                    event_key=f"activation-reverted:{grid_id}:{activation_epoch}",
+                    scope=grid_id, event_type="activation_read_reverted",
+                    payload={"code": str(e), "epoch": activation_epoch,
+                             "previous_status": original_status, "previous_desired": original_desired}))
+                await self.lifecycle._finish_operation(op["operation_id"], "failed", error=str(e))
+                raise
             if activation_epoch is not None:
                 await self.lifecycle._set_status(grid_id, "NEEDS_ATTENTION", desired="PAUSED",
                     expected_epoch=activation_epoch, allowed_states=("STARTING", "NEEDS_ATTENTION"))

@@ -47,8 +47,25 @@ class BulkReply:
 
 class BulkReadTransport(ReadTransport):
     """Public GET plus strictly typed *unsigned read-only* POST /account."""
+    # Recent negative read evidence gates activation: a start/resume refused
+    # while reads are failing cannot burn an epoch mid-flap. Absence of any
+    # read (fresh process) is healthy — the gate refuses only on observed
+    # failures, so it can never deadlock a worker that has not read yet.
+    READ_HEALTH_WINDOW_S = 60
+
     def __init__(self, session, network):
         super().__init__(session, 'bulk', network)
+        self.last_fail_mono = None
+
+    def read_health(self, *, now_mono):
+        """True unless this transport observed a failed read recently.
+
+        A live 429 backoff also counts as unhealthy. Successes are not
+        tracked: only failure recency is negative evidence."""
+        if now_mono < self.next_read:
+            return False
+        return (self.last_fail_mono is None
+            or now_mono-self.last_fail_mono > self.READ_HEALTH_WINDOW_S)
 
     async def account(self, kind, owner, *, limit=None, start_slot=None, end_slot=None, cursor=None, symbol=None):
         if kind not in READ_HISTORY_TYPES | {'fullAccount', 'openOrders', 'feeTier'}:
@@ -83,14 +100,19 @@ class BulkReadTransport(ReadTransport):
                 async with self.session.post(self.origin+'/api/v1/account', json=payload,
                         allow_redirects=False, timeout=aiohttp.ClientTimeout(total=15)) as response:
                     if response.status == 429:
-                        self.next_read = time.monotonic()+60
+                        now = time.monotonic()
+                        self.next_read = now+60
+                        self.last_fail_mono = now
                         raise AdapterError('BULK_READ_RATE_LIMITED')
                     if response.status not in (200, 206, 400, 404, 503):
+                        self.last_fail_mono = time.monotonic()
                         raise AdapterError('BULK_READ_HTTP_FAILED')
                     raw = bytearray()
                     async for chunk in response.content.iter_chunked(65536):
                         raw.extend(chunk)
-                        if len(raw) > 2_000_000: raise AdapterError('BULK_READ_TOO_LARGE')
+                        if len(raw) > 2_000_000:
+                            self.last_fail_mono = time.monotonic()
+                            raise AdapterError('BULK_READ_TOO_LARGE')
                     def object_pairs(pairs):
                         result = {}
                         for k, v in pairs:
@@ -105,6 +127,7 @@ class BulkReadTransport(ReadTransport):
             except AdapterError:
                 raise
             except Exception:
+                self.last_fail_mono = time.monotonic()
                 raise AdapterError('BULK_READ_UNCERTAIN') from None
 
 

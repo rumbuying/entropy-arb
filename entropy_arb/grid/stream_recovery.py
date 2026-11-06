@@ -76,6 +76,28 @@ def transient(report):
     return True
 
 
+def activation_read_failure(error, recovery_report):
+    """Classify an activation failure as a transient venue-read failure.
+
+    Reuses this module's vocabulary (NETWORK_ERRORS already unions the bulk
+    read codes) so every layer agrees on what is transient. A RECOVERY_BLOCKED
+    barrier failure counts only when the recovery report itself is transient:
+    a certified data-quality gap (e.g. FILL_HISTORY_TRUNCATED) retried
+    unboundedly by the range scheduler would never converge, so those keep
+    landing NEEDS_ATTENTION. Duck-typed on .code so runtime's RuntimeError_
+    and lifecycle's LifecycleError share one implementation without an
+    import cycle.
+    """
+    code = getattr(error, "code", None)
+    if code is not None and code in NETWORK_ERRORS:
+        return True
+    if code == "RECOVERY_BLOCKED":
+        return recovery_report is not None and transient(recovery_report)
+    if isinstance(error, AdapterError):
+        return str(error) in NETWORK_ERRORS
+    return False
+
+
 class StreamRecoveryScheduler:
     def __init__(self, runtime, *, clock=time.monotonic, concurrency=2):
         self.runtime, self.clock = runtime, clock

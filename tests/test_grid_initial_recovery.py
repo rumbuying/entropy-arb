@@ -157,7 +157,15 @@ def test_first_native_start_proves_history_and_connection_before_account_control
             with pytest.raises(RuntimeError_, match="RECOVERY_BLOCKED" if failure else "CONTROL_STORE_REQUIRED"):
                 await rt.start_grid(gid, request_id="offline-start")
             grid = rt.lifecycle._grid(gid)
-            assert (grid["status"], grid["desired_mode"]) == ("NEEDS_ATTENTION", "PAUSED")
+            if failure == "stream":
+                # 2026-11-07: a transient stream outage before this epoch sent
+                # anything reverts to the pre-start state instead of parking
+                # NEEDS_ATTENTION (an automation dead end). The proofs-before-
+                # controls contract below is unchanged: no controls ran, no
+                # order was signed, and the stream gap flag is set.
+                assert (grid["status"], grid["desired_mode"]) == ("READY", "ACTIVE")
+            else:
+                assert (grid["status"], grid["desired_mode"]) == ("NEEDS_ATTENTION", "PAUSED")
             assert bool(controls) is (failure is None)
             assert not signer.actions and not [p for path, p in transport.calls if path == "/exchange"]
             fill_requests = [p for _, p in transport.calls if p.get("type") == "userFillsByTime"]
