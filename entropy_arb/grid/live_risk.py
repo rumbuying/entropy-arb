@@ -430,6 +430,16 @@ class LiveRiskGuard:
             current = self.rt.lifecycle._grid(grid_id)
             if current['status'] == 'RECOVERING':
                 return
+            from .protection_watch import proof_blind_tolerated
+            if proof_blind_tolerated(self.rt.store,gid=grid_id,
+                    venue_clock_ms=venue.clock_ms(),
+                    watch_clock_ms=int(time.monotonic()*1000),code=code):
+                # Blindness tolerance is shared with the protection watch:
+                # exiting here flattened a grid the watch had just placed in
+                # PROTECTION_BLIND_WAIT (2026-11-06 11:01, blind_ms=100 of
+                # 180 while the venue API flapped 504). The watch runs the
+                # exit contract itself once the window is exhausted.
+                return
             await self.rt.protection.request_exit(grid_id,expected_epoch=epoch,
                 reason=code if code.startswith('PROTECTION_SERVICE_') else 'PROTECTION_SERVICE_FIXED_UNVERIFIED')
             return

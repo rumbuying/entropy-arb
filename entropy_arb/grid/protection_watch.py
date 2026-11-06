@@ -60,6 +60,30 @@ def recovery_in_flight(store,gid,epoch,*,now_mono_ms):
         and now_mono_ms-marker['onset_mono_ms']<=PROTECTION_RECOVERY_TOLERANCE_MS)
 
 
+def proof_blind_tolerated(store,*,gid,venue_clock_ms,watch_clock_ms,code):
+    """Shared blindness tolerance for every protection consumer.
+
+    A proof expiry (or an unreadable proof) inside a continuous blind window
+    is pending, not a confirmed protection loss — the native stop keeps
+    resting on the venue and the send gate refuses new risk while blind. The
+    protection watch tick and the live-risk freeze must consult the SAME
+    markers, or one of them flattens a grid the other just placed in
+    PROTECTION_BLIND_WAIT (2026-11-06 11:01: the watch tolerated blind_ms=100
+    of 180 while the risk freeze exited the same grid the same second)."""
+    if not (isinstance(code,str) and (code.endswith('_PROOF_EXPIRED')
+            or code=='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')):
+        return False
+    def within(marker_key,now_ms):
+        saved=store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+            (marker_key,)).fetchone())
+        if saved is None:return False
+        try:first=int(json.loads(saved[0]))
+        except (TypeError,ValueError):return False
+        return 0<=now_ms-first<=PROTECTION_BLIND_TOLERANCE_MS
+    return (within(PROTECTION_BLIND_KEY+gid,venue_clock_ms)
+        or within(PROTECTION_WATCH_BLIND_KEY+gid,watch_clock_ms))
+
+
 class ProtectionLease:
     def __init__(self,runtime):self.rt=runtime
 
@@ -570,39 +594,16 @@ class ProtectionWatchScheduler:
         """Tolerate a proof expiry or an unreadable proof during blindness.
 
         Pure durable read: no venue I/O, so a stalled account read cannot hold
-        the supervisor. The backend marker is written after a failed verify
-        and cleared by any successful one; the watch marker is written by the
-        fault-isolation path. Either one inside the tolerance window makes an
-        expiry (or a proof the lease check could not evaluate) pending, not a
-        confirmed protection loss — a confirmed bad stop still exits
-        immediately and sustained blindness still runs the exit contract.
-        """
-        if not (isinstance(code,str) and (code.endswith('_PROOF_EXPIRED')
-                or code=='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')):
-            return False
-        saved=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
-            (PROTECTION_BLIND_KEY+row['grid_id'],)).fetchone())
-        if saved is not None:
-            try:
-                first=int(json.loads(saved[0]))
-                now_ms=self.rt.venue_for(row['account_id'],row['market_key']).clock_ms()
-            except Exception:
-                now_ms=None
-            if now_ms is not None and 0<=now_ms-first<=PROTECTION_BLIND_TOLERANCE_MS:
-                log.warning('PROTECTION_BLIND_WAIT code=%s blind_ms=%s',code,now_ms-first)
-                return True
-        saved=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
-            (PROTECTION_WATCH_BLIND_KEY+row['grid_id'],)).fetchone())
-        if saved is not None:
-            try:
-                first=int(json.loads(saved[0]))
-                now_ms=int(self.clock()*1000)
-            except (TypeError,ValueError):
-                return False
-            if 0<=now_ms-first<=PROTECTION_BLIND_TOLERANCE_MS:
-                log.warning('PROTECTION_BLIND_WAIT code=%s watch_blind_ms=%s',code,now_ms-first)
-                return True
-        return False
+        the supervisor. Delegates to the shared proof_blind_tolerated — the
+        live-risk freeze must reach the same verdict (2026-11-06 11:01: the
+        watch placed a grid in PROTECTION_BLIND_WAIT while the freeze exited
+        it the same second)."""
+        tolerated=proof_blind_tolerated(self.rt.store,gid=row['grid_id'],
+            venue_clock_ms=self.rt.venue_for(row['account_id'],row['market_key']).clock_ms(),
+            watch_clock_ms=int(self.clock()*1000),code=code)
+        if tolerated:
+            log.warning('PROTECTION_BLIND_WAIT code=%s',code)
+        return tolerated
 
     async def observe(self,row):
         gid=row['grid_id'];config=self.rt.config(gid);venue=self.rt.venue_for(row['account_id'],row['market_key'])

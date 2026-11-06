@@ -571,3 +571,42 @@ def test_unknown_entry_is_tolerated_only_inside_its_own_window(tmp_path,monkeypa
         finally:
             rt.close()
     asyncio.run(run())
+
+def test_risk_freeze_honors_the_shared_blindness_tolerance(tmp_path,monkeypatch):
+    """2026-11-06 11:01: the protection watch placed a grid in
+    PROTECTION_BLIND_WAIT (blind_ms=100 of 180 while the venue API flapped
+    504) and the live-risk freeze exited the same grid the same second — the
+    two protection consumers disagreed on the blindness verdict. The freeze
+    must consult the same markers: fresh blindness holds the grid, exhausted
+    blindness enforces the exit."""
+    from entropy_arb.grid.protection_watch import PROTECTION_BLIND_TOLERANCE_MS
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        try:
+            def plant_blind(c):
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?)',
+                    ('protection-blind:'+gid,json.dumps(clock[0])))
+            await rt.store.write(plant_blind)
+            async def offline(kind):
+                if kind=='fullAccount':raise TimeoutError()
+            native.on_read=offline
+            code=await rt.protection.verify(gid)
+            assert code=='PROTECTION_FIXED_OBSERVATION_UNAVAILABLE'
+            # The watch tolerates the expiry inside the blindness window...
+            clock[0]+=PROOF_MAX_SECONDS*1000+1
+            watcher=ProtectionWatchScheduler(rt,clock=lambda:mono[0]/1000)
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED')
+            await watcher.close()
+            # ...so the risk freeze must reach the same verdict.
+            await rt.live_risk.freeze(gid,epoch=1,code='PROTECTION_FIXED_PROOF_EXPIRED')
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED')
+            assert rt.store.read(lambda c:c.execute("SELECT 1 FROM runtime_state WHERE key=?",
+                ('protection-exit:'+gid,)).fetchone()) is None
+            # Blindness exhausted: the freeze enforces the exit.
+            clock[0]+=PROTECTION_BLIND_TOLERANCE_MS+1
+            await rt.live_risk.freeze(gid,epoch=1,code='PROTECTION_FIXED_PROOF_EXPIRED')
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+        finally:
+            rt.close()
+    asyncio.run(run())
