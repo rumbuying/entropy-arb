@@ -443,6 +443,18 @@ class BulkProtectionManager:
         if code is None:
             await self._clear_blind(gid)
             return
+        if code=='PROTECTION_FIXED_PROOF_EXPIRED':
+            # The carried proof deadline passed without a fresh observation:
+            # record the blindness onset and wait inside the shared tolerance
+            # window (PROTECTION_BLIND_TOLERANCE_MS) that every protection
+            # consumer honors. Not writing the marker here left the freeze
+            # and the watch with no blindness evidence, and the risk freeze
+            # flattened a protected, running grid the moment the deadline
+            # crossed (2026-11-06 12:00, g-13789a97: venue API flapping
+            # 504 stalled the verify past the deadline; no marker existed).
+            await self._note_blind(gid)
+            log.warning('PROTECTION_OBSERVE_PROOF_EXPIRED_WAIT code=%s', code)
+            return
         if code in OBSERVATION_WAITS or code=='PROTECTION_OPERATION_INTERRUPTED':
             if code in OBSERVATION_WAITS and (
                     code in ('PROTECTION_FIXED_OBSERVATION_UNAVAILABLE','PROTECTION_FIXED_SNAPSHOT_INCOMPLETE')):

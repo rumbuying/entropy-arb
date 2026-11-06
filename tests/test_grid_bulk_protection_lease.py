@@ -610,3 +610,27 @@ def test_risk_freeze_honors_the_shared_blindness_tolerance(tmp_path,monkeypatch)
         finally:
             rt.close()
     asyncio.run(run())
+
+def test_proof_expiry_marks_blindness_and_waits_for_the_window(tmp_path,monkeypatch):
+    """2026-11-06 12:00, g-13789a97 (v59): the carried proof deadline crossed
+    during a venue API flap and the verify kept returning
+    PROTECTION_FIXED_PROOF_EXPIRED — a code that never wrote the blindness
+    marker — so the risk freeze found no blindness evidence and flattened a
+    protected, running grid. The expiry observation itself must mark the
+    blindness onset: the consumers (watch tick, risk freeze) then honor the
+    bounded window, and sustained blindness past it still exits."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        try:
+            async def expiring(gid,**kw):return 'PROTECTION_FIXED_PROOF_EXPIRED'
+            monkeypatch.setattr(backend,'verify',expiring)
+            await backend.observe(dict(grid_id=gid,epoch=1))
+            marker=rt.store.read(lambda c:c.execute('SELECT 1 FROM runtime_state WHERE key=?',
+                ('protection-blind:'+gid,)).fetchone())
+            assert marker is not None,'the expiry observation must mark blindness'
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED')
+            assert rt.store.read(lambda c:c.execute("SELECT 1 FROM runtime_state WHERE key=?",
+                ('protection-exit:'+gid,)).fetchone()) is None
+        finally:
+            rt.close()
+    asyncio.run(run())
