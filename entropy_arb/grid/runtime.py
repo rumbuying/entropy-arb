@@ -371,6 +371,29 @@ class GridRuntime:
             if sizing_out.get("validation_status") != "VALID":
                 return {"plan": None, "sizing": sizing_out,
                         "preview_id": None, "observation": observation}
+            # Non-blocking budget envelope: the runtime risk watch re-solves
+            # the plan against the live account every tick, and every fill
+            # consumes margin.  A preview that only says VALID hides the
+            # price at which that re-validation starts refusing and the grid
+            # auto-pauses; estimate it here and let the operator see it
+            # before opening.  Never blocks or fails the plan.
+            if (self.execution_mode == "production" and fixed_qty_base is None
+                    and hasattr(risk_model, "leverage")
+                    and getattr(risk_model, "account_remaining", None)
+                    and sizing_out.get("adverse_required")):
+                try:
+                    envelope = _sizing.budget_envelope(
+                        account_remaining=risk_model.account_remaining,
+                        adverse_required=sizing_out["adverse_required"],
+                        qty_base=sizing_out["qty_base"],
+                        levels=lines["levels"], mark=snap.mark,
+                        leverage=risk_model.leverage,
+                        taker_fee=getattr(risk_model, "taker_fee", "0"),
+                        grid_count=config.grid_count)
+                    if envelope is not None:
+                        sizing_out["budget_envelope"] = envelope
+                except Exception:
+                    pass  # an estimate must never fail the preview
             if self.execution_mode == "production":
                 if hasattr(venue, 'preview_account_setup'):
                     sizing_out['account_setup'] = venue.preview_account_setup(config, acct_snap)

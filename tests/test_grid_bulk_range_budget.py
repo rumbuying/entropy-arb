@@ -206,3 +206,28 @@ def test_revalidating_a_committed_quantity_ignores_owned_unrealized_loss():
         fixed_qty_base=fixed)
     assert solve_qty(risk_model=kept,total=kept.total_budget,**common)['validation_status']=='VALID'
     assert solve_qty(risk_model=fresh,total=fresh.total_budget,**common)['code']=='BUDGET_EXCEEDED'
+
+
+def test_budget_envelope_names_the_pause_price_and_stays_non_blocking():
+    """Creation previews must tell the operator where the runtime budget
+    revalidation starts refusing. 2026-11-06: the live grid paused silently
+    after five fills because the creation preview only said VALID."""
+    from entropy_arb.grid.sizing import budget_envelope
+    # Tight account: only ~40 USDC of headroom; each fill consumes ~6 USDC.
+    tight = budget_envelope(account_remaining='205', adverse_required='200',
+        qty_base='0.7', levels=('83','80','78','76','74'), mark='79',
+        leverage=10, taker_fee='0.0002', grid_count=5)
+    assert tight['safe'] is False
+    assert tight['fills_before_pause'] == 1
+    assert tight['pause_price'] == '78'   # first buy level below the mark
+    assert '风控自动暂停' in tight['message']
+    # Comfortable account: the whole plan fits and no warning is raised.
+    roomy = budget_envelope(account_remaining='5000', adverse_required='200',
+        qty_base='0.7', levels=('83','80','78','76','74'), mark='79',
+        leverage=10, taker_fee='0.0002', grid_count=5)
+    assert roomy['safe'] is True
+    assert roomy['pause_price'] is None
+    # A mark below every buy level has nothing to estimate.
+    assert budget_envelope(account_remaining='240', adverse_required='200',
+        qty_base='0.7', levels=('83','80'), mark='70',
+        leverage=10, taker_fee='0.0002', grid_count=2) is None

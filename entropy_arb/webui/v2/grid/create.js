@@ -553,11 +553,13 @@ export function mount(container) {
           : !simulated && plan.code === "CAPABILITY_UNVERIFIED"
           ? "账户与实盘能力尚未完成校验，当前只读。"
           : plan.message || "当前参数无法开单";
+      const envelope = out.sizing?.budget_envelope;
       previewBox.replaceChildren(
         notice(
           valid ? (simulated ? "校验通过 · 可以创建模拟网格" : "校验通过 · 使用真实账户开单") : blockedMessage,
           valid ? "ok" : previewOnly && out.sizing?.validation_status === "VALID" ? "warn" : "error",
         ),
+        ...(envelope && !envelope.safe ? [notice(envelope.message, "warn")] : []),
         el(
           "div",
           { style: "margin-top:18px" },
@@ -591,6 +593,13 @@ export function mount(container) {
               "投入 / 资金缓冲",
               `${frozen.capital.total} / ${frozen.capital.reserve} ${frozen.capital.asset}`,
             ],
+            ...(envelope ? [
+              ["预算余量", `${envelope.headroom} ${frozen.capital.asset}`],
+              ["风控暂停触发价",
+                envelope.safe
+                  ? `不触发(可承受到底 ${envelope.levels_below_mark} 档)`
+                  : `${envelope.pause_price}(第 ${envelope.pause_level_index} 档成交后)`],
+            ] : []),
             [
               simulated ? "模拟挂单费率" : "账户挂单费率",
               market.rules.maker_fee_rate == null

@@ -376,3 +376,61 @@ def solve_qty(*, risk_model: Optional[RiskModel], qty_step_base: str,
             'operating_headroom':models.canonical_decimal_text(budget-best['ordinary']),
             'policy':'operating-headroom-v1'}
     return result
+
+
+def budget_envelope(*, account_remaining, adverse_required, qty_base,
+                    levels, mark, leverage, taker_fee, grid_count):
+    """Estimate the price at which the runtime budget revalidation pauses.
+
+    The runtime risk check re-solves the SAME plan against the live account
+    (fixed qty, current available margin).  Every fill consumes margin, so
+    the account required by the plan's worst case eventually cannot fit the
+    remaining capacity and the risk watch pauses the grid.  That is correct
+    behavior, but a creation preview that only says VALID hides it.
+
+    Returns None when the inputs cannot support an estimate.  All arithmetic
+    is a conservative-local approximation of the venue's margin accounting
+    (notional/leverage plus round-trip fees); the caller labels it as an
+    estimate and never blocks the plan on it.
+    """
+    try:
+        qty = Decimal(models.parse_decimal_text(qty_base, "qty_base"))
+        avail = Decimal(models.parse_decimal_text(account_remaining, "account_remaining"))
+        required = Decimal(models.parse_decimal_text(adverse_required, "adverse_required"))
+        mark = Decimal(models.parse_decimal_text(mark, "mark"))
+        lev = Decimal(leverage)
+        fee = Decimal(models.parse_decimal_text(taker_fee or "0", "taker_fee"))
+        count = models.parse_strict_int(grid_count, "grid_count", minimum=2)
+        if qty <= 0 or lev <= 0 or mark <= 0 or fee < 0:
+            return None
+    except (models.GridModelError, ArithmeticError, TypeError, ValueError):
+        return None
+    headroom = avail - required
+    buys = sorted((Decimal(p) for p in levels if Decimal(p) < mark), reverse=True)
+    if not buys:
+        return None
+    used = Decimal(0)
+    for index, price in enumerate(buys, 1):
+        used += qty * price / lev + 2 * fee * qty * price
+        if used > headroom:
+            return {"headroom": models.canonical_decimal_text(headroom),
+                    "fills_before_pause": index,
+                    "levels_below_mark": len(buys),
+                    "pause_price": models.canonical_decimal_text(price),
+                    "pause_level_index": index,
+                    "safe": False,
+                    "message": (
+                        "预算余量约 %s USDC:预计价格跌至 %s(第 %d 档成交)时,"
+                        "最坏情况保证金将超出账户容量,网格会被风控自动暂停。"
+                        "若希望更从容,可减少档数或增加资金。"
+                        % (models.canonical_decimal_text(headroom),
+                           models.canonical_decimal_text(price), index))}
+    return {"headroom": models.canonical_decimal_text(headroom),
+            "fills_before_pause": len(buys),
+            "levels_below_mark": len(buys),
+            "pause_price": None,
+            "pause_level_index": None,
+            "safe": True,
+            "message": (
+                "预算余量约 %s USDC:按当前参数,价格跌穿全部 %d 档仍在预算内。"
+                % (models.canonical_decimal_text(headroom), len(buys)))}
