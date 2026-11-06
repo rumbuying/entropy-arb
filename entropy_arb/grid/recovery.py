@@ -255,6 +255,21 @@ class RecoveryBarrier:
                                                      client_id=cid, terminal=result.terminal_state)
                 else:
                     report["gaps"].append({"code": "TERMINAL_STATE_UNKNOWN", "client_id": cid})
+            elif (result.state == "FOUND_OPEN"
+                  and it["state"] in ("CANCEL_REQUESTED", "CANCEL_PENDING")):
+                # A cancel interrupted mid-flight (epoch bump, worker restart,
+                # a pause operation racing the supervision) leaves the intent
+                # CANCEL_REQUESTED while the order keeps resting natively.
+                # The order staying open is not evidence the cancel completed:
+                # re-drive it here, or the intent blocks every portfolio
+                # reconciliation and the resting entry can fill on a paused
+                # grid (2026-11-06 15:59, g-f0ace0a5: one buy stuck
+                # CANCEL_REQUESTED for an hour, still resting, and every
+                # creation preview refused with GRID_PORTFOLIO_UNRECONCILED).
+                outcomes = await self.executor.cancel_intents([it["intent_id"]])
+                outcome = (outcomes[0] or {}).get("outcome") if outcomes else None
+                if outcome not in ("CANCELED", "EXPIRED_EPOCH", "REJECTED", "FILLED"):
+                    report["gaps"].append({"code": "CANCEL_NOT_CONFIRMED", "client_id": cid})
         # A fixed stop can be terminal while its triggered child executions
         # remain unknown.  Revisit durable obligations even after the intent
         # has left the active-state scan, including across process restarts.
