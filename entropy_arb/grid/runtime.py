@@ -931,9 +931,46 @@ class GridRuntime:
                                   "REJECTED", "CANCELED"):
                     pending += 1
                 else:
-                    log.error('GRID_INITIAL_ORDER_UNCONFIRMED grid=%s intent=%s outcome=%s resolved=%s',
-                              grid_id, intent["intent_id"], result.get('outcome'), resolved)
-                    raise RuntimeError_("ORDER_NOT_CONFIRMED", "initial/restored grid orders require reconciliation")
+                    # The venue's lookup lag can outlast the three bounded
+                    # rounds (the bulk openOrders/history quirk lags a fresh
+                    # submit's visibility by minutes). The scoped capture
+                    # running alongside this rebuild declares such a submit
+                    # absent — an unacknowledged send that is not resting
+                    # natively, with the counter folds proving no unbooked
+                    # economics. Retire the intent exactly as the recovery
+                    # barrier does instead of aborting the whole activation.
+                    # 2026-11-06 10:44, g-2f850fa0: the resume aborted at
+                    # rebuild_orders while its own capture had already
+                    # declared the submit absent, stranding the grid in
+                    # STARTING — resume refuses STARTING, recover does not
+                    # activate, so no driver could ever finish it.
+                    cid = intent.get('client_id')
+                    retired = False
+                    parent = getattr(venue, 'account_parent', None)
+                    scope = getattr(getattr(parent, 'journal', None), 'scope', None)
+                    if scope and cid:
+                        absent = self.store.read(lambda c: c.execute(
+                            'SELECT value FROM runtime_state WHERE key=?',
+                            ('bulk-declared-absence:' + scope + ':' + cid,)).fetchone())
+                        cert = None
+                        if absent is not None:
+                            try: cert = json.loads(absent[0])
+                            except (ValueError, TypeError): cert = None
+                        if (isinstance(cert, dict)
+                                and cert.get('schema') == 'bulk-declared-absence-v1'
+                                and cert.get('client_id') == cid
+                                and cert.get('account') == actor.account.account_id
+                                and cert.get('evidence') == 'MAY_HAVE_SENT'
+                                and cert.get('proof_state') == 'NOT_FOUND_TRANSIENT'):
+                            await self.journal.transition(intent['intent_id'], 'PLANNED')
+                            await self.journal.transition(intent['intent_id'], 'EXPIRED_EPOCH')
+                            pending += 1; retired = True
+                            log.warning('GRID_INITIAL_ORDER_ABSENT_RETIRED grid=%s intent=%s cid=%s',
+                                        grid_id, intent['intent_id'], cid)
+                    if not retired:
+                        log.error('GRID_INITIAL_ORDER_UNCONFIRMED grid=%s intent=%s outcome=%s resolved=%s',
+                                  grid_id, intent["intent_id"], result.get('outcome'), resolved)
+                        raise RuntimeError_("ORDER_NOT_CONFIRMED", "initial/restored grid orders require reconciliation")
             else:
                 # The outcome alone cannot be triaged; carry the full
                 # result and the intent for the operator and the monitor.
