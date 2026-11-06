@@ -634,3 +634,145 @@ def test_proof_expiry_marks_blindness_and_waits_for_the_window(tmp_path,monkeypa
         finally:
             rt.close()
     asyncio.run(run())
+
+
+def _blind_marker(rt,gid):
+    row=rt.store.read(lambda c:c.execute("SELECT value FROM runtime_state WHERE key=?",
+        ('protection-blind:'+gid,)).fetchone())
+    return int(json.loads(row[0])) if row else None
+
+
+def test_certified_sightings_re_anchor_the_blind_onset(tmp_path,monkeypatch):
+    """A verify failure whose account read still certifies the position
+    unchanged and the stop family resting is positive evidence, not a repeated
+    failure: it re-anchors the blind onset and the tolerance window measures
+    time since the last certified sighting (2026-11-06 flaps: the watch exited
+    protected grids at the 60s lease deadline because stale/binding codes left
+    no marker at all). Evidence-free blindness still exhausts the window."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        row=dict(grid_id=gid,account_id=cfg.account_ref,market_key=cfg.market_ref,epoch=1)
+        assert snapshot(rt,gid)['position_qty']=='0'
+        async def lagging_read(kind):
+            if kind=='fullAccount':clock[0]+=60_000  # started->now crosses VERIFY_WINDOW_MS: stale, read ok
+        native.on_read=lagging_read
+        await backend.observe(row)
+        assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED','NEEDS_ATTENTION')
+        first=_blind_marker(rt,gid);assert first is not None
+        mono[0]+=60_000
+        await backend.observe(row)
+        assert _blind_marker(rt,gid)==first+60_000  # refreshed by the sighting, not write-once
+        clock[0]+=170_000;mono[0]+=170_000
+        watcher=ProtectionWatchScheduler(rt,clock=lambda:mono[0]/1000)
+        try:
+            async def offline(kind):
+                if kind=='fullAccount':raise TimeoutError()
+            native.on_read=offline  # no more sightings: the window now truly runs out
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED','NEEDS_ATTENTION')
+            clock[0]+=11_000;mono[0]+=11_000
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+        finally:await watcher.close();rt.close()
+    asyncio.run(run())
+
+
+def test_changed_position_stops_the_certified_sighting_refresh(tmp_path,monkeypatch):
+    """A position that no longer matches the lease is trigger evidence: the
+    certified sighting fails, the onset falls back to write-once, and the
+    exit contract runs 180s after the FIRST failure — the silent-trigger
+    latency is unchanged even though binding codes are tolerated."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        row=dict(grid_id=gid,account_id=cfg.account_ref,market_key=cfg.market_ref,epoch=1)
+        async def lagging_read(kind):
+            if kind=='fullAccount':
+                clock[0]+=60_000
+                native.positions=[dict(symbol='ETH-USD',size='0.5',iso=False)]
+        native.on_read=lagging_read
+        await backend.observe(row)
+        first=_blind_marker(rt,gid);assert first is not None
+        mono[0]+=60_000
+        await backend.observe(row)
+        assert _blind_marker(rt,gid)==first  # write-once: unusable evidence never refreshes
+        clock[0]+=121_000;mono[0]+=121_000  # first failure +181s
+        watcher=ProtectionWatchScheduler(rt,clock=lambda:mono[0]/1000)
+        try:
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+        finally:await watcher.close();rt.close()
+    asyncio.run(run())
+
+
+def test_missing_stop_family_stops_the_certified_sighting_refresh(tmp_path,monkeypatch):
+    """No stop-type order on the book is protection-absence evidence even
+    when the position is unchanged: the sighting is unusable, the onset is
+    write-once, and the window exhausts from the first failure."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        row=dict(grid_id=gid,account_id=cfg.account_ref,market_key=cfg.market_ref,epoch=1)
+        async def lagging_read(kind):
+            if kind=='fullAccount':
+                clock[0]+=60_000
+                native.orders=[]  # the stop left the book
+        native.on_read=lagging_read
+        await backend.observe(row)
+        first=_blind_marker(rt,gid);assert first is not None
+        mono[0]+=60_000
+        await backend.observe(row)
+        assert _blind_marker(rt,gid)==first
+        clock[0]+=121_000;mono[0]+=121_000
+        watcher=ProtectionWatchScheduler(rt,clock=lambda:mono[0]/1000)
+        try:
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+        finally:await watcher.close();rt.close()
+    asyncio.run(run())
+
+
+def test_stop_not_open_exits_immediately_even_with_a_fresh_blind_marker(tmp_path,monkeypatch):
+    """STOP_NOT_OPEN is venue evidence (the stop left the book), not engine
+    blindness: a fresh blindness marker must not shield it — the exit runs on
+    the first observation."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        try:
+            await rt.store.write(lambda c:c.execute("INSERT INTO runtime_state(key,value) VALUES(?,?)",
+                ('protection-blind:'+gid,json.dumps(clock[0]))))
+            native.orders=[]
+            await backend.observe(dict(grid_id=gid,epoch=1))
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+            row=rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+                ('protection-exit:'+gid,)).fetchone())
+            assert json.loads(row[0])['reason']=='PROTECTION_SERVICE_FIXED_UNVERIFIED'
+        finally:rt.close()
+    asyncio.run(run())
+
+
+def test_legacy_lease_without_position_qty_never_certifies(tmp_path,monkeypatch):
+    """Rollout safety: a lease written before position_qty existed certifies
+    nothing — the onset is write-once and the window exhausts from the first
+    failure, exactly as before this change."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        row=dict(grid_id=gid,account_id=cfg.account_ref,market_key=cfg.market_ref,epoch=1)
+        def strip(c):
+            raw=c.execute('SELECT value FROM runtime_state WHERE key=?',('native-protection-lease:'+gid,)).fetchone()[0]
+            lease=json.loads(raw);lease.pop('position_qty')
+            c.execute('UPDATE runtime_state SET value=? WHERE key=?',(json.dumps(lease,sort_keys=True),'native-protection-lease:'+gid))
+        await rt.store.write(strip)
+        async def lagging_read(kind):
+            if kind=='fullAccount':clock[0]+=60_000
+        native.on_read=lagging_read
+        await backend.observe(row)
+        first=_blind_marker(rt,gid);assert first is not None
+        mono[0]+=60_000
+        await backend.observe(row)
+        assert _blind_marker(rt,gid)==first
+        clock[0]+=121_000;mono[0]+=121_000
+        watcher=ProtectionWatchScheduler(rt,clock=lambda:mono[0]/1000)
+        try:
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+        finally:await watcher.close();rt.close()
+    asyncio.run(run())

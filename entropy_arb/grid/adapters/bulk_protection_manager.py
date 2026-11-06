@@ -20,6 +20,7 @@ from ..protection_watch import recovery_in_flight
 from .base import AdapterError, OrderRequest
 from .bulk_protection import BulkStopBinding, BulkFixedStopGate, verify_fixed_stop
 from .bulk_read import BulkEvidenceReader, OPEN
+from .bulk_wire import native_decimal
 
 log = logging.getLogger('grid.bulk_protection')
 
@@ -43,6 +44,31 @@ OBSERVATION_WAITS = frozenset(('PROTECTION_FIXED_OBSERVATION_UNAVAILABLE',
     # for persistent inability to see the account. (2026-11-03: a stream-gap
     # episode turned one failed verify into an instant protective close.)
     'PROTECTION_FIXED_SNAPSHOT_INCOMPLETE'))
+# Verify failures that write the blindness onset once even without certified
+# evidence. CHANGED/STALE/QUOTE_STALE previously left no marker, so once the
+# lease expired the watch had no onset to measure and exited at the 60s
+# deadline with zero tolerance (2026-11-06 flaps: protective exits recorded
+# as PROTECTION_SERVICE_FIXED_PROOF_EXPIRED ~60-180s into an episode).
+BLIND_NOTE_CODES = frozenset(('PROTECTION_FIXED_OBSERVATION_UNAVAILABLE',
+    'PROTECTION_FIXED_SNAPSHOT_INCOMPLETE','PROTECTION_FIXED_OBSERVATION_CHANGED',
+    'PROTECTION_FIXED_OBSERVATION_STALE','PROTECTION_QUOTE_STALE'))
+# "Our blindness, not venue evidence" family. A verify failure here means the
+# engine could not re-prove the exact binding — not that the stop moved. The
+# stop was proven resting at lease time and only the engine writes the
+# journal, so these failures tolerate inside the shared blind window while
+# _refresh_blind_evidence re-anchors the onset to each certified sighting.
+# Deliberately excluded (venue evidence, exit unchanged): STOP_CHANGED,
+# STOP_NOT_OPEN, FOREIGN_ORDER, NATIVE_ORDER_UNVERIFIED, CAPACITY_INSUFFICIENT,
+# QUANTITY_CONFLICT, SHORT_ORDER_UNSUPPORTED, DUPLICATE_*, ISOLATED_UNSUPPORTED,
+# SCOPE_CONFLICT, POLICY_CHANGED, POSITION_RECONCILIATION_REQUIRED,
+# OTHER_CONDITIONAL_UNVERIFIED, UNKNOWN_ENTRY.
+CERT_EVIDENCE_CODES = frozenset((
+    'PROTECTION_FIXED_OBSERVATION_CHANGED','PROTECTION_FIXED_OBSERVATION_STALE',
+    'PROTECTION_FIXED_SNAPSHOT_INCOMPLETE','PROTECTION_FIXED_OBSERVATION_UNAVAILABLE',
+    'PROTECTION_FIXED_ORIGINAL_BINDING_REQUIRED','PROTECTION_FIXED_JOURNAL_UNVERIFIED',
+    'PROTECTION_FIXED_BINDING_INVALID','PROTECTION_FIXED_DUPLICATE_INTENT',
+    'PROTECTION_FIXED_INTENT_UNVERIFIED','PROTECTION_FIXED_INTENT_NATIVE_CONFLICT',
+    'PROTECTION_FIXED_CANDIDATE_UNVERIFIED','PROTECTION_FIXED_CANDIDATE_CONFLICT'))
 
 
 class BulkProtectionManager:
@@ -174,12 +200,19 @@ class BulkProtectionManager:
             raise AdapterError('PROTECTION_FIXED_SNAPSHOT_INCOMPLETE')
         native=raw[0]['fullAccount']
         if native.get('kind')!='MasterEOA' or native.get('parent'):raise AdapterError('PROTECTION_FIXED_SCOPE_CONFLICT')
-        if self._digest(self._view(gid,selected=selected))!=digest:raise AdapterError('PROTECTION_FIXED_OBSERVATION_CHANGED')
-        now=self.venue.clock_ms();observed_mono=self.monotonic_ms()
-        result=verify_fixed_stop(binding=view['binding'],account=config.account_ref,market=config.market_ref,
-            native_positions=native['positions'],native_open_orders=native['openOrders'],owned_qty=view['owned_qty'],
-            pending=view['pending'],bindings=view['bindings'],additional_stops=view['additional_stops'],candidate=candidate,
-            observed_from_ms=started,now_ms=now,max_age_ms=self.VERIFY_WINDOW_MS)
+        try:
+            if self._digest(self._view(gid,selected=selected))!=digest:raise AdapterError('PROTECTION_FIXED_OBSERVATION_CHANGED')
+            now=self.venue.clock_ms();observed_mono=self.monotonic_ms()
+            result=verify_fixed_stop(binding=view['binding'],account=config.account_ref,market=config.market_ref,
+                native_positions=native['positions'],native_open_orders=native['openOrders'],owned_qty=view['owned_qty'],
+                pending=view['pending'],bindings=view['bindings'],additional_stops=view['additional_stops'],candidate=candidate,
+                observed_from_ms=started,now_ms=now,max_age_ms=self.VERIFY_WINDOW_MS)
+        except AdapterError as error:
+            if str(error) in CERT_EVIDENCE_CODES:
+                # The account read succeeded: its snapshot is positive
+                # evidence even though the exact binding proof failed.
+                await self._refresh_blind_evidence(gid,native=native)
+            raise
         def save(c):
             current=self._view(gid,selected=selected,connection=c)
             if self._digest(current)!=digest:raise AdapterError('PROTECTION_FIXED_OBSERVATION_CHANGED')
@@ -198,6 +231,11 @@ class BulkProtectionManager:
                 account=config.account_ref,market=config.market_ref,whole_position=False,
                 stop_intent_id=view['stop_intent_id'],stop_client_id=result.stop_client_id,
                 stop_order_id=result.stop_order_id,capacity_qty=result.native_capacity_qty,
+                # The position this proof certified (native == journal here,
+                # verify_fixed_stop's reconciliation check). Later certified
+                # sightings compare the fresh snapshot against it: an
+                # unchanged position is evidence the stop never triggered.
+                position_qty=view['owned_qty'],
                 required_qty=result.required_qty,confirmed_from_ms=started,observed_ms=now,
                 deadline_ms=started+PROOF_MAX_SECONDS*1000,session=self.session,
                 confirmed_from_mono_ms=started_mono,observed_mono_ms=observed_mono,
@@ -398,7 +436,7 @@ class BulkProtectionManager:
             and self.check_lease(gid,now_ms=self.venue.clock_ms()) is None
             and self.rt.protection_lease.required(gid))
 
-    async def _note_blind(self,gid):
+    async def _note_blind(self,gid,*,refresh=False):
         """Remember when continuous blindness began (first failed verify).
 
         Measured on the venue clock, consistent with the lease deadline. A
@@ -408,6 +446,13 @@ class BulkProtectionManager:
         refresh it, so sustained blindness always exhausts the window and
         the exit contract still runs (refreshing it here would keep
         now-first fresh forever and never exit).
+
+        refresh=True is the one exception: a certified sighting (position
+        unchanged and the stop family still resting, from a read that only
+        failed the exact binding proof) is positive evidence, not a repeated
+        failure, and re-anchors the onset to that sighting. The window then
+        measures time since the last certified sighting instead of time
+        since the first failure.
         """
         now_ms=self.venue.clock_ms()
         key=BLIND_TOLERANCE_KEY+gid
@@ -417,6 +462,13 @@ class BulkProtectionManager:
             if row is not None:
                 try:first=int(json.loads(row[0]))
                 except (TypeError,ValueError):first=None
+            if refresh:
+                if first is None or now_ms>first:
+                    c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '
+                              'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                        (key,json.dumps(now_ms)))
+                    return now_ms
+                return first
             if first is None or now_ms<first:
                 c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '
                           'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
@@ -424,6 +476,56 @@ class BulkProtectionManager:
                 return now_ms
             return first
         return await self.rt.store.write(write)
+
+    async def _refresh_blind_evidence(self,gid,*,native):
+        """Re-anchor the blindness onset to a certified sighting, if this is one.
+
+        Called when a verify failed with a CERT_EVIDENCE_CODES error after the
+        fullAccount read succeeded. The snapshot still carries the facts that
+        decide safety: the position is unchanged since the lease proved it
+        (a triggered stop would have moved it, with or without fill events),
+        and a stop-family order still rests on the book. Everything else —
+        malformed rows, a stale or foreign lease, a second coin, a missing
+        family order — is unusable evidence and conservatively leaves the
+        onset untouched. Failed reads never reach this method, so evidence-
+        free blindness still exhausts the window and the exit contract runs.
+        """
+        try:
+            lease=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+                ('native-protection-lease:'+gid,)).fetchone())
+            if lease is None:return
+            record=json.loads(lease[0])
+            position,capacity=record.get('position_qty'),record.get('capacity_qty')
+            if (not isinstance(record,dict) or record.get('schema')!='bulk-fixed-native-v1'
+                    or record.get('session')!=self.session
+                    or not isinstance(position,str) or not isinstance(capacity,str)):
+                return
+            grid=self.rt.lifecycle._grid(gid)
+            if (record.get('epoch')!=grid['epoch']
+                    or record.get('account')!=self.venue._account.account_id
+                    or record.get('market')!=self.venue.market.market_key):
+                return
+            positions,orders=native.get('positions'),native.get('openOrders')
+            if not isinstance(positions,list) or not isinstance(orders,list):return
+            symbol=self.venue.market.market_key.split('|')[2]
+            # No row for this symbol IS the flat position: a zero-position
+            # grid (pre-first-fill) must still certify, or the tolerance
+            # would never arm exactly when the stop is the only exposure.
+            qty=Decimal(0);seen=False
+            for row in positions:
+                if not isinstance(row,dict) or row.get('symbol')!=symbol:continue
+                if seen:return  # duplicate coin rows: unusable evidence
+                seen=True;qty=native_decimal(row.get('size'))
+            if qty!=native_decimal(position):return
+            capacity_qty=native_decimal(capacity,negative=False)
+            family=any(isinstance(row,dict) and row.get('symbol')==symbol
+                and row.get('orderType')=='stop'
+                and abs(native_decimal(row.get('originalSize')))>=capacity_qty
+                for row in orders)
+            if not family:return
+        except Exception:
+            return  # Unusable evidence never refreshes; note-once semantics apply.
+        await self._note_blind(gid,refresh=True)
 
     async def _clear_blind(self,gid):
         key=BLIND_TOLERANCE_KEY+gid
@@ -456,8 +558,20 @@ class BulkProtectionManager:
             log.warning('PROTECTION_OBSERVE_PROOF_EXPIRED_WAIT code=%s', code)
             return
         if code in OBSERVATION_WAITS or code=='PROTECTION_OPERATION_INTERRUPTED':
-            if code in OBSERVATION_WAITS and (
-                    code in ('PROTECTION_FIXED_OBSERVATION_UNAVAILABLE','PROTECTION_FIXED_SNAPSHOT_INCOMPLETE')):
+            if code in BLIND_NOTE_CODES:
+                await self._note_blind(gid)
+            return
+        if code in CERT_EVIDENCE_CODES:
+            # Journal-side unprovability is not venue evidence: the stop was
+            # proven resting at lease time and only the engine writes this
+            # journal. Tolerate inside the shared blind window; _verify's
+            # certified-sighting refresh keeps the onset anchored to the last
+            # positive read. Sustained unprovability without a certified
+            # sighting still exhausts the window, and the watch then runs the
+            # exit contract against the expired lease. Venue-evidence codes
+            # (stop moved, foreign order, capacity) are not in this set and
+            # still exit immediately below.
+            if code in BLIND_NOTE_CODES:
                 await self._note_blind(gid)
             return
         inflight=self.rt.store.read(lambda c:c.execute("SELECT 1 FROM operations WHERE grid_id=? "
