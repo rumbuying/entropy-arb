@@ -19,7 +19,8 @@
 .grid-account-checks .fail > span:first-child { color: var(--grid-sell); }
 .grid-workbench h2 {
   font-size: 23px;
-  letter-spacing: -0.4px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
 }
 .grid-workbench h3 {
   font-size: 15px;
@@ -40,19 +41,24 @@
 }
 .grid-links a {
   padding: 8px 14px;
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--dim);
+  font-weight: 500;
+  transition: background .15s ease, color .15s ease;
 }
+.grid-links a:hover { color: var(--text); }
 .grid-links a.active {
-  background: #182b36;
+  background: var(--accent-soft);
   color: var(--accent);
 }
 .grid-sim-tag {
-  font-size: 12px;
-  color: var(--yellow);
-  border: 1px solid #655530;
-  border-radius: 5px;
-  padding: 4px 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #fcd34d;
+  background: rgba(251, 191, 36, .1);
+  border: 1px solid rgba(251, 191, 36, .32);
+  border-radius: 999px;
+  padding: 3px 10px;
 }
 .grid-sub {
   color: var(--dim);
@@ -63,8 +69,11 @@
 .grid-market {
   padding: 16px 20px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel-2);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .022), rgba(255, 255, 255, 0) 46%),
+    var(--panel);
+  box-shadow: var(--card-glow);
 }
 .grid-market strong {
   font-size: 24px;
@@ -86,15 +95,22 @@
 }
 .grid-panel {
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .022), rgba(255, 255, 255, 0) 46%),
+    var(--panel);
+  box-shadow: var(--card-glow);
   overflow: hidden;
   min-width: 0;
 }
 .grid-panel-head {
   padding: 15px 18px;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--dim);
 }
 .grid-panel-body {
   padding: 18px;
@@ -105,7 +121,9 @@
   width: 100%;
   height: 335px;
   display: block;
-  background: linear-gradient(180deg, #101e28, #101820);
+  background:
+    radial-gradient(600px 240px at 18% 0%, rgba(47, 225, 184, .05), transparent 65%),
+    linear-gradient(180deg, #0a111c, #070c14);
 }
 .grid-legend {
   padding: 10px 18px;
@@ -157,42 +175,56 @@
 .grid-field select {
   width: 100%;
   min-height: 40px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: 1px solid var(--input-border);
+  border-radius: 9px;
   padding: 9px 11px;
-  background: #101a24;
+  background: var(--input-bg);
   color: var(--text);
   font-size: 14px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.grid-field input:focus,
+.grid-field select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .grid-directions {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 5px;
   margin-bottom: 18px;
-  background: #0f1822;
+  background: var(--input-bg);
   border: 1px solid var(--border);
   padding: 4px;
-  border-radius: 8px;
+  border-radius: 10px;
 }
 .grid-directions button {
   background: transparent;
   border: 0;
+  border-radius: 7px;
   color: var(--dim);
   padding: 10px;
+  transition: background .15s ease, color .15s ease;
 }
 .grid-directions button[aria-pressed="true"] {
-  background: #203e44;
-  color: #69dac2;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .grid-workbench button {
-  border-radius: 6px;
+  border-radius: 9px;
   min-height: 36px;
 }
 .grid-workbench button.primary {
-  background: #49cdb5;
-  color: #082c25;
-  border-color: #49cdb5;
-  font-weight: 650;
+  background: var(--grad-primary);
+  color: #032019;
+  border: none;
+  font-weight: 700;
+  box-shadow: 0 2px 12px rgba(20, 184, 166, .28), inset 0 1px 0 rgba(255, 255, 255, .25);
+}
+.grid-workbench button.primary:hover {
+  background: var(--grad-primary);
+  filter: brightness(1.09);
 }
 .grid-workbench button:disabled {
   opacity: 0.4;
@@ -213,24 +245,27 @@
   margin-bottom: 12px;
 }
 .grid-notice {
-  border: 1px solid #35414d;
-  border-radius: 7px;
+  border: 1px solid var(--btn-border);
+  border-radius: 10px;
   padding: 11px 14px;
   font-size: 12px;
   color: var(--dim);
   line-height: 1.8;
 }
 .grid-notice.error {
-  border-color: #804654;
-  color: #f3a0aa;
+  border-color: rgba(251, 113, 133, .38);
+  background: rgba(251, 113, 133, .07);
+  color: #fda4af;
 }
 .grid-notice.ok {
-  border-color: #376856;
-  color: #71d2ae;
+  border-color: rgba(52, 211, 153, .34);
+  background: rgba(52, 211, 153, .07);
+  color: #4ade9b;
 }
 .grid-notice.warn {
-  border-color: #786031;
-  color: #dfc182;
+  border-color: rgba(251, 191, 36, .32);
+  background: rgba(251, 191, 36, .06);
+  color: #fcd34d;
 }
 .grid-note {
   font-size: 12px;
@@ -250,17 +285,22 @@
 .grid-workbench th {
   text-align: left;
   color: var(--dim);
-  font-weight: 500;
-  background: #13212c;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  background: var(--panel-2);
   padding: 11px 14px;
   white-space: nowrap;
 }
 .grid-workbench td {
   padding: 11px 14px;
-  border-bottom: 1px solid #22323e;
+  border-bottom: 1px solid var(--line);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.grid-workbench tbody tr { transition: background .12s ease; }
+.grid-workbench tbody tr:hover td { background: var(--row-hover); }
 .grid-workbench tr:last-child td {
   border-bottom: 0;
 }
@@ -279,18 +319,27 @@
 }
 .grid-stat {
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .022), rgba(255, 255, 255, 0) 46%),
+    var(--panel);
+  box-shadow: var(--card-glow);
   padding: 17px;
+  transition: border-color .18s ease;
 }
+.grid-stat:hover { border-color: rgba(148, 163, 184, .28); }
 .grid-stat span {
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: .07em;
   color: var(--dim);
 }
 .grid-stat strong {
   display: block;
   font-size: 25px;
   font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
   margin: 9px 0 5px;
   overflow-wrap: anywhere;
 }
@@ -343,13 +392,16 @@
 .grid-dialog {
   max-width: 560px;
   width: calc(100% - 28px);
-  background: var(--panel);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .03), rgba(255, 255, 255, 0) 40%),
+    var(--panel);
   color: var(--text);
-  border: 1px solid #40535f;
-  border-radius: 12px;
+  border: 1px solid var(--btn-border);
+  border-radius: 16px;
   padding: 22px;
   max-height: 90vh;
   overflow: auto;
+  box-shadow: 0 24px 64px -16px rgba(0, 0, 0, .6);
 }
 .grid-dialog::backdrop {
   background: #030a13bc;
@@ -369,8 +421,9 @@
   margin: 18px 0;
 }
 .grid-dialog button.danger {
-  color: #f398a5;
-  border-color: #894956;
+  color: #fda4af;
+  border-color: rgba(251, 113, 133, .4);
+  background: rgba(251, 113, 133, .1);
 }
 .grid-card-row {
   padding: 18px;
@@ -479,8 +532,12 @@ html.light .grid-workbench {
   --grid-buy: #0f7a64;
   --grid-sell: #b3374a;
 }
-html.light .grid-links a.active { background: var(--hover); }
-html.light .grid-sim-tag { border-color: #d9c07a; }
+html.light .grid-links a.active { background: var(--accent-soft); }
+html.light .grid-sim-tag {
+  color: #8a5a06;
+  background: rgba(161, 98, 7, .09);
+  border-color: rgba(161, 98, 7, .3);
+}
 html.light .grid-chart {
   background: linear-gradient(180deg, #ffffff, #f2f5f9);
 }
@@ -491,25 +548,33 @@ html.light .grid-field select {
 }
 html.light .grid-directions { background: var(--panel-2); }
 html.light .grid-directions button[aria-pressed="true"] {
-  background: #d8efe9;
-  color: #0b6b58;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 html.light .grid-workbench button.primary {
-  background: #0b7285;
+  background: var(--grad-primary);
   color: #ffffff;
-  border-color: #0b7285;
 }
-html.light .grid-workbench button.primary:hover { background: #0d84a0; }
-html.light .grid-notice { border-color: var(--btn-border); }
-html.light .grid-notice.error { border-color: #e8a3a3; color: #8f1f1f; }
-html.light .grid-notice.ok { border-color: #9fd4b4; color: #116237; }
-html.light .grid-notice.warn { border-color: #d9c07a; color: #7a5a08; }
+html.light .grid-workbench button.primary:hover {
+  background: var(--grad-primary);
+  filter: brightness(1.08);
+}
+html.light .grid-notice { border-color: var(--btn-border); background: transparent; }
+html.light .grid-notice.error { border-color: #e8a3a3; background: rgba(209, 67, 91, .05); color: #ab2b40; }
+html.light .grid-notice.ok { border-color: #9fd4b4; background: rgba(24, 154, 92, .05); color: #0f7a49; }
+html.light .grid-notice.warn { border-color: #d9c07a; background: rgba(161, 98, 7, .05); color: #7a5a08; }
 html.light .grid-workbench th { background: var(--panel-2); }
 html.light .grid-workbench td { border-bottom-color: var(--line); }
+html.light .grid-stat,
+html.light .grid-panel,
+html.light .grid-market {
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .05), 0 8px 24px -18px rgba(15, 23, 42, .18);
+}
 html.light .grid-dialog { border-color: var(--btn-border); }
 html.light .grid-dialog::backdrop { background: rgba(15, 23, 42, .25); }
 html.light .grid-dialog button.danger {
   color: #ffffff;
-  border-color: #c23b34;
-  background: #c23b34;
+  border-color: #d1435b;
+  background: #d1435b;
 }
