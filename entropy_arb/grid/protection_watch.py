@@ -67,8 +67,13 @@ def recovery_in_flight(store,gid,epoch,*,now_mono_ms):
     if raw is None:return False
     try:marker=json.loads(raw[0])
     except (ValueError,TypeError):return False
+    # The rebuild's own _bump_epoch moves the marker one epoch AHEAD of any
+    # stale row snapshot a consumer may hold (the watch tick read its row
+    # before the bump): the episode is the same, so both the pre-bump and
+    # the bumped epoch count (2026-11-08 02:02, g-c5b04157: the watch's
+    # stale row defeated the recovery exemption and exited mid-rebuild).
     return (isinstance(marker,dict) and marker.get('schema')==RECOVERY_WATCH_SCHEMA
-        and marker.get('grid_id')==gid and marker.get('epoch')==epoch
+        and marker.get('grid_id')==gid and marker.get('epoch') in (epoch,epoch+1)
         and type(marker.get('onset_mono_ms')) is int and type(marker.get('updated_mono_ms')) is int
         and 0<=marker['onset_mono_ms']<=marker['updated_mono_ms']<=now_mono_ms+1000
         and now_mono_ms-marker['updated_mono_ms']<=RECOVERY_PROGRESS_FRESH_MS

@@ -181,3 +181,28 @@ def test_failed_rebuild_returns_bumped_starting_grid_to_recovery(env):
         row = st.read(lambda c: c.execute('SELECT status,epoch FROM grids WHERE grid_id=?', (gid2,)).fetchone())
         assert row['status'] == 'NEEDS_ATTENTION' and row['epoch'] == 2
     asyncio.run(run())
+
+
+def test_recovery_marker_ahead_of_a_stale_row_still_counts(env):
+    """The rebuild's own bump moves the marker to epoch+1 while a consumer's
+    row snapshot still names the pre-bump epoch — the watch's stale row
+    defeated the recovery exemption and exited mid-rebuild (2026-11-08
+    02:02, g-c5b04157). The episode is the same: both epochs count."""
+    async def run():
+        st, scheduler, t = env
+        gid = 'g-ahead'
+        await seed_grid(st, gid, 2, 'STARTING')
+        plant_mark = dict(schema=RECOVERY_WATCH_SCHEMA, grid_id=gid,
+            onset_mono_ms=int((t[0] - 30) * 1000), updated_mono_ms=int(t[0] * 1000))
+        await st.write(lambda c: c.execute(
+            'INSERT INTO runtime_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+            (RECOVERY_WATCH_KEY + gid, json.dumps({**plant_mark, 'epoch': 2}, sort_keys=True))))
+        # The consumer's row snapshot names the pre-bump epoch 1.
+        assert recovery_in_flight(st, gid, 1, now_mono_ms=int(t[0] * 1000))
+        assert recovery_in_flight(st, gid, 2, now_mono_ms=int(t[0] * 1000))
+        # A marker two epochs ahead is not the same episode.
+        await st.write(lambda c: c.execute(
+            'UPDATE runtime_state SET value=? WHERE key=?',
+            (json.dumps({**plant_mark, 'epoch': 4}, sort_keys=True), RECOVERY_WATCH_KEY + gid)))
+        assert not recovery_in_flight(st, gid, 1, now_mono_ms=int(t[0] * 1000))
+    asyncio.run(run())
