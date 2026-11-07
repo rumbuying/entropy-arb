@@ -174,8 +174,25 @@ class ProtectionLease:
         stamps=(mono_ms,now_ms,lease.get('confirmed_from_ms'),lease.get('observed_ms'),lease.get('deadline_ms'),
             lease.get('confirmed_from_mono_ms'),lease.get('observed_mono_ms'),lease.get('deadline_mono_ms'))
         if any(type(x) is not int for x in stamps):return False
-        if not lease['confirmed_from_ms']<=lease['observed_ms']<=now_ms<lease['deadline_ms']:return False
-        if not lease['confirmed_from_mono_ms']<=lease['observed_mono_ms']<=mono_ms<lease['deadline_mono_ms']:return False
+        windows_ok=(lease['confirmed_from_ms']<=lease['observed_ms']<=now_ms<lease['deadline_ms']
+            and lease['confirmed_from_mono_ms']<=lease['observed_mono_ms']<=mono_ms<lease['deadline_mono_ms'])
+        if not windows_ok:
+            # An expired lease is still carried when the shared blindness
+            # marker is fresh: the last certified sighting (position
+            # unchanged, stop family resting) is recent, and the venue state
+            # does not change because the process restarted. The resumed
+            # recovery re-derives everything from fresh venue evidence
+            # before any send — the rebuild's reconcile refuses unbookable
+            # economics — so this relaxes only the immediate flatten, not
+            # send authorization. With no fresh marker (total blindness
+            # past the tolerance) the restart exits unchanged.
+            raw=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+                (PROTECTION_BLIND_KEY+gid,)).fetchone())
+            blind=False
+            if raw is not None:
+                try:blind=0<=now_ms-int(json.loads(raw[0]))<=PROTECTION_BLIND_TOLERANCE_MS
+                except (TypeError,ValueError):blind=False
+            if not blind:return False
         if (lease['deadline_ms']-lease['confirmed_from_ms']>CARRIED_PROOF_SANITY_MS
                 or lease['deadline_mono_ms']-lease['confirmed_from_mono_ms']>CARRIED_PROOF_SANITY_MS):return False
         def exposure(c):

@@ -786,3 +786,44 @@ def test_legacy_lease_without_position_qty_never_certifies(tmp_path,monkeypatch)
             assert rt.lifecycle._grid(gid)['status']=='STOPPING'
         finally:await watcher.close();rt.close()
     asyncio.run(run())
+
+
+def test_expired_lease_with_a_fresh_blind_marker_still_carries_into_recovery(tmp_path,monkeypatch):
+    """2026-11-07 21:40: a restart during degraded venue reads found the lease
+    expired (the last verify was minutes old) and protective-closed the grid.
+    The blindness marker anchors to the last certified sighting — position
+    unchanged, stop family resting — and the venue state does not change
+    because the process restarted. With a fresh marker the expired lease
+    still carries into bounded recovery (the rebuild's reconcile re-derives
+    everything before any send); with no marker or a stale marker the
+    restart exits unchanged."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,*_=parts
+        try:
+            rt.protection_lease._mono_now=lambda:mono[0]+PROOF_MAX_SECONDS*1000+1
+            rt.protection_lease._wall_now=lambda:clock[0]+PROOF_MAX_SECONDS*1000+1
+            expired = clock[0]+PROOF_MAX_SECONDS*1000+1
+            # Expired on both clocks, no marker: exit as before.
+            assert rt.protection_lease.carried_fixed_proof(gid) is False
+            # A fresh certified sighting arms the shared marker: carried.
+            await rt.store.write(lambda c:c.execute(
+                'INSERT INTO runtime_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                ('protection-blind:'+gid,json.dumps(expired-500))))
+            assert rt.protection_lease.carried_fixed_proof(gid) is True
+            # A stale marker (total blindness past the tolerance) still exits.
+            await rt.store.write(lambda c:c.execute(
+                'UPDATE runtime_state SET value=? WHERE key=?',
+                (json.dumps(expired+PROTECTION_BLIND_TOLERANCE_MS+1),'protection-blind:'+gid)))
+            assert rt.protection_lease.carried_fixed_proof(gid) is False
+            # Fresh again: the hand-off runs and deletes the session lease.
+            await rt.store.write(lambda c:c.execute(
+                'UPDATE runtime_state SET value=? WHERE key=?',
+                (json.dumps(expired-500),'protection-blind:'+gid)))
+            await asyncio.wait_for(rt.protection_lease.close_interrupted(),.2)
+            grid=rt.lifecycle._grid(gid)
+            assert grid['status']=='RECOVERING' and grid['desired_mode']=='ACTIVE'
+            lease_row=rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+                ('native-protection-lease:'+gid,)).fetchone())
+            assert lease_row is None
+        finally:rt.close()
+    asyncio.run(run())
