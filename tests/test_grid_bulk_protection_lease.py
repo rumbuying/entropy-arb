@@ -906,3 +906,26 @@ def test_freeze_and_watch_tolerate_lease_codes_inside_the_rebuild_window(tmp_pat
         finally:
             await watcher.close();rt.close()
     asyncio.run(run())
+
+
+def test_binding_family_failures_arm_the_blind_marker_for_the_watch(tmp_path,monkeypatch):
+    """The watch's check_lease maps a journal inconsistency to
+    PROTECTION_SERVICE_FIXED_PROOF_REQUIRED and tolerates only on a fresh
+    blindness marker — while observe tolerated the same family silently
+    without writing one, so the watch exited the grid mid-recovery
+    (2026-11-08 00:49, g-551db376). Every cert-family failure now arms the
+    marker; the certified-sighting refresh still anchors it."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        original_view=type(backend)._view.__get__(backend)
+        def broken_view(*a,**kw):raise AdapterError('PROTECTION_FIXED_ORIGINAL_BINDING_REQUIRED')
+        backend.__dict__['_view']=broken_view
+        await backend.observe(dict(grid_id=gid,epoch=1))
+        row=rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+            ('protection-blind:'+gid,)).fetchone())
+        assert row is not None,'binding failures must arm the shared marker'
+        from entropy_arb.grid.protection_watch import proof_blind_tolerated
+        assert proof_blind_tolerated(rt.store,gid=gid,venue_clock_ms=clock[0],
+            watch_clock_ms=mono[0],code='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')
+        assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED')
+    asyncio.run(run())

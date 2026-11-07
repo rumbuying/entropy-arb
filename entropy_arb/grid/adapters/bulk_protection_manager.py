@@ -566,13 +566,17 @@ class BulkProtectionManager:
             # proven resting at lease time and only the engine writes this
             # journal. Tolerate inside the shared blind window; _verify's
             # certified-sighting refresh keeps the onset anchored to the last
-            # positive read. Sustained unprovability without a certified
-            # sighting still exhausts the window, and the watch then runs the
-            # exit contract against the expired lease. Venue-evidence codes
-            # (stop moved, foreign order, capacity) are not in this set and
-            # still exit immediately below.
-            if code in BLIND_NOTE_CODES:
-                await self._note_blind(gid)
+            # positive read. The marker is written for EVERY failure in this
+            # family — the watch's check_lease maps the same journal
+            # inconsistency to PROTECTION_SERVICE_FIXED_PROOF_REQUIRED and
+            # tolerates only on a marker; observe tolerating silently while
+            # the watch found no marker exited the grid mid-recovery
+            # (2026-11-08 00:49, g-551db376). Sustained unprovability without
+            # a certified sighting still exhausts the window, and the watch
+            # then runs the exit contract against the expired lease.
+            # Venue-evidence codes (stop moved, foreign order, capacity) are
+            # not in this set and still exit immediately below.
+            await self._note_blind(gid)
             return
         inflight=self.rt.store.read(lambda c:c.execute("SELECT 1 FROM operations WHERE grid_id=? "
             "AND status='running' LIMIT 1",(gid,)).fetchone()) is not None
