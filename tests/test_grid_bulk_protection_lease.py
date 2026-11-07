@@ -299,6 +299,16 @@ def test_valid_carried_lease_resumes_into_recovery_instead_of_restart_exit(tmp_p
             await asyncio.wait_for(rt.protection_lease.close_interrupted(),.2)
             grid=rt.lifecycle._grid(gid)
             assert grid['status']=='RECOVERING' and grid['desired_mode']=='ACTIVE'
+            # The cross-session lease is deleted with the decision: the watch
+            # ticks may run before the recovery scheduler's first mark, and a
+            # lingering session-bound lease reads PROOF_REQUIRED with no
+            # blind marker — one tick exited the grid ~40s after boot
+            # (2026-11-07 20:05, g-d7c92d68). The no-lease exemption covers
+            # the hand-off window; the rebuild's prepare writes a fresh lease.
+            lease_row=rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+                ('native-protection-lease:'+gid,)).fetchone())
+            assert lease_row is None
+            assert rt.protection_lease.check(gid,now_ms=clock[0])=='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED'
             exit_row=rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
                 ('protection-exit:'+gid,)).fetchone())
             assert exit_row is None
