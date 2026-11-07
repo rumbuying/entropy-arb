@@ -393,7 +393,8 @@ button.danger:hover {
 }
 
 /* ------------------------------ inputs ------------------------------ */
-input[type=text], input[type=number], input[type=password], select, textarea {
+input:not([type]), input[type=text], input[type=search], input[type=number],
+input[type=password], select, textarea {
   background: var(--input-bg); color: var(--text);
   border: 1px solid var(--input-border); border-radius: 10px;
   padding: 8px 11px; font-size: 13px; width: 100%;
@@ -401,6 +402,7 @@ input[type=text], input[type=number], input[type=password], select, textarea {
   transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
 }
 input:hover, select:hover, textarea:hover { border-color: var(--border-strong); }
+input:not([type]) { background: var(--input-bg); color: var(--text); }
 input:focus, select:focus, textarea:focus {
   outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft), 0 0 20px -6px rgba(47, 230, 189, .35);
