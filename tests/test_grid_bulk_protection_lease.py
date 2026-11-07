@@ -827,3 +827,35 @@ def test_expired_lease_with_a_fresh_blind_marker_still_carries_into_recovery(tmp
             assert lease_row is None
         finally:rt.close()
     asyncio.run(run())
+
+
+def test_carried_resume_marker_shared_by_the_rearming_branch(tmp_path,monkeypatch):
+    """close_interrupted deletes the session lease with its carried resume,
+    and runtime.startup's rearming-window branch re-derives carried proof
+    AFTER that — one boot protective-exited the grid 232ms after the resume
+    because the second read found no lease (2026-11-07 21:16, g-f6c5efa0).
+    The decision is now recorded as an epoch-bound marker the rearming
+    branch consumes exactly once."""
+    async def run():
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,*_=parts
+        rt.protection_lease._mono_now=lambda:mono[0]+PROOF_MAX_SECONDS*1000+1
+        rt.protection_lease._wall_now=lambda:clock[0]+PROOF_MAX_SECONDS*1000+1
+        await rt.store.write(lambda c:c.execute(
+            'INSERT INTO runtime_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+            ('protection-blind:'+gid,json.dumps(clock[0]+PROOF_MAX_SECONDS*1000-500))))
+        assert rt.protection_lease.carried_fixed_proof(gid) is True
+        await asyncio.wait_for(rt.protection_lease.close_interrupted(),.2)
+        grid=rt.lifecycle._grid(gid)
+        assert grid['status']=='RECOVERING' and grid['desired_mode']=='ACTIVE'
+        # The decision marker is present and bound to the resumed epoch.
+        epoch=grid['epoch']
+        assert await rt._consume_carried_recovery(gid,epoch) is True
+        # Consumed exactly once: a second read finds nothing, and a marker
+        # naming another epoch never carries a newer activation.
+        assert await rt._consume_carried_recovery(gid,epoch) is False
+        await rt.store.write(lambda c:c.execute(
+            'INSERT INTO runtime_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+            ('carried-recovery:'+gid,json.dumps(dict(schema='carried-recovery-v1',
+                grid_id=gid,epoch=epoch+5),sort_keys=True))))
+        assert await rt._consume_carried_recovery(gid,epoch) is False
+    asyncio.run(run())

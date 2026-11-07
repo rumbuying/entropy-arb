@@ -1588,6 +1588,29 @@ class GridRuntime:
         return bool(callable(check) and check())
 
 
+    async def _consume_carried_recovery(self, gid: str, epoch: int) -> bool:
+        """Consume close_interrupted's epoch-bound carried-resume marker.
+
+        Read-and-delete in one transaction: True only for a marker naming
+        this grid and epoch, so a stale marker can never carry a newer
+        activation. close_interrupted writes it exactly when it resumes the
+        grid into RECOVERING (and deletes the session lease); this branch
+        then must not re-derive the decision from the absent lease."""
+        from .protection_watch import CARRIED_RECOVERY_KEY, CARRIED_RECOVERY_SCHEMA
+        def consume(c):
+            row = c.execute('SELECT value FROM runtime_state WHERE key=?',
+                            (CARRIED_RECOVERY_KEY + gid,)).fetchone()
+            if row is None:
+                return False
+            c.execute('DELETE FROM runtime_state WHERE key=?', (CARRIED_RECOVERY_KEY + gid,))
+            try:
+                marker = json.loads(row[0])
+            except (ValueError, TypeError):
+                return False
+            return (isinstance(marker, dict) and marker.get('schema') == CARRIED_RECOVERY_SCHEMA
+                    and marker.get('grid_id') == gid and marker.get('epoch') == epoch)
+        return await self.store.write(consume)
+
     async def startup(self) -> None:
         await self.protection_lease.close_interrupted()
         rows = self.store.read(lambda c: [dict(r) for r in c.execute("SELECT * FROM grids")])
@@ -1600,10 +1623,16 @@ class GridRuntime:
                 if (window and window['phase']=='rearming' and row['desired_mode']=='ACTIVE'
                         and row['status']!='CLOSED'):
                     if (row['status'] in ('STARTING','RUNNING','RECOVERING')
-                            and self.protection_lease.carried_fixed_proof(gid)):
+                            and (self.protection_lease.carried_fixed_proof(gid)
+                                 or await self._consume_carried_recovery(gid,row['epoch']))):
                         # Same carried-proof resume as close_interrupted: the
                         # window is still rearming, but the fixed stop was
                         # verified resting moments before the interruption.
+                        # close_interrupted already made that decision and
+                        # deleted the session lease — this branch consumes its
+                        # epoch-bound marker instead of re-deriving from the
+                        # (now absent) lease, which always read False and
+                        # protective-exited the grid 232ms after the resume.
                         await self.lifecycle._set_status(gid,'RECOVERING')
                         log.info('carried fixed-stop lease still valid; restart resumes into recovery: %s',gid)
                     else:

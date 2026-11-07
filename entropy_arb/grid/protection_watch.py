@@ -37,6 +37,12 @@ PROTECTION_WATCH_BLIND_KEY = 'protection-watch-blind:'
 # 188s and a full attempt 325s (2026-11-07), so 120s lapsed mid-attempt.
 RECOVERY_WATCH_KEY = 'recovery-watch:'
 RECOVERY_WATCH_SCHEMA = 'recovery-watch-v1'
+# Close_interrupted's carried resume records this decision for
+# runtime.startup's rearming-window branch, which re-derives carried proof
+# after the lease was already deleted (one boot protective-exited the grid
+# 232ms after the resume because the second read found no lease).
+CARRIED_RECOVERY_KEY = 'carried-recovery:'
+CARRIED_RECOVERY_SCHEMA = 'carried-recovery-v1'
 RECOVERY_PROGRESS_FRESH_MS = 600_000
 # The episode bound covers the whole stream-loss episode including its
 # retries: degraded venue reads ran the 2026-11-07 episodes past 20 minutes
@@ -409,19 +415,32 @@ class ProtectionLease:
                     # interruption; bounded recovery and the fresh activation
                     # re-prove it with new venue evidence before any send.
                     await self.rt.lifecycle._set_status(gid,'RECOVERING')
-                    # The old lease is bound to the previous session: every
-                    # lease check now reads PROOF_REQUIRED. Delete it so the
-                    # watch's no-lease exemption ("activation owns the
-                    # window") covers the gap until the recovery scheduler's
-                    # first mark — the watch ticks may run before that first
-                    # mark, and one tick exited the grid as
-                    # PROTECTION_SERVICE_FIXED_PROOF_REQUIRED ~40s after
-                    # boot (2026-11-07 20:05, g-d7c92d68). The scheduler's
-                    # rebuild writes a fresh lease via prepare before any
-                    # send; a crash here leaves no lease, which the no-lease
-                    # exemption and the recovery budget both bound.
-                    await self.rt.store.write(lambda c: c.execute(
-                        'DELETE FROM runtime_state WHERE key=?',('native-protection-lease:'+gid,)))
+                    def carried_write(c):
+                        # Record the decision: runtime.startup's rearming-window
+                        # branch re-derives carried proof AFTER this, and the
+                        # deleted lease would read False there — one boot exited
+                        # the grid as PROTECTION_SERVICE_RESTART 232ms after this
+                        # resume (2026-11-07 21:16, g-f6c5efa0). The marker is
+                        # epoch-bound and consumed by that branch.
+                        c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '
+                                  'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                            ('carried-recovery:'+gid, json.dumps(dict(
+                                schema=CARRIED_RECOVERY_SCHEMA, grid_id=gid, epoch=row['epoch']),
+                                sort_keys=True)))
+                        # The old lease is bound to the previous session: every
+                        # lease check now reads PROOF_REQUIRED. Delete it so the
+                        # watch's no-lease exemption ("activation owns the
+                        # window") covers the gap until the recovery scheduler's
+                        # first mark — the watch ticks may run before that first
+                        # mark, and one tick exited the grid as
+                        # PROTECTION_SERVICE_FIXED_PROOF_REQUIRED ~40s after
+                        # boot (2026-11-07 20:05, g-d7c92d68). The scheduler's
+                        # rebuild writes a fresh lease via prepare before any
+                        # send; a crash here leaves no lease, which the no-lease
+                        # exemption and the recovery budget both bound.
+                        c.execute('DELETE FROM runtime_state WHERE key=?',
+                                  ('native-protection-lease:'+gid,))
+                    await self.rt.store.write(carried_write)
                     log.info('carried fixed-stop lease still valid; restart resumes into recovery: %s',gid)
                     continue
                 window=self.rt.service_coverage.snapshot(gid)
