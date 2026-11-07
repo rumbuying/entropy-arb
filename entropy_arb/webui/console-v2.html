@@ -36,14 +36,25 @@
   </nav>
   <div class="v2-main">
     <div class="v2-topbar">
-      <span class="title" id="v2-title"></span>
+      <div class="v2-head">
+        <div class="v2-crumb" id="v2-crumb"></div>
+        <span class="title" id="v2-title"></span>
+      </div>
       <span class="spacer"></span>
-      <span id="api-badge" class="badge dim">API …</span>
+      <div class="v2-tools">
+        <button type="button" class="v2-cmd" id="v2-cmd" aria-label="搜索页面">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M16.5 16.5 21 21"></path></svg>
+          <span>跳转</span><kbd>⌘K</kbd>
+        </button>
+        <span class="v2-clock" id="v2-clock">--:--:--</span>
+        <span id="api-badge" class="badge dim">API …</span>
+      </div>
     </div>
     <div class="v2-content" id="v2-content"></div>
   </div>
 </div>
 
+<script src="/static/v2/fx.js"></script>
 <script type="module" src="/static/v2/app.js"></script>
 </body>
 </html>

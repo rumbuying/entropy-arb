@@ -1,6 +1,6 @@
 .grid-workbench {
-  --grid-buy: #52c5aa;
-  --grid-sell: #ec8290;
+  --grid-buy: #3ee8c0;
+  --grid-sell: #ff869b;
   display: grid;
   gap: 16px;
   min-width: 0;
@@ -18,9 +18,9 @@
 .grid-account-checks .pass > span:first-child { color: var(--grid-buy); }
 .grid-account-checks .fail > span:first-child { color: var(--grid-sell); }
 .grid-workbench h2 {
-  font-size: 23px;
-  font-weight: 750;
-  letter-spacing: -0.02em;
+  font-size: 27px;
+  font-weight: 780;
+  letter-spacing: -0.03em;
 }
 .grid-workbench h3 {
   font-size: 15px;
@@ -39,17 +39,25 @@
   display: flex;
   gap: 5px;
 }
+.grid-links {
+  background: color-mix(in srgb, var(--input-bg) 70%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 3px;
+}
 .grid-links a {
-  padding: 8px 14px;
+  padding: 7px 15px;
   border-radius: 8px;
   color: var(--dim);
-  font-weight: 500;
-  transition: background .15s ease, color .15s ease;
+  font-weight: 550;
+  font-size: 13px;
+  transition: background .16s ease, color .16s ease;
 }
 .grid-links a:hover { color: var(--text); }
 .grid-links a.active {
   background: var(--accent-soft);
   color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
 }
 .grid-sim-tag {
   font-size: 11.5px;
@@ -67,16 +75,27 @@
   line-height: 1.7;
 }
 .grid-market {
-  padding: 16px 20px;
+  position: relative;
+  overflow: hidden;
+  padding: 18px 22px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 16px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, .022), rgba(255, 255, 255, 0) 46%),
+    radial-gradient(420px circle at var(--fx-mx, -200px) var(--fx-my, -200px),
+                    rgba(47, 230, 189, .09), transparent 66%),
+    linear-gradient(180deg, rgba(255, 255, 255, .028), rgba(255, 255, 255, 0) 46%),
     var(--panel);
-  box-shadow: var(--card-glow);
+  box-shadow: var(--card-shadow);
+}
+.grid-market::before {
+  content: "";
+  position: absolute; inset: 0 0 auto 0; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(47, 230, 189, .5), transparent);
+  opacity: .55;
 }
 .grid-market strong {
-  font-size: 24px;
+  font-size: 26px;
+  letter-spacing: -.02em;
 }
 .grid-market .grid-price {
   text-align: right;
@@ -94,23 +113,40 @@
   min-width: 0;
 }
 .grid-panel {
+  position: relative;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 16px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, .022), rgba(255, 255, 255, 0) 46%),
+    radial-gradient(420px circle at var(--fx-mx, -200px) var(--fx-my, -200px),
+                    rgba(47, 230, 189, .07), transparent 68%),
+    linear-gradient(180deg, rgba(255, 255, 255, .026), rgba(255, 255, 255, 0) 46%),
     var(--panel);
-  box-shadow: var(--card-glow);
+  box-shadow: var(--card-shadow);
+  transition: border-color .2s ease, box-shadow .22s ease;
   overflow: hidden;
   min-width: 0;
 }
+.grid-panel:hover { border-color: var(--border-strong); }
 .grid-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
   padding: 15px 18px;
   border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: .07em;
+  letter-spacing: .1em;
   color: var(--dim);
+}
+.grid-panel-head h3 { margin-right: auto; }
+.grid-panel-head::before {
+  content: "";
+  width: 13px; height: 2px; border-radius: 2px;
+  background: var(--grad-brand);
+  box-shadow: 0 0 10px rgba(47, 230, 189, .5);
+  flex: 0 0 auto;
 }
 .grid-panel-body {
   padding: 18px;
@@ -121,9 +157,11 @@
   width: 100%;
   height: 335px;
   display: block;
+  border-radius: 12px;
   background:
-    radial-gradient(600px 240px at 18% 0%, rgba(47, 225, 184, .05), transparent 65%),
-    linear-gradient(180deg, #0a111c, #070c14);
+    radial-gradient(600px 240px at 18% 0%, rgba(47, 230, 189, .06), transparent 65%),
+    linear-gradient(180deg, #08101a, #05090f);
+  box-shadow: inset 0 0 0 1px rgba(150, 168, 190, .06);
 }
 .grid-legend {
   padding: 10px 18px;
@@ -210,6 +248,8 @@
 .grid-directions button[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+  font-weight: 650;
 }
 .grid-workbench button {
   border-radius: 9px;
@@ -285,11 +325,11 @@
 .grid-workbench th {
   text-align: left;
   color: var(--dim);
-  font-weight: 600;
-  font-size: 11px;
+  font-weight: 700;
+  font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: .07em;
-  background: var(--panel-2);
+  letter-spacing: .1em;
+  background: color-mix(in srgb, var(--panel-2) 60%, transparent);
   padding: 11px 14px;
   white-space: nowrap;
 }
@@ -318,29 +358,41 @@
   gap: 12px;
 }
 .grid-stat {
+  position: relative;
+  overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, .022), rgba(255, 255, 255, 0) 46%),
+    radial-gradient(260px circle at var(--fx-mx, -200px) var(--fx-my, -200px),
+                    rgba(47, 230, 189, .085), transparent 66%),
+    linear-gradient(180deg, rgba(255, 255, 255, .026), rgba(255, 255, 255, 0) 46%),
     var(--panel);
-  box-shadow: var(--card-glow);
-  padding: 17px;
-  transition: border-color .18s ease;
+  box-shadow: var(--card-shadow);
+  padding: 17px 18px;
+  transition: border-color .2s ease, transform .2s ease;
 }
-.grid-stat:hover { border-color: rgba(148, 163, 184, .28); }
+.grid-stat::before {
+  content: "";
+  position: absolute; inset: 0 0 auto 0; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(47, 230, 189, .45), transparent);
+  opacity: .5;
+}
+.grid-stat:hover { border-color: var(--border-strong); transform: translateY(-1px); }
 .grid-stat span {
-  font-size: 11px;
-  font-weight: 650;
+  font-size: 10px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: .07em;
+  letter-spacing: .11em;
   color: var(--dim);
 }
 .grid-stat strong {
   display: block;
-  font-size: 25px;
+  font-size: 29px;
+  font-weight: 640;
+  letter-spacing: -.025em;
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
-  margin: 9px 0 5px;
+  margin: 10px 0 5px;
   overflow-wrap: anywhere;
 }
 .grid-stat small {
@@ -370,17 +422,27 @@
   padding: 0 18px;
 }
 .grid-tabs button {
+  position: relative;
   border: 0;
   border-radius: 0;
   background: transparent;
-  padding: 13px 0;
+  padding: 13px 2px;
   color: var(--dim);
   white-space: nowrap;
+  font-weight: 560;
 }
-.grid-tabs button[aria-pressed="true"] {
-  color: var(--accent);
-  border-bottom: 2px solid var(--accent);
+.grid-tabs button::after {
+  content: "";
+  position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+  border-radius: 2px;
+  background: var(--grad-brand);
+  transform: scaleX(0);
+  transition: transform .22s ease;
 }
+.grid-tabs button:hover { color: var(--text); background: transparent; transform: none; box-shadow: none; }
+.grid-tabs button:hover::after { transform: scaleX(.45); opacity: .5; }
+.grid-tabs button[aria-pressed="true"] { color: var(--accent); }
+.grid-tabs button[aria-pressed="true"]::after { transform: scaleX(1); }
 .grid-table-footer {
   padding: 10px 14px;
   display: flex;
@@ -550,6 +612,8 @@ html.light .grid-directions { background: var(--panel-2); }
 html.light .grid-directions button[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+  font-weight: 650;
 }
 html.light .grid-workbench button.primary {
   background: var(--grad-primary);
