@@ -35,14 +35,41 @@ export function newRequestId() {
   return "req-" + Math.random().toString(16).slice(2) + "-" + Date.now();
 }
 
+/* A hung keepalive connection must not freeze the workbench: every call
+   carries a hard timeout, and one idempotent GET retry survives the
+   server-side keepalive close race (the request dies half-open and the
+   browser never resolves it). */
+const GRID_FETCH_TIMEOUT_MS = 30000;
+
+function gridFetchOptions(options = {}) {
+  const token =
+    new URLSearchParams(location.search).get("token") ||
+    sessionStorage.getItem("entropyConsoleToken");
+  const timeout = AbortSignal.timeout
+    ? AbortSignal.timeout(GRID_FETCH_TIMEOUT_MS)
+    : undefined;
+  const signal = options.signal
+    ? (timeout && AbortSignal.any
+        ? AbortSignal.any([options.signal, timeout])
+        : options.signal)
+    : timeout;
+  return {
+    signal,
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  };
+}
+
 export async function gridGet(path, options = {}) {
   const token =
     new URLSearchParams(location.search).get("token") ||
     sessionStorage.getItem("entropyConsoleToken");
-  const response = await fetch(`/api/grid${path}`, {
-    signal: options.signal,
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
+  let response;
+  try {
+    response = await fetch(`/api/grid${path}`, gridFetchOptions(options));
+  } catch (e) {
+    if (options.signal && options.signal.aborted) throw e;
+    response = await fetch(`/api/grid${path}`, gridFetchOptions(options));
+  }
   const data = await response.json();
   if (!response.ok) throw gridError(data, response.status);
   return data;
