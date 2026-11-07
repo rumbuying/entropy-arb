@@ -272,18 +272,21 @@
 
 /* grid cards (list view) */
 .grid-card-row {
-  padding: 12px 14px;
-  display: grid; grid-template-columns: 1.5fr 1fr 1fr auto;
+  padding: 9px 14px;
+  display: grid; grid-template-columns: 1.6fr 1fr 1fr auto;
   align-items: center; gap: 14px;
   border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
 }
 .grid-card-row:last-child { border-bottom: 0; }
 .grid-card-row:hover { background: var(--row-hover); }
 .grid-card-row strong { font-size: 13px; font-weight: 600; }
 .grid-amount { font-family: var(--mono); font-size: 14px; font-variant-numeric: tabular-nums; }
 
-.grid-filters { display: flex; gap: 6px; flex-wrap: wrap; }
-.grid-filters input, .grid-filters select { min-height: 30px; max-width: 240px; }
+.grid-filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.grid-filters input, .grid-filters select {
+  width: auto; flex: 0 1 180px; min-height: 30px; max-width: 240px;
+}
 
 @media (min-width: 1440px) {
   .grid-chart { height: 380px; }
