@@ -125,6 +125,24 @@ class ProtectionLease:
             ('native-protection-lease:'+gid,)).fetchone())
         return json.loads(row[0]) if row else None
 
+    def _carried_marker_matches(self,gid,epoch):
+        """True when close_interrupted already carried-resumed this grid at
+        this epoch in an earlier pass of the same boot. grid_main calls
+        close_interrupted before rt.startup(), which calls it again — the
+        second pass must recognize the first pass's decision instead of
+        re-deriving carried proof from the lease the first pass deleted
+        (2026-11-07 23:00: required=True exited the grid 188ms after the
+        resume log). Read-only: startup's rearming branch consumes the
+        marker when its window exists; a lingering marker is epoch-bound
+        and the grid is already RECOVERING, so it authorizes nothing."""
+        raw=self.rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+            (CARRIED_RECOVERY_KEY+gid,)).fetchone())
+        if raw is None:return False
+        try:marker=json.loads(raw[0])
+        except (ValueError,TypeError):return False
+        return (isinstance(marker,dict) and marker.get('schema')==CARRIED_RECOVERY_SCHEMA
+            and marker.get('grid_id')==gid and marker.get('epoch')==epoch)
+
     @staticmethod
     def _mono_now():return time.monotonic_ns()//1_000_000
 
@@ -410,7 +428,9 @@ class ProtectionLease:
                 backend=self.backend(gid)
                 if (self.rt.service_coverage.policy(gid) is None and not self.fixed_protection(gid)
                         and not (backend is not None and backend.watches(gid))):continue
-                if row['status'] in ('STARTING','RUNNING','RECOVERING') and self.carried_fixed_proof(gid):
+                carried=(row['status'] in ('STARTING','RUNNING','RECOVERING')
+                    and (self.carried_fixed_proof(gid) or self._carried_marker_matches(gid,row['epoch'])))
+                if carried:
                     # The fixed stop was verified resting moments before the
                     # interruption; bounded recovery and the fresh activation
                     # re-prove it with new venue evidence before any send.

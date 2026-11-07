@@ -849,9 +849,16 @@ def test_carried_resume_marker_shared_by_the_rearming_branch(tmp_path,monkeypatc
         assert grid['status']=='RECOVERING' and grid['desired_mode']=='ACTIVE'
         # The decision marker is present and bound to the resumed epoch.
         epoch=grid['epoch']
+        # A second close_interrupted pass in the same boot recognizes the
+        # first pass's decision (grid_main calls it before rt.startup, which
+        # calls it again) and must not exit the grid it just carried.
+        await asyncio.wait_for(rt.protection_lease.close_interrupted(),.2)
+        grid=rt.lifecycle._grid(gid)
+        assert grid['status']=='RECOVERING' and grid['desired_mode']=='ACTIVE'
+        assert rt.store.read(lambda c:c.execute('SELECT 1 FROM runtime_state WHERE key=?',
+            ('protection-exit:'+gid,)).fetchone()) is None
+        # The rearming branch consumes the marker exactly once.
         assert await rt._consume_carried_recovery(gid,epoch) is True
-        # Consumed exactly once: a second read finds nothing, and a marker
-        # naming another epoch never carries a newer activation.
         assert await rt._consume_carried_recovery(gid,epoch) is False
         await rt.store.write(lambda c:c.execute(
             'INSERT INTO runtime_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
