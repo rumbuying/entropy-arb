@@ -5,6 +5,7 @@ Account reads are public: they never prove possession or authority of a key.
 """
 import asyncio
 from dataclasses import dataclass
+import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, localcontext
 import json
@@ -17,6 +18,8 @@ from .. import models
 from .base import AdapterError, ExchangeOrder, FundingPage, FundingRecord, HistoryPage, LookupResult
 from .bulk_wire import base58, uint, native_decimal, text
 from .observation import ReadTransport, market_row
+
+log = logging.getLogger('grid.bulk_read')
 
 SOURCE = 'bulk-account-slots-v1:b6db6ade99effbfc'
 HISTORY_TYPES = frozenset(('fills', 'fundingHistory', 'orderHistory'))
@@ -56,16 +59,36 @@ class BulkReadTransport(ReadTransport):
     def __init__(self, session, network):
         super().__init__(session, 'bulk', network)
         self.last_fail_mono = None
+        self.last_fail_code = None
+        # Set ONLY by the 429 path. next_read doubles as the routine 1s
+        # pacing cursor on every read, so it can never signal health: an
+        # activation gate reading it saw "backoff" forever (2026-11-07:
+        # every start/resume refused since deploy, backoff_remaining_ms≈1s).
+        self.backoff_until_mono = None
 
     def read_health(self, *, now_mono):
         """True unless this transport observed a failed read recently.
 
         A live 429 backoff also counts as unhealthy. Successes are not
         tracked: only failure recency is negative evidence."""
-        if now_mono < self.next_read:
+        if self.backoff_until_mono is not None and now_mono < self.backoff_until_mono:
+            log.warning('BULK_READ_HEALTH_UNHEALTHY backoff_remaining_ms=%s',
+                        int((self.backoff_until_mono-now_mono)*1000))
             return False
-        return (self.last_fail_mono is None
-            or now_mono-self.last_fail_mono > self.READ_HEALTH_WINDOW_S)
+        if self.last_fail_mono is not None and now_mono-self.last_fail_mono <= self.READ_HEALTH_WINDOW_S:
+            log.warning('BULK_READ_HEALTH_UNHEALTHY fail_code=%s fail_age_ms=%s',
+                        self.last_fail_code, int((now_mono-self.last_fail_mono)*1000))
+            return False
+        return True
+
+    def _fail(self, code):
+        """Record and log the failure: the activation gate refuses on this
+        evidence, so an operator must be able to see what armed it (many
+        callers swallow transport errors without logging)."""
+        self.last_fail_mono = time.monotonic()
+        self.last_fail_code = code
+        log.warning('BULK_READ_TRANSPORT_FAIL code=%s', code)
+        raise AdapterError(code)
 
     async def account(self, kind, owner, *, limit=None, start_slot=None, end_slot=None, cursor=None, symbol=None):
         if kind not in READ_HISTORY_TYPES | {'fullAccount', 'openOrders', 'feeTier'}:
@@ -102,17 +125,18 @@ class BulkReadTransport(ReadTransport):
                     if response.status == 429:
                         now = time.monotonic()
                         self.next_read = now+60
+                        self.backoff_until_mono = now+60
                         self.last_fail_mono = now
+                        self.last_fail_code = 'BULK_READ_RATE_LIMITED'
+                        log.warning('BULK_READ_TRANSPORT_FAIL code=BULK_READ_RATE_LIMITED')
                         raise AdapterError('BULK_READ_RATE_LIMITED')
                     if response.status not in (200, 206, 400, 404, 503):
-                        self.last_fail_mono = time.monotonic()
-                        raise AdapterError('BULK_READ_HTTP_FAILED')
+                        self._fail('BULK_READ_HTTP_FAILED')
                     raw = bytearray()
                     async for chunk in response.content.iter_chunked(65536):
                         raw.extend(chunk)
                         if len(raw) > 2_000_000:
-                            self.last_fail_mono = time.monotonic()
-                            raise AdapterError('BULK_READ_TOO_LARGE')
+                            self._fail('BULK_READ_TOO_LARGE')
                     def object_pairs(pairs):
                         result = {}
                         for k, v in pairs:
@@ -127,8 +151,7 @@ class BulkReadTransport(ReadTransport):
             except AdapterError:
                 raise
             except Exception:
-                self.last_fail_mono = time.monotonic()
-                raise AdapterError('BULK_READ_UNCERTAIN') from None
+                self._fail('BULK_READ_UNCERTAIN')
 
 
 @dataclass(frozen=True)

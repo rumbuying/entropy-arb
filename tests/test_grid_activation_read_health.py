@@ -182,3 +182,30 @@ def test_range_scheduler_records_unhealthy_reads_without_starting(tmp_path,monke
         finally:
             await scheduler.close();rt.close()
     asyncio.run(run())
+
+
+def test_bulk_read_transport_health_distinguishes_pacing_from_backoff():
+    """Routine 1s pacing (next_read after every read) must never read as
+    unhealthy: only a 429 backoff (backoff_until_mono) or a failure inside
+    READ_HEALTH_WINDOW_S does. 2026-11-07: the gate read the routine pacing
+    cursor as a permanent backoff and refused every activation since deploy."""
+    from entropy_arb.grid.adapters.bulk_read import BulkReadTransport
+
+    class FakeSession:
+        pass
+    transport = BulkReadTransport(FakeSession(), 'mainnet')
+    now = 10_000.0
+    # A routine read just happened: pacing is armed, health is fine.
+    transport.next_read = now+1
+    assert transport.read_health(now_mono=now)
+    # A 429 arms the dedicated backoff: unhealthy until it expires.
+    now = 10_050.0
+    transport.backoff_until_mono = now+60
+    assert not transport.read_health(now_mono=now)
+    assert transport.read_health(now_mono=now+61)
+    # A recent failure is unhealthy inside the window, healthy after.
+    now = 10_200.0
+    transport.last_fail_mono = now-30
+    transport.last_fail_code = 'BULK_READ_HTTP_FAILED'
+    assert not transport.read_health(now_mono=now)
+    assert transport.read_health(now_mono=now+61)
