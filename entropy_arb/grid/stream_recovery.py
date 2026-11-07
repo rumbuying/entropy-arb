@@ -14,7 +14,7 @@ import time
 
 from . import models, store
 from .adapters.base import AdapterError
-from .protection_watch import RECOVERY_WATCH_KEY, RECOVERY_WATCH_SCHEMA
+from .protection_watch import RECOVERY_WATCH_KEY, RECOVERY_WATCH_SCHEMA, RECOVERY_PROGRESS_FRESH_MS
 
 log = logging.getLogger("grid.stream_recovery")
 NETWORK_ERRORS = {"HL_TRANSPORT_UNCERTAIN", "HL_HTTP_408", "HL_HTTP_429", "HL_HTTP_500", "HL_HTTP_502", "HL_HTTP_503", "HL_HTTP_504"}
@@ -103,6 +103,10 @@ class StreamRecoveryScheduler:
         self.runtime, self.clock = runtime, clock
         self.concurrency = concurrency
         self.tasks, self.next_attempt, self.attempts = {}, {}, {}
+        # Grids each running attempt task covers: the rebuild inside it moves
+        # the grid off RECOVERING, and _mark_active must keep its progress
+        # marker alive until the attempt actually ends.
+        self.task_grids = {}
         self.marked = set()
         self.closed = False
 
@@ -124,6 +128,7 @@ class StreamRecoveryScheduler:
                 except Exception:
                     log.exception("stream recovery task failed")
                 del self.tasks[aid]
+                self.task_grids.pop(aid, None)
         rows = rt.store.read(lambda c: [dict(r) for r in c.execute(
             "SELECT grid_id,account_id,epoch FROM grids WHERE status='RECOVERING' AND desired_mode='ACTIVE'")])
         # A durable per-episode progress marker: the protection watch reads it
@@ -153,8 +158,10 @@ class StreamRecoveryScheduler:
                 siblings = [r for r in rows if r["account_id"] == aid]
                 if any(self.clock() < self.next_attempt.get((r["grid_id"], r["epoch"]), 0) for r in siblings):
                     continue
+                self.task_grids[aid] = [r["grid_id"] for r in siblings]
                 self.tasks[aid] = asyncio.create_task(self._attempt_account(siblings, venue))
             else:
+                self.task_grids[aid] = [row["grid_id"]]
                 self.tasks[aid] = asyncio.create_task(self._attempt(row, venue))
 
     async def _mark_active(self, rows):
@@ -164,16 +171,41 @@ class StreamRecoveryScheduler:
         so the protection watch can bound the whole episode; a newer epoch or
         an unreadable old marker starts a fresh onset. Grids that left
         RECOVERING have their markers deleted, so a later expiry in
-        NEEDS_ATTENTION enforces immediately."""
+        NEEDS_ATTENTION enforces immediately.
+
+        Grids covered by a RUNNING attempt task stay marked through the
+        rebuild's own RECOVERING→STARTING transition: activate bumps the
+        epoch and re-submits entries whose first lookup is still pending,
+        and deleting the marker there stripped the observe tolerance
+        mid-rebuild — the submits the recovery itself placed then exited
+        the grid as PROTECTION_FIXED_UNKNOWN_ENTRY (2026-11-07 15:46,
+        g-18e968 / 16:48, g-50a500f4, both ~30-90s into a fresh rebuild
+        after an unconfirmed attempt). The onset carries across the epoch
+        bump while the previous marker is fresh, so the episode bound
+        spans the whole continuous episode; the moment the attempt ends
+        off-RECOVERING the marker is deleted and enforcement resumes.
+        """
         now = int(self.clock() * 1000)
         active = {row['grid_id'] for row in rows}
+        covered = set()
+        for aid, task in self.tasks.items():
+            if not task.done():
+                covered.update(self.task_grids.get(aid, ()))
+        pending_covered = sorted(covered - active)
+        extra_rows = []
+        if pending_covered:
+            extra_rows = self.runtime.store.read(lambda c: [dict(r) for r in c.execute(
+                'SELECT grid_id,account_id,epoch FROM grids WHERE desired_mode=\'ACTIVE\' '
+                "AND status IN ('STARTING','RUNNING') AND grid_id IN "
+                f"({','.join('?' * len(pending_covered))})", pending_covered)])
+        active |= covered
         stale = self.marked - active
         self.marked = active
         if stale:
             await self.runtime.store.write(lambda c: c.executemany(
                 'DELETE FROM runtime_state WHERE key=?',
                 [(RECOVERY_WATCH_KEY + gid,) for gid in sorted(stale)]))
-        for row in rows:
+        for row in list(rows) + extra_rows:
             gid, epoch = row['grid_id'], row['epoch']
             def write(c):
                 raw = c.execute('SELECT value FROM runtime_state WHERE key=?',
@@ -183,9 +215,14 @@ class StreamRecoveryScheduler:
                     try:
                         old = json.loads(raw[0])
                         if (isinstance(old, dict) and old.get('schema') == RECOVERY_WATCH_SCHEMA
-                                and old.get('grid_id') == gid and old.get('epoch') == epoch
+                                and old.get('grid_id') == gid
                                 and type(old.get('onset_mono_ms')) is int
-                                and 0 <= old['onset_mono_ms'] <= now + 1000):
+                                and 0 <= old['onset_mono_ms'] <= now + 1000
+                                and (old.get('epoch') == epoch or
+                                     now - old.get('updated_mono_ms', 0) <= RECOVERY_PROGRESS_FRESH_MS)):
+                            # Same-epoch refresh, or a fresh marker carried
+                            # across the rebuild's own epoch bump: one
+                            # continuous episode under a live attempt.
                             onset = old['onset_mono_ms']
                     except (ValueError, TypeError):
                         onset = None
@@ -349,3 +386,4 @@ class StreamRecoveryScheduler:
             task.cancel()
         await asyncio.gather(*self.tasks.values(), return_exceptions=True)
         self.tasks.clear()
+        self.task_grids.clear()

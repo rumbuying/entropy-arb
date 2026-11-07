@@ -32,10 +32,19 @@ PROTECTION_WATCH_BLIND_KEY = 'protection-watch-blind:'
 # marker (dead scheduler, interrupted process, given-up recovery) enforces
 # the deadline unchanged, as does a grid the scheduler left in
 # NEEDS_ATTENTION. The native stop keeps resting on the venue throughout.
+# Freshness must cover the supervision loop's slowest step plus the
+# scheduler's own long attempts: one degraded-venue reconcile pass ran
+# 188s and a full attempt 325s (2026-11-07), so 120s lapsed mid-attempt.
 RECOVERY_WATCH_KEY = 'recovery-watch:'
 RECOVERY_WATCH_SCHEMA = 'recovery-watch-v1'
-RECOVERY_PROGRESS_FRESH_MS = 120_000
-PROTECTION_RECOVERY_TOLERANCE_MS = 600_000
+RECOVERY_PROGRESS_FRESH_MS = 600_000
+# The episode bound covers the whole stream-loss episode including its
+# retries: degraded venue reads ran the 2026-11-07 episodes past 20 minutes
+# (a single attempt 325s), while the send gate still refuses new risk and
+# the native stop stays resting throughout. A scheduler that gives up
+# deletes its marker and enforcement resumes immediately; only a crashed
+# process outlives the freshness window.
+PROTECTION_RECOVERY_TOLERANCE_MS = 1_800_000
 
 
 def recovery_in_flight(store,gid,epoch,*,now_mono_ms):
