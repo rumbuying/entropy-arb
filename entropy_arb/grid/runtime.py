@@ -1644,10 +1644,17 @@ class GridRuntime:
                             failed_accounts.add(row["account_id"])
                         continue
                     if report["ok"] and not pending and row["status"] == "RECOVERING" and row["desired_mode"] == "ACTIVE":
-                        # A graceful shutdown canceled all orders. Rebuild only
-                        # after history and the independent venue snapshot agree.
-                        await self.lifecycle._bump_epoch(gid, status="STARTING", desired="ACTIVE")
-                        await self.activate(gid)
+                        # A graceful shutdown canceled all orders; history and
+                        # the independent venue snapshot agree. Leave the
+                        # REBUILD to the stream-recovery scheduler: it runs
+                        # after the supervision loop publishes 'running',
+                        # waits out stream-gap flaps that re-arm the send
+                        # gate mid-placement (2026-11-07 19:25, g-d7c92d68:
+                        # one STREAM_RECOVERY_REQUIRED refusal failed the
+                        # whole inline rebuild into a protective exit), and
+                        # its progress marker covers the rebuild's own
+                        # submits. The inline activate had no retry.
+                        pass
             except Exception:
                 log.exception("startup grid reconciliation failed: %s", gid)
                 failed_accounts.add(row["account_id"])
@@ -1662,9 +1669,8 @@ class GridRuntime:
                 continue
             try:
                 report = await self.recover(gid)
-                if report["ok"] and not pending and row["status"] == "RECOVERING" and row["desired_mode"] == "ACTIVE":
-                    await self.lifecycle._bump_epoch(gid, status="STARTING", desired="ACTIVE")
-                    await self.activate(gid)
+                # Same hand-off: the scheduler owns the rebuild (retry budget,
+                # stream-gap wait, progress marker) once the loop is running.
             except Exception:
                 log.exception("startup grid reconciliation failed: %s", gid)
                 await self.lifecycle._set_status(gid, "NEEDS_ATTENTION", desired="PAUSED")
