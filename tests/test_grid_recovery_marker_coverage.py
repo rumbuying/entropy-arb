@@ -146,3 +146,38 @@ def test_episode_tolerance_bounds_the_carried_onset(env):
         assert not recovery_in_flight(st, GID, 2, now_mono_ms=int(t[0] * 1000))
         await uncover(scheduler, hold)
     asyncio.run(run())
+
+
+def test_failed_rebuild_returns_bumped_starting_grid_to_recovery(env):
+    """A failed rebuild whose own _bump_epoch already moved the grid to
+    epoch+1 (STARTING, mid-activate) must return to RECOVERING at the bumped
+    epoch — skipping the update orphaned it outside the scheduler's
+    RECOVERING-only eligibility: nothing retried, the progress marker
+    expired, and the watch exited the grid the recovery was rebuilding
+    (2026-11-08 00:23, g-8a6e29cb). A non-transient failure still lands
+    NEEDS_ATTENTION at the bumped epoch."""
+    async def run():
+        st, scheduler, t = env
+        gid = 'g-orphan'
+        await seed_grid(st, gid, 2, 'STARTING')
+        report = {'ok': False, 'rebuild': True, 'drift': [],
+                  'gaps': [{'code': 'ACCOUNT_SNAPSHOT_UNAVAILABLE', 'detail': 'TimeoutError()'}]}
+        await scheduler._finish({'grid_id': gid, 'epoch': 1}, report)
+        row = st.read(lambda c: c.execute('SELECT status,epoch FROM grids WHERE grid_id=?', (gid,)).fetchone())
+        assert row['status'] == 'RECOVERING' and row['epoch'] == 2
+        # A second call at the old epoch is correctly ignored (the grid moved).
+        blocked = {'ok': False, 'rebuild': True, 'drift': [],
+                   'gaps': [{'code': 'FILL_CUMULATIVE_MISMATCH'}]}
+        await scheduler._finish({'grid_id': gid, 'epoch': 1}, blocked)
+        row = st.read(lambda c: c.execute('SELECT status,epoch FROM grids WHERE grid_id=?', (gid,)).fetchone())
+        assert row['status'] == 'RECOVERING' and row['epoch'] == 2
+        # A fresh bumped STARTING grid with a non-transient failure lands
+        # NEEDS_ATTENTION at the bumped epoch.
+        gid2 = 'g-orphan-blocked'
+        await st.write(lambda c: c.execute(
+            "INSERT INTO grids(grid_id,account_id,market_key,status,desired_mode,epoch,created_ts,updated_ts) "
+            "VALUES(?,'acc','m2',?,'ACTIVE',?,'t','t')", (gid2, 'STARTING', 2)))
+        await scheduler._finish({'grid_id': gid2, 'epoch': 1}, blocked)
+        row = st.read(lambda c: c.execute('SELECT status,epoch FROM grids WHERE grid_id=?', (gid2,)).fetchone())
+        assert row['status'] == 'NEEDS_ATTENTION' and row['epoch'] == 2
+    asyncio.run(run())

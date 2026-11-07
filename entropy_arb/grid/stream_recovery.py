@@ -357,10 +357,20 @@ class StreamRecoveryScheduler:
         def commit(c):
             current = c.execute("SELECT epoch,status,desired_mode FROM grids WHERE grid_id=?", (gid,)).fetchone()
             # Never rewrite a newer pause/stop or an activation interrupted
-            # after its own epoch changed. All retries retain the same epoch.
-            expected = epoch + 1 if report["ok"] and report.get("rebuild") else epoch
+            # after its own epoch changed. All retries retain the same epoch —
+            # except a failed REBUILD whose own _bump_epoch already moved the
+            # grid to epoch+1 (status STARTING, mid-activate): skipping the
+            # update orphaned it outside this scheduler's RECOVERING-only
+            # eligibility, so nothing retried, the progress marker expired,
+            # and the watch exited the grid the recovery was rebuilding
+            # (2026-11-08 00:23, g-8a6e29cb). Such a grid returns to
+            # RECOVERING at its bumped epoch and the retry budget continues
+            # on the new epoch key.
+            bumped = (report.get("rebuild") and current["epoch"] == epoch + 1
+                      and current["status"] == "STARTING")
+            expected = epoch + 1 if (bumped or (report["ok"] and report.get("rebuild"))) else epoch
             if (current["epoch"] != expected or current["desired_mode"] != "ACTIVE"
-                    or current["status"] not in ("RECOVERING", "NEEDS_ATTENTION", "RUNNING")):
+                    or current["status"] not in ("RECOVERING", "NEEDS_ATTENTION", "RUNNING", "STARTING")):
                 applied = False
             else:
                 applied = True
