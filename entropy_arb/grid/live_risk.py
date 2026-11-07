@@ -452,6 +452,19 @@ class LiveRiskGuard:
             current = self.rt.lifecycle._grid(grid_id)
             if current['status'] == 'RECOVERING':
                 return
+            if current['status'] == 'STARTING' and current['desired_mode'] == 'ACTIVE':
+                from .protection_watch import recovery_in_flight
+                if recovery_in_flight(self.rt.store,grid_id,current['epoch'],now_mono_ms=int(self.clock()*1000)):
+                    # The stream-recovery scheduler's own rebuild runs its
+                    # activate in STARTING: its entries ride a fresh lease,
+                    # but a 60s deadline crossed mid-placement (degraded
+                    # venue reads delayed the renewal) read as
+                    # PROTECTION_SERVICE_FIXED_PROOF_REQUIRED and the freeze
+                    # exited the grid the recovery was rebuilding
+                    # (2026-11-07 23:38, g-5ed14a41). The recovery owns this
+                    # window while its progress marker is fresh; its bounded
+                    # retry budget lands NEEDS_ATTENTION when it gives up.
+                    return
             from .protection_watch import proof_blind_tolerated
             if proof_blind_tolerated(self.rt.store,gid=grid_id,
                     venue_clock_ms=venue.clock_ms(),

@@ -630,14 +630,18 @@ class ProtectionWatchScheduler:
             # No lease has ever been written and no stop is mid-dispatch:
             # activation owns this window.
             return
-        if code and row.get('status') == 'RECOVERING' and self._recovery_in_flight(row):
+        if code and row.get('status') in ('RECOVERING','STARTING') and self._recovery_in_flight(row):
             # A stream-loss recovery is actively re-proving control (fresh
             # durable marker from the recovery scheduler): its own bounded
             # retry budget and fences own the window, and the recovery
             # tolerance above bounds how long a carried proof may stay
-            # un-renewed. STARTING keeps the immediate local exit: the
-            # activation owns its own fences and the independent deadline
-            # must hold there.
+            # un-renewed. STARTING is included for the rebuild's own
+            # activate window: its entries ride the lease the rebuild's
+            # prepare renewed, and a deadline crossed mid-placement
+            # (degraded venue reads delayed the renewal) used to exit the
+            # grid the recovery was rebuilding (2026-11-07 23:38,
+            # g-5ed14a41). The scheduler's marker bounds the window; a dead
+            # scheduler goes stale and enforces unchanged.
             return
         if code:
             if not self._blind_tolerated(row,code):

@@ -866,3 +866,43 @@ def test_carried_resume_marker_shared_by_the_rearming_branch(tmp_path,monkeypatc
                 grid_id=gid,epoch=epoch+5),sort_keys=True))))
         assert await rt._consume_carried_recovery(gid,epoch) is False
     asyncio.run(run())
+
+
+def test_freeze_and_watch_tolerate_lease_codes_inside_the_rebuild_window(tmp_path,monkeypatch):
+    """The scheduler's rebuild runs its activate in STARTING: the entries ride
+    the lease its prepare renewed, but a 60s deadline crossed mid-placement
+    (degraded venue reads delayed the renewal) read as
+    PROTECTION_SERVICE_FIXED_PROOF_REQUIRED and both the risk freeze and the
+    watch tick exited the grid the recovery was rebuilding (2026-11-07
+    23:38, g-5ed14a41). While the recovery scheduler's progress marker is
+    fresh, a STARTING grid is recovery-owned; a dead scheduler goes stale
+    and enforces unchanged."""
+    async def run():
+        from entropy_arb.grid.protection_watch import RECOVERY_WATCH_KEY, RECOVERY_WATCH_SCHEMA
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        watcher=ProtectionWatchScheduler(rt,clock=lambda:mono[0]/1000)
+        rt.live_risk.clock=lambda:mono[0]/1000
+        try:
+            def plant(c):
+                c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?)',
+                    (RECOVERY_WATCH_KEY+gid,json.dumps(dict(schema=RECOVERY_WATCH_SCHEMA,
+                        grid_id=gid,epoch=1,onset_mono_ms=mono[0],updated_mono_ms=mono[0]),
+                        sort_keys=True)))
+            await rt.store.write(plant)
+            # The scheduler's rebuild owns this STARTING grid: lease codes
+            # (deadline crossed) are tolerated by both consumers.
+            mono[0]+=PROOF_MAX_SECONDS*1000+1;clock[0]+=PROOF_MAX_SECONDS*1000+1
+            await rt.live_risk.freeze(gid,epoch=1,code='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED','NEEDS_ATTENTION')
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED','NEEDS_ATTENTION')
+            # The scheduler died: a stale marker enforces unchanged.
+            def stale(c):
+                c.execute("UPDATE runtime_state SET value=json_set(value,'$.updated_mono_ms',0) "
+                          "WHERE key=?",(RECOVERY_WATCH_KEY+gid,))
+            await rt.store.write(stale)
+            await rt.live_risk.freeze(gid,epoch=1,code='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+        finally:
+            await watcher.close();rt.close()
+    asyncio.run(run())
