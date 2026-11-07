@@ -283,9 +283,9 @@
 .grid-card-row strong { font-size: 13px; font-weight: 600; }
 .grid-amount { font-family: var(--mono); font-size: 14px; font-variant-numeric: tabular-nums; }
 
-.grid-filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.grid-filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; flex: 1 1 auto; }
 .grid-filters input, .grid-filters select {
-  width: auto; flex: 0 1 180px; min-height: 30px; max-width: 240px;
+  width: auto; flex: 1 1 150px; min-height: 30px; max-width: 260px;
 }
 
 @media (min-width: 1440px) {
