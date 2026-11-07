@@ -139,14 +139,11 @@ export class TimeSeriesChart {
                    padL + iw, h - padB + 3);
     }
 
-    // series — a soft glow under the stroke gives the dark panels depth
+    // series
     for (const s of this.series) {
-      ctx.save();
       ctx.strokeStyle = s.color;
       ctx.lineWidth = s.width || 1.6;
       ctx.lineJoin = "round"; ctx.lineCap = "round";
-      ctx.shadowColor = s.color;
-      ctx.shadowBlur = s.width > 2 ? 10 : 6;
       ctx.beginPath();
       let started = false;
       for (let i = 0; i < this.points.length; i++) {
@@ -157,7 +154,6 @@ export class TimeSeriesChart {
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
-      ctx.restore();
     }
   }
 }
