@@ -354,8 +354,8 @@
 }
 .grid-stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
 }
 .grid-stat {
   position: relative;
@@ -528,7 +528,7 @@
     grid-template-columns: 1fr 1fr;
   }
   .grid-stats {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   }
   .grid-detail-stats {
     grid-template-columns: repeat(12, minmax(0, 1fr));
