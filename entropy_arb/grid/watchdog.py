@@ -95,7 +95,16 @@ def guardian_health(heartbeat_file,db,*,now=None):
         if not valid_identity(heartbeat,db):return unavailable('HEARTBEAT_IDENTITY')
         if not isinstance(state,dict):return unavailable('WATCHDOG_STATE_MISSING')
         if heartbeat['pid']!=os.getpid():return unavailable('RUNTIME_PID_MISMATCH')
-        if heartbeat.get('phase')!='running':return unavailable('RUNTIME_NOT_RUNNING')
+        # 'starting' is the whole boot window, which includes the carried-
+        # proof recovery's own rebuild: its entries re-place the exact grid
+        # the previous instance proved, and refusing them made every worker
+        # restart with a live grid fail the rebuild into a protective exit
+        # (2026-11-07 18:41, g-d7c92d68: GRID_INITIAL_ORDER_UNCONFIRMED,
+        # reject RUNTIME_NOT_RUNNING ~4 minutes after boot). The watchdog
+        # instance/pid match, both freshnesses and the restart cooldown are
+        # all still enforced; 'stopping' never authorizes new orders.
+        if heartbeat.get('phase') not in ('running','starting'):
+            return unavailable('RUNTIME_NOT_RUNNING')
         if state.get('status')!='healthy':return unavailable('WATCHDOG_NOT_HEALTHY')
         if state.get('instance')!=heartbeat['instance'] or state.get('pid')!=heartbeat['pid']:
             return unavailable('WATCHDOG_INSTANCE_MISMATCH')

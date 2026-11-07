@@ -22,7 +22,7 @@ def test_runtime_guardian_health_requires_fresh_same_instance_and_available_rest
            'checked_monotonic':100,'restarts':[]}
     if failure=='stale':state['checked_monotonic']=100-GUARDIAN_FRESHNESS_S
     if failure=='instance':state['instance']='b'*32
-    if failure=='phase':value['phase']='starting'
+    if failure=='phase':value['phase']='stopping'
     if failure=='budget':state['restarts']=[10,20,30]
     if failure=='cooldown':state['restarts']=[99]
     if failure=='future':state['checked_monotonic']=101
@@ -260,3 +260,24 @@ def test_stale_after_is_configurable_for_slow_read_deployments(tmp_path):
         stale_after=args.stale_after).stale_after==60
     defaults=build_arg_parser().parse_args(['--root',str(tmp_path)])
     assert defaults.stale_after==5
+
+
+def test_guardian_accepts_the_boot_phase_for_the_startup_rebuild(tmp_path):
+    """phase='starting' spans the whole boot, including the carried-proof
+    recovery's own rebuild: its entries re-place the grid the previous
+    instance proved, and refusing them made every worker restart with a
+    live grid fail the rebuild into a protective exit (2026-11-07 18:41,
+    g-d7c92d68). The watchdog instance match, freshness and restart
+    cooldown are unchanged; 'stopping' still never authorizes orders."""
+    from entropy_arb.grid.watchdog import guardian_health
+    path = tmp_path / 'private' / 'grid-runtime-heartbeat.json'
+    value = heartbeat(tmp_path, pid=os.getpid(), monotonic=100, phase='starting')
+    write_private(path, value)
+    write_private(path.with_name('grid-watchdog-state.json'),
+                  {'status': 'healthy', 'instance': value['instance'], 'pid': os.getpid(),
+                   'checked_monotonic': 100, 'restarts': []})
+    assert guardian_health(path, value['db'], now=100)['healthy']
+    stopping = heartbeat(tmp_path, pid=os.getpid(), monotonic=100, phase='stopping')
+    write_private(path, stopping)
+    result = guardian_health(path, value['db'], now=100)
+    assert not result['healthy'] and result['reason'] == 'RUNTIME_NOT_RUNNING'
