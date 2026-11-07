@@ -929,3 +929,64 @@ def test_binding_family_failures_arm_the_blind_marker_for_the_watch(tmp_path,mon
             watch_clock_ms=mono[0],code='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')
         assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED')
     asyncio.run(run())
+
+
+def test_watch_and_freeze_arm_the_window_in_the_post_success_expiry_gap(tmp_path,monkeypatch):
+    """A successful verify clears the marker; the lease expires 60s later and
+    the next verify failure is noted milliseconds after the watch tick reads
+    the absence — exiting in that gap killed grids whose tolerance was about
+    to be armed anyway (2026-11-08 00:49 family). The watch tick and the
+    risk freeze now arm the window on first sight of a lease-expiry code;
+    sustained blindness still exhausts it."""
+    async def run():
+        from entropy_arb.grid.protection_watch import RECOVERY_WATCH_KEY, RECOVERY_WATCH_SCHEMA
+        parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
+        watcher=ProtectionWatchScheduler(rt,clock=lambda:mono[0]/1000)
+        rt.live_risk.clock=lambda:mono[0]/1000
+        try:
+            # The grid is inside a live recovery episode (the scheduler's
+            # progress marker is fresh) and NO blindness marker was ever
+            # written (the last verify succeeded and cleared it); the lease
+            # deadline crosses with the reads down. The watch arms the
+            # window on first sight instead of exiting mid-recovery.
+            await rt.store.write(lambda c:c.execute(
+                'INSERT INTO runtime_state(key,value) VALUES(?,?)',
+                (RECOVERY_WATCH_KEY+gid,json.dumps(dict(schema=RECOVERY_WATCH_SCHEMA,
+                    grid_id=gid,epoch=1,onset_mono_ms=mono[0],updated_mono_ms=mono[0]),
+                    sort_keys=True))))
+            async def offline(kind):
+                if kind=='fullAccount':raise TimeoutError()
+            native.on_read=offline  # the reads stay down for the whole window
+            mono[0]+=PROOF_MAX_SECONDS*1000+1;clock[0]+=PROOF_MAX_SECONDS*1000+1
+            code_seen=rt.protection_lease.check(gid,now_ms=clock[0])
+            await watcher.tick()
+            import json as _j
+            _m=rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+                ('protection-blind:'+gid,)).fetchone())
+            _e=rt.store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
+                ('protection-exit:'+gid,)).fetchone())
+            import sqlite3 as _sq
+            _raw=_sq.connect(str(tmp_path/'bulk-fixed.sqlite'))
+            _rawrow=_raw.execute("SELECT value FROM runtime_state WHERE key=?",
+                ('protection-blind:'+gid,)).fetchone()
+            _raw.close()
+            print('DBG code=',code_seen,'marker=',_m[0] if _m else None,
+                  'raw=',_rawrow[0] if _rawrow else None,
+                  'status=',rt.lifecycle._grid(gid)['status'],
+                  'exitrow=',_e[0][:120] if _e else None)
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED','NEEDS_ATTENTION'),\
+                'the watch must arm the window on first sight, not exit'
+            await rt.live_risk.freeze(gid,epoch=1,code='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED','NEEDS_ATTENTION'),\
+                'the freeze must arm the window on first sight, not exit'
+            # Sustained blindness past the window (and a stale recovery
+            # marker) still runs the contract.
+            mono[0]+=PROTECTION_BLIND_TOLERANCE_MS+1;clock[0]+=PROTECTION_BLIND_TOLERANCE_MS+1
+            await rt.store.write(lambda c:c.execute(
+                "UPDATE runtime_state SET value=json_set(value,'$.updated_mono_ms',0) "
+                "WHERE key=?",(RECOVERY_WATCH_KEY+gid,)))
+            await watcher.tick()
+            assert rt.lifecycle._grid(gid)['status']=='STOPPING'
+        finally:
+            await watcher.close();rt.close()
+    asyncio.run(run())

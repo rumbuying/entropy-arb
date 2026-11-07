@@ -75,6 +75,34 @@ def recovery_in_flight(store,gid,epoch,*,now_mono_ms):
         and now_mono_ms-marker['onset_mono_ms']<=PROTECTION_RECOVERY_TOLERANCE_MS)
 
 
+async def arm_blind_window(store,*,gid,now_ms):
+    """Arm the shared blindness window on first sight, write-once.
+
+    The observe ladder arms on its own failures, but the watch tick and the
+    risk freeze can observe a lease expiry in the gap after a successful
+    verify cleared the marker and before the next failure is noted —
+    exiting in that gap killed grids whose next failure was milliseconds
+    away (2026-11-08 00:49 family). Arming here measures the tolerance from
+    the first observation instead; repeated sightings never refresh it and
+    a successful verify still clears it."""
+    def write(c):
+        row=c.execute('SELECT value FROM runtime_state WHERE key=?',
+            (PROTECTION_BLIND_KEY+gid,)).fetchone()
+        if row is not None:
+            # Write-once: re-arming after the window exhausted would keep the
+            # grid tolerated forever. Only a certified sighting (the observe
+            # ladder's refresh) legitimately re-anchors the onset.
+            return False
+        c.execute('INSERT INTO runtime_state(key,value) VALUES(?,?) '
+                  'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+            (PROTECTION_BLIND_KEY+gid,json.dumps(now_ms)))
+        return True
+    try:
+        return bool(await store.write(write))
+    except Exception:
+        return False
+
+
 def proof_blind_tolerated(store,*,gid,venue_clock_ms,watch_clock_ms,code):
     """Shared blindness tolerance for every protection consumer.
 
@@ -644,6 +672,17 @@ class ProtectionWatchScheduler:
             # scheduler goes stale and enforces unchanged.
             return
         if code:
+            if (row.get('status') in ('RECOVERING','STARTING')
+                    and self._recovery_in_flight(row)
+                    and (code.endswith('_PROOF_EXPIRED')
+                         or code=='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')):
+                # First sight inside a live recovery episode: arm the window
+                # here too — the observe ladder may not have noted the
+                # failure yet, and one unnoted tick exited the grid
+                # mid-recovery (2026-11-08 00:49, g-551db376). Write-once:
+                # sustained blindness still exhausts, and a user-initiated
+                # STARTING (no recovery marker) keeps the immediate exit.
+                await arm_blind_window(self.rt.store,gid=gid,now_ms=venue.clock_ms())
             if not self._blind_tolerated(row,code):
                 await self.rt.protection.request_exit(gid,expected_epoch=row['epoch'],reason=code)
                 running=self.tasks.get(gid)
