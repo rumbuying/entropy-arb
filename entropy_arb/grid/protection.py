@@ -7,9 +7,13 @@ from decimal import Decimal, ROUND_CEILING
 import asyncio
 import re
 
+import logging
+
 from . import models
 from .adapters.base import AdapterError, OrderRequest
 from .inventory import Inventory
+
+log = logging.getLogger('grid.protection')
 
 CONFIRMATION_TIMEOUT_SEC = 5.0
 CONFIRMATION_POLL_SEC = .25
@@ -79,6 +83,13 @@ class ProtectionManager:
 
     async def request_exit(self, grid_id, *, expected_epoch, reason, include_paused=False, evidence=None, evidence_fresh=None):
         from .protection_exit import enqueue_exit
+        if reason.startswith('PROTECTION_SERVICE_'):
+            # Exits are rare and each historical one carries its own incident
+            # comment; the caller stack ends the archaeology.
+            import traceback
+            log.warning('PROTECTION_EXIT_REQUESTED reason=%s grid=%s expected_epoch=%s caller=%s',
+                        reason, grid_id, expected_epoch,
+                        ' | '.join(x.strip() for x in traceback.format_stack(limit=8)[:-1]))
         def write(c):
             grid = c.execute('SELECT epoch,status,desired_mode FROM grids WHERE grid_id=?', (grid_id,)).fetchone()
             eligible = grid['desired_mode'] == 'ACTIVE' and grid['status'] in ('STARTING', 'RUNNING')
