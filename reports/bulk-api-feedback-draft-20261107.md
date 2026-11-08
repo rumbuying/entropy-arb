@@ -96,3 +96,18 @@ Best regards,
 4. **WAF 层未文档化**——1 rps（低于限额 5 rps）也被 403，无 Retry-After，与限流不可区分
 
 渠道：文档和官网都没有邮箱；官方频道是 **Telegram @tradebulk**、公告 @BULKnetAnnouncements、X @bulktrade。草稿可直接粘到 Telegram。
+
+## 5. [NEW 2026-11-08 21:07 CST] Resting reduce-only stop order canceled by the venue without trigger or request (most severe)
+
+While our grid held a long position of 0.707 HYPE-USD, the resting GTC reduce-only stop order
+
+- order id `Hi5nNMMMeA4xEwg5hZW6jmVurZgUjPpjQCjQm7SLAnrs` (client ref `g000000000880`),
+- trigger 74 (mark was ~77.6 at the time — **4.7% away, no trigger possible**),
+
+was found **canceled** by our status poll (`type=fullAccount`, openOrders missing the order; your own order history reports terminal state `cancelled`). We did not cancel it; no trigger fired; the position was untouched until our protective flatten (sold 0.707 @ 77.667 at 21:09 CST). Timeline:
+
+- 21:06 CST: order verified resting on the book (our status poll);
+- 21:07:03 CST: our next poll found the stop gone from openOrders;
+- venue order history: terminal `cancelled`, no execution, position unchanged.
+
+A protection order that the venue cancels silently — with the position still open — leaves the account unprotected without notice. We flattened within one poll cycle after detecting it, but an account that polls less often would carry unprotected risk indefinitely. Please investigate why the venue canceled this order (maintenance? risk engine? a bug?) and whether other resting reduce-only stops were affected in the same window.
