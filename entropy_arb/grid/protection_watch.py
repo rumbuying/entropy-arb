@@ -664,6 +664,13 @@ class ProtectionWatchScheduler:
             'SELECT value FROM runtime_state WHERE key=?',
             ('native-protection-lease:'+gid,)).fetchone())
         lease_epoch=json.loads(lease_row[0]).get('epoch') if lease_row else None
+        if code and row.get('status') in ('RECOVERING','STARTING'):
+            import logging as _lg
+            _raw=self.rt.store.read(lambda c: c.execute(
+                'SELECT value FROM runtime_state WHERE key=?',
+                ('recovery-watch:'+gid,)).fetchone())
+            _lg.getLogger('grid.bulk_dbg').warning('STRUCT-CHK row_epoch=%s in_flight=%s marker=%s',
+                row.get('epoch'), self._recovery_in_flight(row), _raw[0][:200] if _raw else None)
         if code and row.get('status') in ('RECOVERING','STARTING') and self._recovery_in_flight(row):
             # STRUCTURAL: while a recovery episode is live (fresh scheduler
             # marker), ALL lease enforcement suspends for this grid. The
@@ -691,6 +698,13 @@ class ProtectionWatchScheduler:
             # No lease has ever been written and no stop is mid-dispatch:
             # activation owns this window.
             return
+        if code and row.get('status') in ('RECOVERING','STARTING'):
+            import logging as _lg
+            _raw=self.rt.store.read(lambda c: c.execute(
+                'SELECT value FROM runtime_state WHERE key=?',
+                ('recovery-watch:'+gid,)).fetchone())
+            _lg.getLogger('grid.bulk_dbg').warning('STRUCT-CHK row_epoch=%s in_flight=%s marker=%s',
+                row.get('epoch'), self._recovery_in_flight(row), _raw[0][:200] if _raw else None)
         if code and row.get('status') in ('RECOVERING','STARTING') and self._recovery_in_flight(row):
             # A stream-loss recovery is actively re-proving control (fresh
             # durable marker from the recovery scheduler): its own bounded
