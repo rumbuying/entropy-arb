@@ -466,7 +466,13 @@ class LiveRiskGuard:
                     # retry budget lands NEEDS_ATTENTION when it gives up.
                     return
             from .protection_watch import arm_blind_window, proof_blind_tolerated
-            if code.endswith('_PROOF_EXPIRED') or code=='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED':
+            from .adapters.bulk_protection_manager import (
+                BLIND_NOTE_CODES, CERT_EVIDENCE_CODES, OBSERVATION_WAITS)
+            lease_family = (code.endswith('_PROOF_EXPIRED')
+                            or code=='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')
+            read_family = (code in BLIND_NOTE_CODES or code in CERT_EVIDENCE_CODES
+                           or code in OBSERVATION_WAITS)
+            if lease_family:
                 # The code may predate its own handling: a concurrent observe
                 # can have re-proved the lease (and cleared the marker)
                 # between the raise and this freeze. Acting on the stale code
@@ -474,6 +480,13 @@ class LiveRiskGuard:
                 # (2026-11-08 00:49 family). Re-check the live lease first.
                 if backend.check_lease(grid_id,now_ms=venue.clock_ms()) is None:
                     return
+            if lease_family or read_family:
+                # Arm on first sight (write-once): the observe ladder notes
+                # its own failures, but the freeze can evaluate the same
+                # outage before that note lands. Sustained blindness past
+                # PROTECTION_BLIND_TOLERANCE_MS still exhausts into the exit
+                # below (user-approved 2026-11-08).
+                await arm_blind_window(self.rt.store,gid=grid_id,now_ms=venue.clock_ms())
             if proof_blind_tolerated(self.rt.store,gid=grid_id,
                     venue_clock_ms=venue.clock_ms(),
                     watch_clock_ms=int(time.monotonic()*1000),code=code):

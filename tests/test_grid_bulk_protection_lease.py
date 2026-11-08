@@ -31,7 +31,14 @@ async def seeded(tmp_path,monkeypatch):
 def snapshot(rt,gid):return rt.protection_lease.snapshot(gid)
 
 
-def test_transient_read_waits_only_until_original_proof_expires(tmp_path,monkeypatch):
+def test_transient_read_waits_through_the_blind_window_and_exits_after(tmp_path,monkeypatch):
+    """User-approved 2026-11-08: a venue read outage on a RUNNING grid is
+    engine blindness, not confirmed danger — the read-family codes tolerate
+    inside the shared blindness window (armed on first sight) and the exit
+    contract runs once sustained blindness exhausts it. The lease deadline
+    alone no longer backstops read outages: the 60s deadline crossed during
+    a 2-minute venue outage flattened a 4.8-hour-old grid (2026-11-08
+    14:29, g-6d61ebaa)."""
     async def run():
         parts,clock,mono,backend=await seeded(tmp_path,monkeypatch);rt,gid,cfg,parent,view,native,p,sender,actor=parts
         try:
@@ -41,9 +48,18 @@ def test_transient_read_waits_only_until_original_proof_expires(tmp_path,monkeyp
             native.on_read=offline
             code=await rt.protection.verify(gid)
             assert code=='PROTECTION_FIXED_OBSERVATION_UNAVAILABLE'
+            # Lease live: tolerated by the observation_can_wait branch.
             await rt.live_risk.freeze(gid,epoch=1,code=code)
             assert rt.lifecycle._grid(gid)['status']=='STARTING' and snapshot(rt,gid)==before
+            # Lease expired: the read-family code arms and tolerates inside
+            # the blindness window instead of exiting at the 60s deadline.
             clock[0]+=PROOF_MAX_SECONDS*1000;mono[0]+=PROOF_MAX_SECONDS*1000
+            await rt.live_risk.freeze(gid,epoch=1,code=code)
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED','NEEDS_ATTENTION')
+            assert snapshot(rt,gid)==before and len(sender.calls)==1
+            # Sustained blindness past PROTECTION_BLIND_TOLERANCE_MS (measured
+            # from the first armed sighting) runs the exit contract.
+            clock[0]+=PROTECTION_BLIND_TOLERANCE_MS+1;mono[0]+=PROTECTION_BLIND_TOLERANCE_MS+1
             await rt.live_risk.freeze(gid,epoch=1,code=code)
             assert rt.lifecycle._grid(gid)['status']=='STOPPING' and rt.lifecycle._grid(gid)['desired_mode']=='STOPPED'
             assert snapshot(rt,gid)==before and len(sender.calls)==1
@@ -896,11 +912,22 @@ def test_freeze_and_watch_tolerate_lease_codes_inside_the_rebuild_window(tmp_pat
             assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED','NEEDS_ATTENTION')
             await watcher.tick()
             assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED','NEEDS_ATTENTION')
-            # The scheduler died: a stale marker enforces unchanged.
+            # The scheduler died: a stale recovery marker stops re-arming,
+            # and the blindness window armed at the first sight exhausts by
+            # the clock. (The concurrent observe may renew the lease and
+            # clear the marker — each new first sight then arms a fresh
+            # window, which still exhausts.) The exit contract runs
+            # unchanged once the window is gone.
             def stale(c):
                 c.execute("UPDATE runtime_state SET value=json_set(value,'$.updated_mono_ms',0) "
                           "WHERE key=?",(RECOVERY_WATCH_KEY+gid,))
             await rt.store.write(stale)
+            # First sight after the recovery died: arms a fresh window.
+            clock[0]+=PROTECTION_BLIND_TOLERANCE_MS+1;mono[0]+=PROTECTION_BLIND_TOLERANCE_MS+1
+            await rt.live_risk.freeze(gid,epoch=1,code='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')
+            assert rt.lifecycle._grid(gid)['status'] not in ('STOPPING','CLOSED')
+            # Sustained blindness past the window: the exit contract runs.
+            clock[0]+=PROTECTION_BLIND_TOLERANCE_MS+1;mono[0]+=PROTECTION_BLIND_TOLERANCE_MS+1
             await rt.live_risk.freeze(gid,epoch=1,code='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')
             assert rt.lifecycle._grid(gid)['status']=='STOPPING'
         finally:

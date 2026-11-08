@@ -118,8 +118,23 @@ def proof_blind_tolerated(store,*,gid,venue_clock_ms,watch_clock_ms,code):
     markers, or one of them flattens a grid the other just placed in
     PROTECTION_BLIND_WAIT (2026-11-06 11:01: the watch tolerated blind_ms=100
     of 180 while the risk freeze exited the same grid the same second)."""
-    if not (isinstance(code,str) and (code.endswith('_PROOF_EXPIRED')
-            or code=='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED')):
+    accepted=False
+    if isinstance(code,str):
+        if code.endswith('_PROOF_EXPIRED') or code=='PROTECTION_SERVICE_FIXED_PROOF_REQUIRED':
+            accepted=True
+        else:
+            # User-approved 2026-11-08: the read-failure/journal-unprovability
+            # family shares the blindness window — a venue outage on a
+            # RUNNING grid is engine blindness (the native stop keeps
+            # resting), not confirmed danger. The observe ladder arms the
+            # marker for this family; the freeze must reach the same verdict
+            # (2026-11-08 14:29, g-6d61ebaa: a 2-minute outage flattened a
+            # 4.8-hour-old grid because the freeze's family was narrower).
+            from .adapters.bulk_protection_manager import (
+                BLIND_NOTE_CODES, CERT_EVIDENCE_CODES, OBSERVATION_WAITS)
+            accepted = (code in BLIND_NOTE_CODES or code in CERT_EVIDENCE_CODES
+                        or code in OBSERVATION_WAITS)
+    if not accepted:
         return False
     def within(marker_key,now_ms):
         saved=store.read(lambda c:c.execute('SELECT value FROM runtime_state WHERE key=?',
