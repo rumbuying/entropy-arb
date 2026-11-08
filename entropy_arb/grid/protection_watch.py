@@ -664,6 +664,19 @@ class ProtectionWatchScheduler:
             'SELECT value FROM runtime_state WHERE key=?',
             ('native-protection-lease:'+gid,)).fetchone())
         lease_epoch=json.loads(lease_row[0]).get('epoch') if lease_row else None
+        if code and row.get('status') in ('RECOVERING','STARTING') and self._recovery_in_flight(row):
+            # STRUCTURAL: while a recovery episode is live (fresh scheduler
+            # marker), ALL lease enforcement suspends for this grid. The
+            # episode walks the grid through RECOVERING→STARTING→RUNNING
+            # with epoch bumps, lease deletion/re-creation and rebuild
+            # submits — every transition used to open a new exemption gap
+            # that one consumer then exited through (2026-11-07/08: five
+            # consecutive holes, g-2f8fd555/g-5ed14a41/g-8a6e29cb/
+            # g-c5b04157/g-40a560aa). One rule instead of a patchwork: the
+            # episode is bounded by its marker (freshness + the 1800s
+            # tolerance), the scheduler's retry budget, and the observe
+            # ladder still exits on venue-evidence codes independently.
+            return
         if code and lease_epoch is not None and lease_epoch != row['epoch']:
             # Stale-epoch lease: the grid epoch moved (pause bumps it) and the
             # activation/resume is re-establishing the proof — its own prepare
